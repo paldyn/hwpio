@@ -173,6 +173,7 @@ async function initialize(): Promise<void> {
     setupFileInput();
     setupZoomControls();
     setupEventListeners();
+    loadFromUrlParam();
 
     // E2E 테스트용 전역 노출 (개발 모드 전용)
     if (import.meta.env.DEV) {
@@ -199,7 +200,11 @@ function setupFileInput(): void {
     await loadFile(file);
   });
 
-  // 드래그 앤 드롭 지원
+  // 문서 전체에서 브라우저 기본 드롭 동작 방지 (파일 열기/다운로드 방지)
+  document.addEventListener('dragover', (e) => e.preventDefault());
+  document.addEventListener('drop', (e) => e.preventDefault());
+
+  // 드래그 앤 드롭 지원 (scroll-container 영역)
   const container = document.getElementById('scroll-container')!;
   container.addEventListener('dragover', (e) => {
     e.preventDefault();
@@ -433,6 +438,53 @@ eventBus.on('create-new-document', () => { createNewDocument(); });
 eventBus.on('equation-edit-request', () => {
   dispatcher.dispatch('insert:equation-edit');
 });
+
+/**
+ * URL 파라미터(?url=)로 전달된 HWP 파일을 자동 로드한다.
+ * Chrome 확장 프로그램에서 뷰어 탭을 열 때 사용.
+ */
+async function loadFromUrlParam(): Promise<void> {
+  const params = new URLSearchParams(window.location.search);
+  const fileUrl = params.get('url');
+  if (!fileUrl) return;
+
+  const fileName = params.get('filename') || fileUrl.split('/').pop()?.split('?')[0] || 'document.hwp';
+  const msg = sbMessage();
+
+  try {
+    msg.textContent = '파일 로딩 중...';
+    console.log(`[loadFromUrlParam] ${fileUrl}`);
+
+    let response: Response;
+
+    // Chrome 확장 환경: Service Worker를 통한 CORS 우회 fetch
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      try {
+        response = await fetch(fileUrl);
+      } catch {
+        // 직접 fetch 실패 시 Service Worker 프록시
+        const result = await chrome.runtime.sendMessage({ type: 'fetch-file', url: fileUrl });
+        if (result.error) throw new Error(result.error);
+        const data = new Uint8Array(result.data);
+        const docInfo = wasm.loadDocument(data, fileName);
+        await initializeDocument(docInfo, `${fileName} — ${docInfo.pageCount}페이지`);
+        return;
+      }
+    } else {
+      response = await fetch(fileUrl);
+    }
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    const buffer = await response.arrayBuffer();
+    const data = new Uint8Array(buffer);
+    const docInfo = wasm.loadDocument(data, fileName);
+    await initializeDocument(docInfo, `${fileName} — ${docInfo.pageCount}페이지`);
+  } catch (error) {
+    const errMsg = `파일 로드 실패: ${error}`;
+    msg.textContent = errMsg;
+    console.error('[loadFromUrlParam]', error);
+  }
+}
 
 initialize();
 
