@@ -239,16 +239,31 @@ local/task{N}  ──커밋──커밋──┐
 local/task{N+1}──커밋──커밋──┤
                               ├─→ local/devel merge (작업 단위)
                               │
-                              ├─→ devel merge (local/devel → devel)
+                              ├─→ devel PR 생성 + 리뷰 + merge
                               │
-                              ├─→ main merge + 태그 (릴리즈 시점)
+                              ├─→ main PR 생성 + 리뷰 + merge + 태그 (릴리즈 시점)
 ```
 
 - **타스크 브랜치**: `local/task{N}`에서 잘게 커밋. 작업 단위마다 커밋.
 - **local/devel 작업**: devel에서 직접 작업하지 않고 `local/devel` 브랜치에서 작업한다. 타스크 브랜치도 `local/devel`에서 분기하고 `local/devel`로 merge한다.
-- **devel merge**: `local/devel` → `devel` merge. 관련 타스크를 묶어서 진행.
-- **main merge + 태그**: 릴리즈 시점에 devel → main merge 후 태그 생성.
-- **원격 push**: devel, main merge 시 push. `local/devel` 및 타스크 브랜치는 로컬 유지.
+- **devel merge (PR 기반)**: `local/devel` → `devel` PR 생성 → 리뷰(approve) → merge.
+- **main merge (PR 기반)**: 릴리즈 시점에 `devel` → `main` PR 생성 → 리뷰(approve) → merge 후 태그 생성.
+- **원격 push**: PR 생성 전 `local/devel`을 push. `local/task` 브랜치는 로컬 유지.
+
+#### PR + 리뷰 절차
+
+```bash
+# 1. local/devel → devel PR
+git push origin local/devel
+gh pr create --base devel --head local/devel --title "제목"
+gh pr review --approve
+gh pr merge --merge --delete-branch=false
+
+# 2. devel → main PR (릴리즈 시)
+gh pr create --base main --head devel --title "Release: 제목"
+gh pr review --approve
+gh pr merge --merge --delete-branch=false
+```
 
 ### 타스크 번호 관리
 
