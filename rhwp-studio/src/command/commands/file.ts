@@ -118,8 +118,89 @@ export const fileCommands: CommandDef[] = [
     label: '인쇄',
     icon: 'icon-print',
     shortcutLabel: 'Ctrl+P',
-    canExecute: () => false, // 미구현
-    execute() { /* TODO */ },
+    canExecute: (ctx) => ctx.hasDocument,
+    async execute(services) {
+      const wasm = services.wasm;
+      const pageCount = wasm.pageCount;
+      if (pageCount === 0) return;
+
+      // 진행률 표시
+      const statusEl = document.getElementById('sb-message');
+      const origStatus = statusEl?.textContent || '';
+
+      try {
+        // SVG 페이지 생성
+        const svgPages: string[] = [];
+        for (let i = 0; i < pageCount; i++) {
+          if (statusEl) statusEl.textContent = `인쇄 준비 중... (${i + 1}/${pageCount})`;
+          const svg = wasm.doc!.renderPageSvg(i);
+          svgPages.push(svg);
+          // UI 갱신을 위한 양보
+          if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));
+        }
+
+        // 첫 페이지 정보로 용지 크기 결정
+        const pageInfo = wasm.getPageInfo(0);
+        const widthMm = Math.round(pageInfo.width * 25.4 / 96);
+        const heightMm = Math.round(pageInfo.height * 25.4 / 96);
+
+        // 인쇄 전용 창 생성
+        const printWin = window.open('', '_blank');
+        if (!printWin) {
+          alert('팝업이 차단되었습니다. 팝업 허용 후 다시 시도해주세요.');
+          return;
+        }
+
+        printWin.document.write(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>${wasm.fileName} — 인쇄</title>
+<style>
+  @page { size: ${widthMm}mm ${heightMm}mm; margin: 0; }
+  * { margin: 0; padding: 0; }
+  body { background: #fff; }
+  .page { page-break-after: always; width: ${widthMm}mm; height: ${heightMm}mm; overflow: hidden; }
+  .page:last-child { page-break-after: auto; }
+  .page svg { width: 100%; height: 100%; }
+  @media screen {
+    body { background: #e5e7eb; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 16px; }
+    .page { background: #fff; box-shadow: 0 2px 8px rgba(0,0,0,0.15); }
+    .print-bar { position: fixed; top: 0; left: 0; right: 0; background: #1e293b; color: #fff; padding: 8px 16px; display: flex; align-items: center; gap: 12px; font: 14px sans-serif; z-index: 100; }
+    .print-bar button { padding: 6px 16px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+    .print-bar button:hover { background: #1d4ed8; }
+    body { padding-top: 56px; }
+  }
+  @media print { .print-bar { display: none; } }
+</style>
+</head>
+<body>
+<div class="print-bar">
+  <button id="print-btn">인쇄</button>
+  <button id="close-btn" style="background:#475569">닫기</button>
+  <span>${wasm.fileName} — ${pageCount}페이지</span>
+</div>
+${svgPages.map(svg => `<div class="page">${svg}</div>`).join('\n')}
+
+</body>
+</html>`);
+        printWin.document.close();
+
+        // CSP 안전: DOM API로 이벤트 바인딩 (인라인 스크립트 사용 안 함)
+        printWin.document.getElementById('print-btn')?.addEventListener('click', () => {
+          printWin.print();
+        });
+        printWin.document.getElementById('close-btn')?.addEventListener('click', () => {
+          printWin.close();
+        });
+
+        if (statusEl) statusEl.textContent = origStatus;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error('[file:print]', msg);
+        if (statusEl) statusEl.textContent = `인쇄 실패: ${msg}`;
+      }
+    },
   },
   {
     id: 'file:about',
