@@ -27,16 +27,18 @@
 - 웹사이트 개발자 안내
 - 빌드/설치 가이드
 
-### 스토어 배포 준비 상태
+### 스토어 배포
 
 | 항목 | 상태 |
 |------|------|
 | manifest.json | ✓ 완료 |
-| 아이콘 (16/32/48/128px) | ✓ 완료 |
+| 아이콘 (16/32/48/128/300px) | ✓ 완료 |
 | 개인정보 처리방침 | ✓ 완료 |
 | README | ✓ 완료 |
 | 개발자 가이드 | ✓ 완료 |
 | i18n (한국어/영어) | ✓ 완료 |
-| 스크린샷 | 미완료 (스토어 등록 시 제작) |
-| Chrome Web Store 등록 | 미완료 (개발자 등록 필요) |
-| Edge Add-ons 등록 | 미완료 (개발자 등록 필요) |
+| 스크린샷 (1280x800) | ✓ 완료 (Chrome/Edge 각 4장) |
+| Small promotional tile (440x280) | ✓ 완료 |
+| Large promotional tile (1400x560) | ✓ 완료 (Chrome/Edge 각 1장) |
+| Chrome Web Store 등록 | ✓ 심사 대기 중 |
+| Microsoft Edge Add-ons 등록 | ✓ 심사 대기 중 (Store ID: 0RDCKCKDPBQR) |
