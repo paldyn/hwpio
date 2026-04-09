@@ -76,15 +76,13 @@
 
   function showHoverCard(anchor) {
     if (!settings.hoverPreview) return;
-    // data-hwp-* 메타데이터가 있는 경우에만 카드 표시
-    const title = anchor.getAttribute('data-hwp-title');
-    if (!title) return;
 
     hideHoverCard();
 
     const card = document.createElement('div');
     card.className = HOVER_CLASS;
 
+    const title = anchor.getAttribute('data-hwp-title');
     const pages = anchor.getAttribute('data-hwp-pages');
     const size = anchor.getAttribute('data-hwp-size');
     const author = anchor.getAttribute('data-hwp-author');
@@ -96,11 +94,21 @@
 
     let html = '';
 
+    // 썸네일 영역 (사전 지정 또는 자동 추출 후 삽입)
     if (thumbnail) {
       html += `<div class="rhwp-hover-thumb"><img src="${thumbnail}" alt="미리보기"></div>`;
+    } else {
+      // 자동 추출 플레이스홀더
+      html += `<div class="rhwp-hover-thumb rhwp-thumb-loading"><span class="rhwp-thumb-spinner">⏳</span></div>`;
     }
 
-    html += `<div class="rhwp-hover-title">${title}</div>`;
+    if (title) {
+      html += `<div class="rhwp-hover-title">${title}</div>`;
+    } else {
+      // 파일명에서 제목 추출
+      const fileName = anchor.href.split('/').pop().split('?')[0];
+      html += `<div class="rhwp-hover-title">${fileName}</div>`;
+    }
 
     const meta = [];
     if (format) meta.push(format.toUpperCase());
@@ -140,6 +148,33 @@
     // 카드에 마우스 올리면 유지
     card.addEventListener('mouseenter', () => clearTimeout(hoverTimeout));
     card.addEventListener('mouseleave', () => hideHoverCard());
+
+    // data-hwp-thumbnail이 없으면 Service Worker에 자동 추출 요청
+    if (!thumbnail && anchor.href) {
+      chrome.runtime.sendMessage(
+        { type: 'extract-thumbnail', url: anchor.href },
+        (response) => {
+          if (response && response.dataUri && activeCard === card) {
+            const thumbDiv = card.querySelector('.rhwp-thumb-loading');
+            if (thumbDiv) {
+              thumbDiv.className = 'rhwp-hover-thumb';
+              thumbDiv.innerHTML = `<img src="${response.dataUri}" alt="미리보기">`;
+            }
+            // 크기 정보가 없었으면 메타 업데이트
+            if (!pages && response.width && response.height) {
+              const metaDiv = card.querySelector('.rhwp-hover-meta');
+              if (metaDiv) {
+                metaDiv.textContent += ` · ${response.width}×${response.height}`;
+              }
+            }
+          } else if (activeCard === card) {
+            // 추출 실패: 플레이스홀더 제거
+            const thumbDiv = card.querySelector('.rhwp-thumb-loading');
+            if (thumbDiv) thumbDiv.remove();
+          }
+        }
+      );
+    }
   }
 
   function hideHoverCard() {
