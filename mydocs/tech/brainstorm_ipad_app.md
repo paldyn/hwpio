@@ -166,10 +166,35 @@ HWP 원본 + 어노테이션 레이어를 **하나의 파일**로 묶음.
 
 ---
 
-## 9. 참고 자료
+## 9. 고객의 목소리 (VOC)
+
+### 클리앙 2022: "아이패드에서 한글파일을 열어서 필기 할수 있는 어플이 있을까요?"
+
+- 학원 족보(HWP)를 iPad에서 풀고 싶은 학부모
+- GoodNotes에서 HWP가 안 열림
+- 유일한 해결책: 한컴뷰어 → 인쇄 → PDF → GoodNotes (4단계)
+- **2022년 질문, 2026년 현재까지 답 없음**
+
+### GoodNotes/Notability 한계
+
+- 두 앱 모두 **플러그인 API 없음** — 서드파티 파일 포맷 지원 불가
+- HWP를 PDF로 변환하는 것이 유일한 방법
+- 변환 과정에서 표 깨짐, 서식 손실
+
+### 알한글이 주는 답
+
+```
+기존: HWP 받음 → PC 한컴 → PDF 변환 → iPad 전송 → GoodNotes → 필기 (5단계)
+알한글: HWP 받음 → 탭 → 필기 (2단계)
+```
+
+---
+
+## 10. 참고 자료
 
 - [한컴독스 App Store 2.4점](https://apps.apple.com/kr/app/%ED%95%9C%EC%BB%B4%EB%8F%85%EC%8A%A4-%EC%98%A4%ED%94%BC%EC%8A%A4/id1611732182)
 - [클리앙 2017: iOS 한컴오피스 엄청나네요](https://www.clien.net/service/board/cm_iphonien/11322443)
 - [클리앙 2022: 여전히 답은 없을까요](https://www.clien.net/service/board/cm_iphonien/17685206)
 - [클리앙 2023: 나아진 점이 있을까요](https://www.clien.net/service/board/cm_iphonien/18355722)
 - [더쿠 2023: 반년 사용 후기 비추천](https://theqoo.net/square/2885836075)
+- [클리앙 2022: 아이패드에서 한글파일 열어서 필기 가능?](https://www.clien.net/service/board/cm_iphonien/17181359)
