@@ -23,7 +23,12 @@ export async function extractThumbnailFromUrl(url) {
     const buffer = await response.arrayBuffer();
     const data = new Uint8Array(buffer);
 
-    const result = extractPrvImage(data);
+    // HWP(CFB) 또는 HWPX(ZIP) 감지
+    // HWP(CFB) 또는 HWPX(ZIP) 감지
+    const isZip = data.length >= 4 && data[0] === 0x50 && data[1] === 0x4B;
+    const result = isZip
+      ? await extractPrvImageFromZipAsync(data)
+      : extractPrvImage(data);
     if (result) {
       // 캐시 저장 (LRU)
       if (THUMBNAIL_CACHE.size >= CACHE_MAX_SIZE) {
@@ -179,6 +184,90 @@ function parseImageData(data) {
   const dataUri = `data:${mime};base64,${base64}`;
 
   return { dataUri, width, height, mime };
+}
+
+/**
+ * HWPX(ZIP) 컨테이너에서 Preview/PrvImage.* 추출
+ *
+ * ZIP End of Central Directory → Central Directory → 로컬 파일 헤더 → 데이터
+ */
+async function extractPrvImageFromZipAsync(data) {
+  // End of Central Directory 찾기 (ZIP 파일 끝에서 역방향 탐색)
+  let eocdOffset = -1;
+  for (let i = data.length - 22; i >= 0 && i >= data.length - 65558; i--) {
+    if (data[i] === 0x50 && data[i+1] === 0x4B && data[i+2] === 0x05 && data[i+3] === 0x06) {
+      eocdOffset = i;
+      break;
+    }
+  }
+  if (eocdOffset < 0) return null;
+
+  const cdOffset = readU32LE(data, eocdOffset + 16);
+  const cdEntries = readU16LE(data, eocdOffset + 10);
+
+  // Central Directory 순회
+  let offset = cdOffset;
+  for (let i = 0; i < cdEntries && offset + 46 < data.length; i++) {
+    // Central Directory 시그니처 확인
+    if (data[offset] !== 0x50 || data[offset+1] !== 0x4B || data[offset+2] !== 0x01 || data[offset+3] !== 0x02) break;
+
+    const compMethod = readU16LE(data, offset + 10);
+    const compSize = readU32LE(data, offset + 20);
+    const uncompSize = readU32LE(data, offset + 24);
+    const nameLen = readU16LE(data, offset + 28);
+    const extraLen = readU16LE(data, offset + 30);
+    const commentLen = readU16LE(data, offset + 32);
+    const localHeaderOffset = readU32LE(data, offset + 42);
+
+    // 파일 이름 읽기
+    const nameBytes = data.subarray(offset + 46, offset + 46 + nameLen);
+    const name = new TextDecoder().decode(nameBytes);
+
+    // Preview/PrvImage 확인
+    if (name.startsWith('Preview/PrvImage')) {
+      // 로컬 파일 헤더에서 실제 데이터 위치 계산
+      if (localHeaderOffset + 30 >= data.length) break;
+      const localNameLen = readU16LE(data, localHeaderOffset + 26);
+      const localExtraLen = readU16LE(data, localHeaderOffset + 28);
+      const dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen;
+
+      if (compMethod === 0) {
+        // 비압축 (stored)
+        const imageData = data.subarray(dataStart, dataStart + uncompSize);
+        return parseImageData(imageData);
+      } else if (compMethod === 8) {
+        // deflate 압축 — DecompressionStream (비동기)
+        try {
+          const compressed = data.slice(dataStart, dataStart + compSize);
+          const ds = new DecompressionStream('raw');
+          const writer = ds.writable.getWriter();
+          writer.write(compressed);
+          writer.close();
+          const reader = ds.readable.getReader();
+          const chunks = [];
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+          }
+          const totalLen = chunks.reduce((s, c) => s + c.length, 0);
+          const decompressed = new Uint8Array(totalLen);
+          let offset = 0;
+          for (const chunk of chunks) {
+            decompressed.set(chunk, offset);
+            offset += chunk.length;
+          }
+          return parseImageData(decompressed);
+        } catch {
+          return null;
+        }
+      }
+    }
+
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+
+  return null;
 }
 
 // ─── 바이너리 헬퍼 ───
