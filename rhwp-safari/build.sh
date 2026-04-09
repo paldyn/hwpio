@@ -43,15 +43,22 @@ cp "$SRC/options.js" "$DIST/options.js"
 # Chrome 전용 파일 제거
 rm -rf "$DIST/sw"
 rm -f "$DIST/dev-tools-inject.js"
+# viewer.html에서 dev-tools-inject.js 참조 제거
+sed -i '' '/<script src="\/dev-tools-inject.js"><\/script>/d' "$DIST/viewer.html"
+# Safari 호환: dev-tools-inject.js 참조만 제거
+# viewer.html의 type="module", crossorigin, 절대 경로는 원본 유지
 
-# 5. Xcode 프로젝트 재생성
-echo "[5/6] Xcode 프로젝트 생성..."
-rm -rf "$SCRIPT_DIR/HWP Viewer"
-xcrun safari-web-extension-converter "$DIST" \
-  --project-location "$SCRIPT_DIR" \
-  --app-name "HWP Viewer" \
-  --bundle-identifier com.edwardkim.rhwp-safari \
-  --no-open --no-prompt
+# 5. Xcode 프로젝트 (최초 생성 시에만, 서명 설정 보존)
+if [ ! -d "$SCRIPT_DIR/HWP Viewer/HWP Viewer.xcodeproj" ]; then
+  echo "[5/6] Xcode 프로젝트 생성 (최초)..."
+  xcrun safari-web-extension-converter "$DIST" \
+    --project-location "$SCRIPT_DIR" \
+    --app-name "HWP Viewer" \
+    --bundle-identifier com.edwardkim.rhwp-safari \
+    --no-open --no-prompt
+else
+  echo "[5/6] Xcode 프로젝트 존재 — 서명 설정 보존, 건너뜀"
+fi
 
 # 6. macOS 빌드
 echo "[6/6] macOS 빌드..."
