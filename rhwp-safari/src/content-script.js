@@ -83,7 +83,12 @@
         type: 'open-hwp',
         url: anchor.href,
         filename: extractFilename(anchor)
-      });
+      }).then(res => {
+        if (res && !res.ok && res.reason) {
+          const msg = getBlockedMessage(res.reason, res.hostname);
+          showToast(msg.title, msg.guide);
+        }
+      }).catch(() => {});
     });
 
     return badge;
@@ -245,6 +250,99 @@
     });
   }
 
+  // ─── 차단 사유별 메시지 (한글은 content-script에서 생성) ───
+
+  function getBlockedMessage(reason, hostname) {
+    switch (reason) {
+      case 'private-ip':
+        return {
+          title: '\uB85C\uCEEC \uC11C\uBC84(' + (hostname || 'localhost') + ') \uC811\uADFC\uC774 \uCC28\uB2E8\uB418\uC5C8\uC2B5\uB2C8\uB2E4.',
+          guide: '\uC124\uC815 \u2192 \uAC1C\uBC1C \uD0ED \u2192 "\uAC1C\uBC1C\uC790 \uB3C4\uAD6C"\uB97C \uCF1C\uBA74 \uB85C\uCEEC \uC11C\uBC84\uC5D0 \uC811\uADFC\uD560 \uC218 \uC788\uC2B5\uB2C8\uB2E4.'
+        };
+      case 'domain-blocked':
+        return {
+          title: '\uC774 \uC0AC\uC774\uD2B8(' + (hostname || '') + ')\uC5D0\uC11C \uC790\uB3D9 \uC5F4\uAE30\uAC00 \uBE44\uD65C\uC131\uD654\uB418\uC5B4 \uC788\uC2B5\uB2C8\uB2E4.',
+          guide: '\uC124\uC815 \u2192 \uC0AC\uC774\uD2B8 \uD0ED\uC5D0\uC11C \uB3C4\uBA54\uC778\uC744 \uCD94\uAC00\uD558\uAC70\uB098, "\uBAA8\uB4E0 \uC0AC\uC774\uD2B8\uC5D0\uC11C \uD65C\uC131\uD654"\uB97C \uCF1C\uC8FC\uC138\uC694.'
+        };
+      default:
+        return {
+          title: '\uD30C\uC77C\uC744 \uC5F4 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.',
+          guide: ''
+        };
+    }
+  }
+
+  // ─── 토스트 알림 (차단 시 사용자 안내) ───
+
+  let toastTimer = null;
+
+  function showToast(message, guide) {
+    // 기존 토스트 제거
+    const existing = document.getElementById('rhwp-toast');
+    if (existing) existing.remove();
+    clearTimeout(toastTimer);
+
+    const toast = document.createElement('div');
+    toast.id = 'rhwp-toast';
+    toast.style.cssText = `
+      position: fixed; bottom: 24px; right: 24px; z-index: 2147483647;
+      max-width: 360px; padding: 14px 18px;
+      background: #1d1d1f; color: #f5f5f7;
+      border-radius: 14px; font-family: -apple-system, sans-serif;
+      font-size: 13px; line-height: 1.5;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      animation: rhwp-toast-in 0.3s ease;
+    `;
+
+    const msgEl = document.createElement('div');
+    msgEl.textContent = message;
+    msgEl.style.fontWeight = '500';
+    toast.appendChild(msgEl);
+
+    if (guide) {
+      const guideEl = document.createElement('div');
+      guideEl.textContent = guide;
+      guideEl.style.cssText = 'margin-top: 6px; font-size: 12px; color: #a1a1a6;';
+      toast.appendChild(guideEl);
+    }
+
+    // 닫기 버튼
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '\u2715';
+    closeBtn.style.cssText = `
+      position: absolute; top: 8px; right: 10px;
+      background: none; border: none; color: #86868b;
+      font-size: 14px; cursor: pointer; padding: 2px 4px;
+    `;
+    closeBtn.addEventListener('click', () => {
+      toast.remove();
+      clearTimeout(toastTimer);
+    });
+    toast.appendChild(closeBtn);
+
+    // 애니메이션 스타일 삽입 (1회)
+    if (!document.getElementById('rhwp-toast-style')) {
+      const style = document.createElement('style');
+      style.id = 'rhwp-toast-style';
+      style.textContent = `
+        @keyframes rhwp-toast-in {
+          from { opacity: 0; transform: translateY(12px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
+    document.body.appendChild(toast);
+
+    // 8초 후 자동 제거
+    toastTimer = setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transition = 'opacity 0.3s';
+      setTimeout(() => toast.remove(), 300);
+    }, 8000);
+  }
+
   // ─── HWP 링크 클릭 가로채기 ───
   // Safari는 downloads API가 없으므로, HWP 링크 클릭 시 뷰어도 함께 연다.
   // 다운로드는 정상 진행 (preventDefault 하지 않음)
@@ -256,7 +354,12 @@
         type: 'open-hwp',
         url: anchor.href,
         filename: extractFilename(anchor)
-      });
+      }).then(res => {
+        if (res && !res.ok && res.reason) {
+          const msg = getBlockedMessage(res.reason, res.hostname);
+          showToast(msg.title, msg.guide);
+        }
+      }).catch(() => {});
     });
   }
 

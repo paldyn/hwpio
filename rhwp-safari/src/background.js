@@ -30,10 +30,8 @@ function validateUrl(urlString) {
   if (parsed.username || parsed.password) {
     return { valid: false, reason: 'URL에 userinfo(@) 포함' };
   }
-  if (isPrivateHost(parsed.hostname)) {
-    return { valid: false, reason: `내부 IP 차단: ${parsed.hostname}` };
-  }
-  return { valid: true, parsed };
+  // 내부 IP는 validateUrl 단계에서 차단하지 않고, 호출부에서 devMode 체크 후 판단
+  return { valid: true, parsed, isPrivate: isPrivateHost(parsed.hostname) };
 }
 
 function isAllowedDomain(hostname, domains) {
@@ -52,7 +50,7 @@ function isDownloadEndpoint(parsed) {
 
 async function getAllowedDomains() {
   try {
-    const s = await browser.storage.sync.get({ allowedDomains: DEFAULT_ALLOWED_DOMAINS });
+    const s = await browser.storage.local.get({ allowedDomains: DEFAULT_ALLOWED_DOMAINS });
     return s.allowedDomains;
   } catch { return DEFAULT_ALLOWED_DOMAINS; }
 }
@@ -92,41 +90,62 @@ function isContentScript(sender) {
 
 async function logSecurity(type, url, reason) {
   try {
-    const s = await browser.storage.sync.get({ securityLog: false });
+    const s = await browser.storage.local.get({ securityLog: false });
     if (!s.securityLog) return;
     const data = await browser.storage.local.get({ securityEvents: [] });
     const events = data.securityEvents;
     events.push({ time: new Date().toISOString(), type, url: (url || '').slice(0, 500), reason });
-    while (events.length > 100) events.shift();
+    while (events.length > 250) events.shift();
     await browser.storage.local.set({ securityEvents: events });
   } catch {}
 }
 
 // ─── 뷰어 탭 관리 ───
 
+/**
+ * 뷰어 탭을 연다.
+ * @param {object} options
+ * @param {string} [options.url] - HWP 파일 URL
+ * @param {string} [options.filename] - 파일명
+ * @param {boolean} [options.explicit] - 사용자 명시적 행위 (배지 클릭, 컨텍스트 메뉴)
+ */
+/**
+ * 뷰어 탭을 연다.
+ * @returns {{ ok: boolean, blocked?: string, guide?: string }}
+ */
 async function openViewer(options = {}) {
   const viewerBase = browser.runtime.getURL('viewer.html');
   const params = new URLSearchParams();
 
   if (options.url) {
-    // URL 검증 (C-02)
+    // URL 검증 (C-02): 프로토콜, userinfo 검사는 항상 수행
     const result = validateUrl(options.url);
     if (!result.valid) {
       console.warn('[rhwp] URL 차단:', result.reason, options.url);
       await logSecurity('url-blocked', options.url, result.reason);
-      return;
+      return { ok: false, blocked: result.reason };
     }
     const parsed = result.parsed;
 
-    // 3단계 판별: ① 확장자 ② 허용 도메인+다운로드패턴 ③ 차단
-    const domains = await getAllowedDomains();
-    const allSites = await browser.storage.sync.get({ allSitesEnabled: false });
+    // 내부 IP 차단 (devMode 시 허용)
+    const devCheck = await browser.storage.local.get({ devMode: false });
+    if (result.isPrivate && !devCheck.devMode) {
+      console.warn('[rhwp] 내부 IP:', parsed.hostname);
+      await logSecurity('url-blocked', options.url, 'private-ip');
+      return { ok: false, reason: 'private-ip', hostname: parsed.hostname };
+    }
 
-    if (!hasHwpExtension(parsed) && !allSites.allSitesEnabled) {
-      if (!isAllowedDomain(parsed.hostname, domains) && !isDownloadEndpoint(parsed)) {
-        console.warn('[rhwp] 미허용 도메인:', parsed.hostname);
-        await logSecurity('url-blocked', options.url, `미허용 도메인: ${parsed.hostname}`);
-        return;
+    // 도메인 제한: 자동 동작에만 적용
+    if (!options.explicit) {
+      const domains = await getAllowedDomains();
+      const allSites = await browser.storage.local.get({ allSitesEnabled: false });
+
+      if (!hasHwpExtension(parsed) && !allSites.allSitesEnabled) {
+        if (!isAllowedDomain(parsed.hostname, domains) && !isDownloadEndpoint(parsed)) {
+          console.warn('[rhwp] domain-blocked:', parsed.hostname);
+          await logSecurity('url-blocked', options.url, 'domain-blocked');
+          return { ok: false, reason: 'domain-blocked', hostname: parsed.hostname };
+        }
       }
     }
 
@@ -140,6 +159,7 @@ async function openViewer(options = {}) {
   const query = params.toString();
   const fullUrl = query ? `${viewerBase}?${query}` : viewerBase;
   browser.tabs.create({ url: fullUrl });
+  return { ok: true };
 }
 
 // ─── 컨텍스트 메뉴 ───
@@ -158,23 +178,28 @@ function setupContextMenus() {
 
 browser.contextMenus.onClicked.addListener((info) => {
   if (info.menuItemId !== MENU_ID || !info.linkUrl) return;
-  openViewer({ url: info.linkUrl });
+  openViewer({ url: info.linkUrl, explicit: true });
 });
 
 // ─── 메시지 라우팅 ───
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  console.log('[rhwp-bg] 메시지 수신:', message.type, 'sender:', sender?.tab?.id, sender?.url);
   switch (message.type) {
     case 'open-hwp': {
       // 발신자 검증 (H-02)
+      console.log('[rhwp-bg] sender 검증:', { tab: sender?.tab, url: sender?.url });
       if (!isContentScript(sender)) {
+        console.warn('[rhwp-bg] sender 거부: content script 아님');
         logSecurity('sender-blocked', message.url, 'open-hwp: content script가 아닌 발신자');
         sendResponse({ error: 'Unauthorized' });
         return;
       }
-      openViewer({ url: message.url, filename: message.filename });
-      sendResponse({ ok: true });
-      break;
+      console.log('[rhwp-bg] openViewer 호출:', message.url);
+      openViewer({ url: message.url, filename: message.filename, explicit: true })
+        .then(result => sendResponse(result || { ok: true }))
+        .catch(err => sendResponse({ ok: false, blocked: err.message }));
+      return true; // 비동기 응답
     }
 
     case 'fetch-file': {
@@ -193,17 +218,17 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // 내부 IP 이중 체크
-      if (isPrivateHost(urlResult.parsed.hostname)) {
-        logSecurity('fetch-blocked', message.url, '내부 IP');
-        sendResponse({ error: '내부 네트워크 접근 차단' });
-        return;
-      }
-
       // fetch 실행 (리다이렉트 수동 처리, 쿠키 미전송)
       (async () => {
         try {
-          const settings = await browser.storage.sync.get({ allowHttp: true, maxFileSize: 20 });
+          const settings = await browser.storage.local.get({ allowHttp: true, maxFileSize: 20, devMode: false });
+
+          // 내부 IP 이중 체크 (devMode 시 허용)
+          if (urlResult.isPrivate && !settings.devMode) {
+            logSecurity('fetch-blocked', message.url, '내부 IP');
+            sendResponse({ error: '내부 네트워크 접근 차단' });
+            return;
+          }
           const maxSize = (settings.maxFileSize || 20) * 1024 * 1024;
 
           // HTTP 처리
@@ -280,7 +305,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     case 'get-settings': {
-      browser.storage.sync.get({
+      browser.storage.local.get({
         autoOpen: true, showBadges: true, hoverPreview: true,
         allowHttp: true, httpWarning: true, devMode: false,
         allowedDomains: DEFAULT_ALLOWED_DOMAINS, allSitesEnabled: false,
@@ -298,7 +323,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
 browser.runtime.onInstalled.addListener((details) => {
   setupContextMenus();
   if (details.reason === 'install') {
-    browser.storage.sync.set({
+    browser.storage.local.set({
       autoOpen: true, showBadges: true, hoverPreview: true,
       allowHttp: true, httpWarning: true, devMode: false, securityLog: false,
       allowedDomains: DEFAULT_ALLOWED_DOMAINS, allSitesEnabled: false,
