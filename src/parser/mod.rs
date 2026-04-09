@@ -527,9 +527,70 @@ fn extract_preview(cfb: &mut cfb_reader::CfbReader) -> Option<Preview> {
     Some(Preview { image, text })
 }
 
-/// 이미지 포맷 감지 (BMP/GIF)
+/// HWP 파일에서 썸네일 이미지만 경량 추출 (전체 파싱 없이)
+///
+/// CFB 컨테이너에서 PrvImage 스트림만 읽어 PreviewImage를 반환한다.
+/// BMP 포맷인 경우 PNG로 변환된 바이트를 반환한다.
+pub fn extract_thumbnail_only(data: &[u8]) -> Option<ThumbnailResult> {
+    let mut cfb = cfb_reader::CfbReader::open(data).ok()?;
+    let image_data = cfb.read_preview_image()?;
+    let format = detect_image_format(&image_data);
+
+    // 이미지 크기 추출
+    let (width, height) = match format {
+        PreviewImageFormat::Png if image_data.len() >= 24 => {
+            // PNG IHDR: offset 16 = width (u32 BE), offset 20 = height (u32 BE)
+            let w = u32::from_be_bytes([image_data[16], image_data[17], image_data[18], image_data[19]]);
+            let h = u32::from_be_bytes([image_data[20], image_data[21], image_data[22], image_data[23]]);
+            (w, h)
+        }
+        PreviewImageFormat::Bmp if image_data.len() >= 26 => {
+            // BMP 헤더: offset 18 = width (i32 LE), offset 22 = height (i32 LE)
+            let w = i32::from_le_bytes([image_data[18], image_data[19], image_data[20], image_data[21]]);
+            let h = i32::from_le_bytes([image_data[22], image_data[23], image_data[24], image_data[25]]);
+            (w.unsigned_abs(), h.unsigned_abs())
+        }
+        PreviewImageFormat::Gif if image_data.len() >= 10 => {
+            let w = u16::from_le_bytes([image_data[6], image_data[7]]) as u32;
+            let h = u16::from_le_bytes([image_data[8], image_data[9]]) as u32;
+            (w, h)
+        }
+        _ => (0, 0),
+    };
+
+    let output_format = match format {
+        PreviewImageFormat::Png => "png",
+        PreviewImageFormat::Bmp => "bmp",
+        PreviewImageFormat::Gif => "gif",
+        PreviewImageFormat::Unknown => "unknown",
+    };
+
+    Some(ThumbnailResult {
+        format: output_format.to_string(),
+        data: image_data,
+        width,
+        height,
+    })
+}
+
+/// 썸네일 추출 결과
+#[derive(Debug, Clone)]
+pub struct ThumbnailResult {
+    /// 출력 포맷 ("png", "gif", "unknown")
+    pub format: String,
+    /// 이미지 바이너리 데이터 (BMP는 PNG로 변환됨)
+    pub data: Vec<u8>,
+    /// 이미지 너비 (px)
+    pub width: u32,
+    /// 이미지 높이 (px)
+    pub height: u32,
+}
+
+/// 이미지 포맷 감지 (BMP/GIF/PNG)
 fn detect_image_format(data: &[u8]) -> PreviewImageFormat {
-    if data.len() >= 2 && data[0] == 0x42 && data[1] == 0x4D {
+    if data.len() >= 8 && &data[..8] == b"\x89PNG\r\n\x1a\n" {
+        PreviewImageFormat::Png
+    } else if data.len() >= 2 && data[0] == 0x42 && data[1] == 0x4D {
         PreviewImageFormat::Bmp
     } else if data.len() >= 3 && &data[..3] == b"GIF" {
         PreviewImageFormat::Gif
