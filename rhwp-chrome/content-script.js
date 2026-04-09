@@ -73,6 +73,7 @@
 
   let activeCard = null;
   let hoverTimeout = null;
+  const thumbnailCache = new Map(); // URL → dataUri 캐시 (content-script 측)
 
   function showHoverCard(anchor) {
     if (!settings.hoverPreview) return;
@@ -149,31 +150,44 @@
     card.addEventListener('mouseenter', () => clearTimeout(hoverTimeout));
     card.addEventListener('mouseleave', () => hideHoverCard());
 
-    // data-hwp-thumbnail이 없으면 Service Worker에 자동 추출 요청
+    // data-hwp-thumbnail이 없으면 캐시 확인 또는 Service Worker에 추출 요청
     if (!thumbnail && anchor.href) {
-      chrome.runtime.sendMessage(
-        { type: 'extract-thumbnail', url: anchor.href },
-        (response) => {
-          if (response && response.dataUri && activeCard === card) {
-            const thumbDiv = card.querySelector('.rhwp-thumb-loading');
-            if (thumbDiv) {
-              thumbDiv.className = 'rhwp-hover-thumb';
-              thumbDiv.innerHTML = `<img src="${response.dataUri}" alt="미리보기">`;
-            }
-            // 크기 정보가 없었으면 메타 업데이트
-            if (!pages && response.width && response.height) {
-              const metaDiv = card.querySelector('.rhwp-hover-meta');
-              if (metaDiv) {
-                metaDiv.textContent += ` · ${response.width}×${response.height}`;
+      const cached = thumbnailCache.get(anchor.href);
+      if (cached) {
+        // 캐시 히트: 즉시 표시
+        const thumbDiv = card.querySelector('.rhwp-thumb-loading');
+        if (thumbDiv) {
+          thumbDiv.className = 'rhwp-hover-thumb';
+          thumbDiv.innerHTML = `<img src="${cached.dataUri}" alt="미리보기">`;
+        }
+      } else if (cached === null) {
+        // 이전에 추출 실패한 URL: 플레이스홀더 제거
+        const thumbDiv = card.querySelector('.rhwp-thumb-loading');
+        if (thumbDiv) thumbDiv.remove();
+      } else {
+        // 캐시 미스: Service Worker에 추출 요청
+        chrome.runtime.sendMessage(
+          { type: 'extract-thumbnail', url: anchor.href },
+          (response) => {
+            if (response && response.dataUri) {
+              thumbnailCache.set(anchor.href, response);
+              if (activeCard === card) {
+                const thumbDiv = card.querySelector('.rhwp-thumb-loading');
+                if (thumbDiv) {
+                  thumbDiv.className = 'rhwp-hover-thumb';
+                  thumbDiv.innerHTML = `<img src="${response.dataUri}" alt="미리보기">`;
+                }
+              }
+            } else {
+              thumbnailCache.set(anchor.href, null); // 실패 기록
+              if (activeCard === card) {
+                const thumbDiv = card.querySelector('.rhwp-thumb-loading');
+                if (thumbDiv) thumbDiv.remove();
               }
             }
-          } else if (activeCard === card) {
-            // 추출 실패: 플레이스홀더 제거
-            const thumbDiv = card.querySelector('.rhwp-thumb-loading');
-            if (thumbDiv) thumbDiv.remove();
           }
-        }
-      );
+        );
+      }
     }
   }
 
