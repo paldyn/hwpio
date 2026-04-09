@@ -527,13 +527,19 @@ fn extract_preview(cfb: &mut cfb_reader::CfbReader) -> Option<Preview> {
     Some(Preview { image, text })
 }
 
-/// HWP 파일에서 썸네일 이미지만 경량 추출 (전체 파싱 없이)
+/// HWP/HWPX 파일에서 썸네일 이미지만 경량 추출 (전체 파싱 없이)
 ///
-/// CFB 컨테이너에서 PrvImage 스트림만 읽어 PreviewImage를 반환한다.
-/// BMP 포맷인 경우 PNG로 변환된 바이트를 반환한다.
+/// - HWP (CFB): `/PrvImage` 스트림에서 추출
+/// - HWPX (ZIP): `Preview/PrvImage.png` 엔트리에서 추출
 pub fn extract_thumbnail_only(data: &[u8]) -> Option<ThumbnailResult> {
-    let mut cfb = cfb_reader::CfbReader::open(data).ok()?;
-    let image_data = cfb.read_preview_image()?;
+    let image_data = if detect_format(data) == FileFormat::Hwpx {
+        // HWPX: ZIP 컨테이너에서 Preview/PrvImage.png 읽기
+        extract_thumbnail_from_hwpx(data)?
+    } else {
+        // HWP: CFB 컨테이너에서 /PrvImage 스트림 읽기
+        let mut cfb = cfb_reader::CfbReader::open(data).ok()?;
+        cfb.read_preview_image()?
+    };
     let format = detect_image_format(&image_data);
 
     // 이미지 크기 추출
@@ -571,6 +577,30 @@ pub fn extract_thumbnail_only(data: &[u8]) -> Option<ThumbnailResult> {
         width,
         height,
     })
+}
+
+/// HWPX(ZIP)에서 Preview/PrvImage.png 추출
+fn extract_thumbnail_from_hwpx(data: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let cursor = std::io::Cursor::new(data);
+    let mut archive = zip::ZipArchive::new(cursor).ok()?;
+
+    // Preview/PrvImage.png 또는 Preview/PrvImage.* 탐색
+    let entry_name = (0..archive.len()).find_map(|i| {
+        let file = archive.by_index(i).ok()?;
+        let name = file.name().to_string();
+        if name.starts_with("Preview/PrvImage") {
+            Some(name)
+        } else {
+            None
+        }
+    })?;
+
+    let mut file = archive.by_name(&entry_name).ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+
+    if buf.is_empty() { None } else { Some(buf) }
 }
 
 /// 썸네일 추출 결과
