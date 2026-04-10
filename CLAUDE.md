@@ -24,6 +24,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `manual/` - 매뉴얼, 가이드 문서
 - `troubleshootings/` - 트러블슈팅 관련 문서
 
+### 필수 참조 문서
+
+- `mydocs/manual/browser_extension_dev_guide.md` — 브라우저 확장 개발 가이드 (Safari/Chrome/Edge 보안, UX, 빌드 규칙)
+- `mydocs/tech/font_fallback_strategy.md` — 폰트 폴백 전략 (오픈소스 대체, 라이선스)
+- `mydocs/report/browser_extension_security_audit.md` — 보안 감사 보고서
+
 문서 파일명 규칙 (`plans/`, `working/`):
 - 수행 계획서: `task_{milestone}_{이슈번호}.md` (예: task_m100_71.md)
 - 구현 계획서: `task_{milestone}_{이슈번호}_impl.md` (예: task_m100_71_impl.md)
@@ -239,30 +245,44 @@ local/task{N}  ──커밋──커밋──┐
 local/task{N+1}──커밋──커밋──┤
                               ├─→ local/devel merge (작업 단위)
                               │
-                              ├─→ devel PR 생성 + 리뷰 + merge
+                              ├─→ devel merge (로컬) + push
                               │
                               ├─→ main PR 생성 + 리뷰 + merge + 태그 (릴리즈 시점)
 ```
 
 - **타스크 브랜치**: `local/task{N}`에서 잘게 커밋. 작업 단위마다 커밋.
 - **local/devel 작업**: devel에서 직접 작업하지 않고 `local/devel` 브랜치에서 작업한다. 타스크 브랜치도 `local/devel`에서 분기하고 `local/devel`로 merge한다.
-- **devel merge (PR 기반)**: `local/devel` → `devel` PR 생성 → 리뷰(approve) → merge.
+- **원격 push**: `devel`만 push. `local/devel`과 `local/task` 브랜치는 **로컬 유지 (원격 push 금지)**.
 - **main merge (PR 기반)**: 릴리즈 시점에 `devel` → `main` PR 생성 → 리뷰(approve) → merge 후 태그 생성.
-- **원격 push**: PR 생성 전 `local/devel`을 push. `local/task` 브랜치는 로컬 유지.
 
-#### PR + 리뷰 절차
+#### 메인테이너 워크플로우
 
 ```bash
-# 1. local/devel → devel PR
-git push origin local/devel
-gh pr create --base devel --head local/devel --title "제목"
-gh pr review --approve
-gh pr merge --merge --delete-branch=false
+# 1. local/devel → devel (로컬 merge + push)
+git checkout devel
+git merge local/devel --no-ff -m "Merge local/devel: 제목"
+git push origin devel
 
 # 2. devel → main PR (릴리즈 시)
 gh pr create --base main --head devel --title "Release: 제목"
 gh pr review --approve
 gh pr merge --merge --delete-branch=false
+```
+
+#### 컨트리뷰터 워크플로우 (Fork 기반)
+
+```bash
+# 1. 원본 저장소 Fork (GitHub에서 1회)
+# 2. Fork한 저장소에서 작업
+git clone https://github.com/{contributor}/rhwp.git
+git checkout -b feature/my-task
+# ... 작업 + 커밋 ...
+git push origin feature/my-task
+
+# 3. 원본 저장소의 devel로 PR 생성
+gh pr create --repo edwardkim/rhwp --base devel --head {contributor}:feature/my-task --title "제목"
+
+# 4. 메인테이너가 리뷰 + merge
 ```
 
 ### 타스크 번호 관리
