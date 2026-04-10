@@ -11,6 +11,7 @@
   const PROCESSED_ATTR = 'data-rhwp-processed';
 
   let settings = { autoOpen: true, showBadges: true, hoverPreview: true };
+  const thumbnailCache = new Map(); // URL → { dataUri, width, height } | null
 
   // 설정 로드
   browser.runtime.sendMessage({ type: 'get-settings' }).then((result) => {
@@ -79,16 +80,7 @@
     badge.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      browser.runtime.sendMessage({
-        type: 'open-hwp',
-        url: anchor.href,
-        filename: extractFilename(anchor)
-      }).then(res => {
-        if (res && !res.ok && res.reason) {
-          const msg = getBlockedMessage(res.reason, res.hostname);
-          showToast(msg.title, msg.guide);
-        }
-      }).catch(() => {});
+      openHwpViewer(anchor.href, extractFilename(anchor));
     });
 
     return badge;
@@ -122,6 +114,16 @@
     return div;
   }
 
+  function insertThumbnail(container, src) {
+    const img = document.createElement('img');
+    img.src = src;
+    img.alt = '\uBBF8\uB9AC\uBCF4\uAE30';
+    img.referrerPolicy = 'no-referrer';
+    img.style.cssText = 'display:block;width:100%;height:auto;border-radius:4px;';
+    container.appendChild(img);
+    container.style.display = '';
+  }
+
   function showHoverCard(anchor) {
     if (!settings.hoverPreview) return;
     if (activeAnchor === anchor && activeCard) return;
@@ -134,60 +136,70 @@
     const title = anchor.getAttribute('data-hwp-title');
     const filename = extractFilename(anchor);
 
-    if (title) {
-      // 썸네일 (URL 스킴 검증)
-      const thumbnail = anchor.getAttribute('data-hwp-thumbnail');
-      if (thumbnail && isSafeImageUrl(thumbnail)) {
-        const thumbContainer = document.createElement('div');
-        thumbContainer.className = 'rhwp-hover-thumb';
-        const img = document.createElement('img');
-        img.src = thumbnail;
-        img.alt = '미리보기';
-        img.referrerPolicy = 'no-referrer';
-        thumbContainer.appendChild(img);
-        card.appendChild(thumbContainer);
-      }
+    // 썸네일 영역 (비동기 로드)
+    const thumbContainer = document.createElement('div');
+    thumbContainer.className = 'rhwp-hover-thumb';
+    thumbContainer.style.display = 'none';
+    card.appendChild(thumbContainer);
 
+    // data-hwp-thumbnail 또는 캐시 또는 background 추출
+    const existingThumb = anchor.getAttribute('data-hwp-thumbnail');
+    if (existingThumb && isSafeImageUrl(existingThumb)) {
+      insertThumbnail(thumbContainer, existingThumb);
+    } else if (anchor.href) {
+      const cached = thumbnailCache.get(anchor.href);
+      if (cached && cached.dataUri) {
+        insertThumbnail(thumbContainer, cached.dataUri);
+      } else if (cached === undefined) {
+        // 아직 요청하지 않은 URL → background에 추출 요청
+        browser.runtime.sendMessage({ type: 'extract-thumbnail', url: anchor.href })
+          .then(response => {
+            if (response && response.dataUri) {
+              thumbnailCache.set(anchor.href, response);
+              insertThumbnail(thumbContainer, response.dataUri);
+            } else {
+              thumbnailCache.set(anchor.href, null);
+            }
+          }).catch(() => { thumbnailCache.set(anchor.href, null); });
+      }
+    }
+
+    if (title) {
       card.appendChild(createDiv('rhwp-hover-title', truncate(title, 200)));
 
-      // 메타 정보
       const meta = [];
       const format = anchor.getAttribute('data-hwp-format');
       const pages = anchor.getAttribute('data-hwp-pages');
       const size = anchor.getAttribute('data-hwp-size');
       if (format) meta.push(truncate(format.toUpperCase(), 10));
-      if (pages) meta.push(`${truncate(pages, 10)}쪽`);
+      if (pages) meta.push(`${truncate(pages, 10)}\uCABD`);
       if (size) meta.push(formatSize(Number(size)));
       if (meta.length > 0) {
-        card.appendChild(createDiv('rhwp-hover-meta', meta.join(' · ')));
+        card.appendChild(createDiv('rhwp-hover-meta', meta.join(' \u00B7 ')));
       }
 
-      // 작성자/날짜
       const author = anchor.getAttribute('data-hwp-author');
       const date = anchor.getAttribute('data-hwp-date');
       if (author || date) {
         const info = [];
         if (author) info.push(truncate(author, 100));
         if (date) info.push(truncate(date, 20));
-        card.appendChild(createDiv('rhwp-hover-info', info.join(' · ')));
+        card.appendChild(createDiv('rhwp-hover-info', info.join(' \u00B7 ')));
       }
 
-      // 카테고리
       const category = anchor.getAttribute('data-hwp-category');
       if (category) {
         card.appendChild(createDiv('rhwp-hover-category', truncate(category, 50)));
       }
 
-      // 설명
       const description = anchor.getAttribute('data-hwp-description');
       if (description) {
         card.appendChild(createDiv('rhwp-hover-desc', truncate(description, 500)));
       }
     } else {
-      // 기본 카드: 파일명 + 포맷
       const ext = filename.match(/\.(hwp|hwpx)$/i)?.[1]?.toUpperCase() || 'HWP';
       card.appendChild(createDiv('rhwp-hover-title', truncate(filename, 200)));
-      card.appendChild(createDiv('rhwp-hover-meta', `${ext} 문서`));
+      card.appendChild(createDiv('rhwp-hover-meta', `${ext} \uBB38\uC11C`));
     }
 
     card.appendChild(createDiv('rhwp-hover-action', '클릭하여 rhwp로 열기'));
@@ -395,5 +407,90 @@
       }
     });
     observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  // ─── HWP 뷰어 열기 (iOS: iframe 오버레이, macOS: 새 탭) ───
+
+  function openHwpViewer(url, filename) {
+    const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+
+    if (isIOS) {
+      openViewerOverlay(url, filename);
+    } else {
+      // macOS: 기존 방식 (새 탭)
+      browser.runtime.sendMessage({
+        type: 'open-hwp',
+        url: url,
+        filename: filename
+      }).then(res => {
+        if (res && !res.ok && res.reason) {
+          const msg = getBlockedMessage(res.reason, res.hostname);
+          showToast(msg.title, msg.guide);
+        }
+      }).catch(() => {});
+    }
+  }
+
+  function openViewerOverlay(url, filename) {
+    // 기존 오버레이 제거
+    const existing = document.getElementById('rhwp-viewer-overlay');
+    if (existing) existing.remove();
+
+    // 전체화면 오버레이 컨테이너
+    const overlay = document.createElement('div');
+    overlay.id = 'rhwp-viewer-overlay';
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 2147483647;
+      background: rgba(0,0,0,0.85);
+      display: flex; flex-direction: column;
+    `;
+
+    // 상단 바 (파일명 + 닫기)
+    const topBar = document.createElement('div');
+    topBar.style.cssText = `
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 12px; background: #1d1d1f; color: #f5f5f7;
+      font-family: -apple-system, sans-serif; font-size: 14px;
+      flex-shrink: 0;
+    `;
+    const titleEl = document.createElement('span');
+    titleEl.textContent = filename || 'HWP Viewer';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = '\u2715';
+    closeBtn.style.cssText = `
+      background: none; border: none; color: #f5f5f7;
+      font-size: 20px; cursor: pointer; padding: 4px 8px;
+    `;
+    closeBtn.addEventListener('click', () => overlay.remove());
+    topBar.appendChild(titleEl);
+    topBar.appendChild(closeBtn);
+    overlay.appendChild(topBar);
+
+    // iframe (확장의 viewer.html 로드)
+    const viewerUrl = browser.runtime.getURL('viewer.html');
+    const params = new URLSearchParams();
+    params.set('url', url);
+    if (filename) params.set('filename', filename);
+    const fullUrl = viewerUrl + '?' + params.toString();
+
+    const iframe = document.createElement('iframe');
+    iframe.src = fullUrl;
+    iframe.style.cssText = `
+      flex: 1; border: none; width: 100%;
+      background: white;
+    `;
+    iframe.setAttribute('allow', 'scripts');
+    overlay.appendChild(iframe);
+
+    document.body.appendChild(overlay);
+
+    // ESC 키로 닫기
+    const escHandler = (e) => {
+      if (e.key === 'Escape') {
+        overlay.remove();
+        document.removeEventListener('keydown', escHandler);
+      }
+    };
+    document.addEventListener('keydown', escHandler);
   }
 })();
