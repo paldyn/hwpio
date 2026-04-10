@@ -304,6 +304,17 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true; // 비동기 응답
     }
 
+    case 'extract-thumbnail': {
+      if (!isContentScript(sender)) {
+        sendResponse({ error: 'Unauthorized' });
+        return;
+      }
+      extractThumbnailFromUrl(message.url)
+        .then(result => sendResponse(result || { error: 'PrvImage not found' }))
+        .catch(err => sendResponse({ error: err.message }));
+      return true;
+    }
+
     case 'get-settings': {
       browser.storage.local.get({
         autoOpen: true, showBadges: true, hoverPreview: true,
@@ -317,6 +328,146 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       break;
   }
 });
+
+// ─── HWP 썸네일 추출 (Task #88, Chrome #86 포팅) ───
+
+const THUMBNAIL_CACHE = new Map();
+const CACHE_MAX_SIZE = 100;
+
+async function extractThumbnailFromUrl(url) {
+  if (THUMBNAIL_CACHE.has(url)) return THUMBNAIL_CACHE.get(url);
+  try {
+    const settings = await browser.storage.local.get({ devMode: false });
+    const urlResult = validateUrl(url);
+    if (!urlResult.valid) return null;
+    if (urlResult.isPrivate && !settings.devMode) return null;
+
+    const response = await fetch(url, { credentials: 'omit' });
+    if (!response.ok) return null;
+    const buffer = await response.arrayBuffer();
+    const data = new Uint8Array(buffer);
+
+    const isZip = data.length >= 4 && data[0] === 0x50 && data[1] === 0x4B;
+    const result = isZip ? await extractPrvImageFromZip(data) : extractPrvImageFromCFB(data);
+    if (result) {
+      if (THUMBNAIL_CACHE.size >= CACHE_MAX_SIZE) {
+        THUMBNAIL_CACHE.delete(THUMBNAIL_CACHE.keys().next().value);
+      }
+      THUMBNAIL_CACHE.set(url, result);
+    }
+    return result;
+  } catch { return null; }
+}
+
+function extractPrvImageFromCFB(data) {
+  if (data.length < 512 || data[0] !== 0xD0 || data[1] !== 0xCF || data[2] !== 0x11 || data[3] !== 0xE0) return null;
+  const sectorSize = 1 << (data[30] | (data[31] << 8));
+  const dirStartSector = _u32(data, 48);
+  const dirOffset = (dirStartSector + 1) * sectorSize;
+  for (let i = 0; i < 128; i++) {
+    const eo = dirOffset + i * 128;
+    if (eo + 128 > data.length) break;
+    const nameLen = _u16(data, eo + 64);
+    if (nameLen === 0 || nameLen > 64) continue;
+    let name = '';
+    for (let j = 0; j < nameLen - 2; j += 2) {
+      const c = data[eo + j] | (data[eo + j + 1] << 8);
+      if (c === 0) break;
+      name += String.fromCharCode(c);
+    }
+    if (name !== 'PrvImage') continue;
+    const startSector = _u32(data, eo + 116);
+    const streamSize = _u32(data, eo + 120);
+    if (streamSize === 0 || streamSize > 10 * 1024 * 1024) continue;
+    const fatSectors = [];
+    for (let j = 0; j < 109; j++) {
+      const fs = _u32(data, 76 + j * 4);
+      if (fs >= 0xFFFFFFFE) break;
+      fatSectors.push(fs);
+    }
+    const fat = [];
+    for (const fs of fatSectors) {
+      const fo = (fs + 1) * sectorSize;
+      for (let j = 0; j < sectorSize / 4; j++) {
+        if (fo + j * 4 + 4 > data.length) break;
+        fat.push(_u32(data, fo + j * 4));
+      }
+    }
+    const result = new Uint8Array(streamSize);
+    let sec = startSector, read = 0;
+    for (let s = 0; s < 10000 && read < streamSize; s++) {
+      if (sec >= 0xFFFFFFFE) break;
+      const off = (sec + 1) * sectorSize;
+      const len = Math.min(sectorSize, streamSize - read);
+      if (off + len > data.length) break;
+      result.set(data.subarray(off, off + len), read);
+      read += len;
+      sec = sec < fat.length ? fat[sec] : 0xFFFFFFFE;
+    }
+    if (read >= streamSize) return _parseImage(result);
+  }
+  return null;
+}
+
+async function extractPrvImageFromZip(data) {
+  let eocd = -1;
+  for (let i = data.length - 22; i >= 0 && i >= data.length - 65558; i--) {
+    if (data[i] === 0x50 && data[i+1] === 0x4B && data[i+2] === 0x05 && data[i+3] === 0x06) { eocd = i; break; }
+  }
+  if (eocd < 0) return null;
+  const cdOff = _u32(data, eocd + 16);
+  const cdCount = _u16(data, eocd + 10);
+  let off = cdOff;
+  for (let i = 0; i < cdCount && off + 46 < data.length; i++) {
+    if (data[off] !== 0x50 || data[off+1] !== 0x4B || data[off+2] !== 0x01 || data[off+3] !== 0x02) break;
+    const comp = _u16(data, off + 10);
+    const compSz = _u32(data, off + 20);
+    const uncSz = _u32(data, off + 24);
+    const nLen = _u16(data, off + 28);
+    const eLen = _u16(data, off + 30);
+    const cLen = _u16(data, off + 32);
+    const locOff = _u32(data, off + 42);
+    const name = new TextDecoder().decode(data.subarray(off + 46, off + 46 + nLen));
+    if (name.startsWith('Preview/PrvImage')) {
+      const lnLen = _u16(data, locOff + 26);
+      const leLen = _u16(data, locOff + 28);
+      const ds = locOff + 30 + lnLen + leLen;
+      if (comp === 0) return _parseImage(data.subarray(ds, ds + uncSz));
+      if (comp === 8) {
+        try {
+          const dec = new DecompressionStream('raw');
+          const w = dec.writable.getWriter();
+          w.write(data.slice(ds, ds + compSz));
+          w.close();
+          const r = dec.readable.getReader();
+          const chunks = [];
+          while (true) { const { done, value } = await r.read(); if (done) break; chunks.push(value); }
+          const total = chunks.reduce((s, c) => s + c.length, 0);
+          const buf = new Uint8Array(total);
+          let o = 0;
+          for (const c of chunks) { buf.set(c, o); o += c.length; }
+          return _parseImage(buf);
+        } catch { return null; }
+      }
+    }
+    off += 46 + nLen + eLen + cLen;
+  }
+  return null;
+}
+
+function _parseImage(d) {
+  let mime, w = 0, h = 0;
+  if (d.length >= 8 && d[0] === 0x89 && d[1] === 0x50) { mime = 'image/png'; if (d.length >= 24) { w = (d[16]<<24)|(d[17]<<16)|(d[18]<<8)|d[19]; h = (d[20]<<24)|(d[21]<<16)|(d[22]<<8)|d[23]; } }
+  else if (d.length >= 2 && d[0] === 0x42 && d[1] === 0x4D) { mime = 'image/bmp'; if (d.length >= 26) { w = _u32(d, 18); h = Math.abs(_u32(d, 22) | 0); } }
+  else if (d.length >= 3 && d[0] === 0x47 && d[1] === 0x49) { mime = 'image/gif'; if (d.length >= 10) { w = _u16(d, 6); h = _u16(d, 8); } }
+  else return null;
+  let bin = '';
+  for (let i = 0; i < d.length; i++) bin += String.fromCharCode(d[i]);
+  return { dataUri: `data:${mime};base64,${btoa(bin)}`, width: w, height: h, mime };
+}
+
+function _u16(d, o) { return d[o] | (d[o+1] << 8); }
+function _u32(d, o) { return (d[o] | (d[o+1] << 8) | (d[o+2] << 16) | (d[o+3] << 24)) >>> 0; }
 
 // ─── 초기화 ───
 
