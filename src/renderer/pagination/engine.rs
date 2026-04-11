@@ -1071,6 +1071,26 @@ impl Paginator {
             effective_height + host_spacing
         };
 
+        // 캡션 보정용 높이 (TAC 및 비-TAC 모두 적용):
+        // layout_table은 table_bottom = table_y + table_height + caption_extra를 반환하므로
+        // current_height에도 Top/Bottom 캡션 높이를 포함해야 레이아웃 y_offset과 일치한다.
+        // 피트 판단(effective_table_height)에는 포함하지 않아 기존 배치 로직을 유지한다.
+        // Left/Right 캡션은 layout_table에서 caption_extra=0이므로 제외한다.
+        let caption_extra_for_current = if let Some(mt) = measured_table {
+            if mt.caption_height > 0.0 {
+                let is_lr = table.caption.as_ref().map_or(false, |c| {
+                    use crate::model::shape::CaptionDirection;
+                    matches!(c.direction, CaptionDirection::Left | CaptionDirection::Right)
+                });
+                if !is_lr {
+                    let cap_s = table.caption.as_ref()
+                        .map(|c| crate::renderer::hwpunit_to_px(c.spacing as i32, self.dpi))
+                        .unwrap_or(0.0);
+                    mt.caption_height + cap_s
+                } else { 0.0 }
+            } else { 0.0 }
+        } else { 0.0 };
+
         // 비-TAC 자리차지 표: vert=Para + vert_offset > 0이면 문단 시작 y 기준으로 피트 판단
         // 같은 문단의 여러 표가 독립적인 vert offset으로 각자 배치되는 경우,
         // current_height(다른 표 처리 후 누적)가 아닌 문단 시작 y 기준으로 절대 하단을 계산한다.
@@ -1097,7 +1117,7 @@ impl Paginator {
         if st.current_height + effective_table_height <= table_available_height + 0.5 {
             self.place_table_fits(st, para_idx, ctrl_idx, para, measured, table,
                 table_total_height, para_height, para_height_for_fit, is_tac_table,
-                para_start_height, effective_height);
+                para_start_height, effective_height, caption_extra_for_current);
         } else if is_tac_table {
             // 글자처럼 취급 표: 페이지에 걸치지 않고 통째로 다음 페이지로 이동
             if !st.current_items.is_empty() {
@@ -1105,7 +1125,7 @@ impl Paginator {
             }
             self.place_table_fits(st, para_idx, ctrl_idx, para, measured, table,
                 table_total_height, para_height, para_height_for_fit, is_tac_table,
-                para_start_height, effective_height);
+                para_start_height, effective_height, caption_extra_for_current);
         } else if let Some(mt) = measured_table {
             // 비-TAC 표: 행 단위 분할
             self.split_table_rows(st, para_idx, ctrl_idx, para, measured, measurer, mt,
@@ -1163,6 +1183,7 @@ impl Paginator {
         is_tac_table: bool,
         para_start_height: f64,
         effective_height: f64,
+        caption_extra_for_current: f64,
     ) {
         let vertical_offset = Self::get_table_vertical_offset(table);
         // 어울림 표(text_wrap=0)는 호스트 텍스트를 wrap 영역에서 처리
@@ -1228,7 +1249,10 @@ impl Paginator {
                     st.current_height = float_bottom;
                 }
             } else {
-                st.current_height += table_total_height;
+                // caption_extra_for_current: 비-TAC Top/Bottom 캡션 높이
+                // layout_table은 table_bottom에 캡션을 포함해 반환하므로 current_height에도 포함한다.
+                // TAC 표 및 Left/Right 캡션 표는 caption_extra_for_current=0.0
+                st.current_height += table_total_height + caption_extra_for_current;
             }
 
             // 표 뒤 텍스트 배치
@@ -1275,7 +1299,7 @@ impl Paginator {
                 para_index: para_idx,
                 control_index: ctrl_idx,
             });
-            st.current_height += table_total_height;
+            st.current_height += table_total_height + caption_extra_for_current;
         }
     }
 
