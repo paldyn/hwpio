@@ -49,6 +49,10 @@ Windows CMD에서 실행:
 start chrome --remote-debugging-port=19222 --remote-debugging-address=0.0.0.0 --user-data-dir="C:\temp\chrome-debug1"
 ```
 
+```osx
+arch -arm64 "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --remote-debugging-port=19222 --remote-debugging-address=0.0.0.0 --user-data-dir="~/tmp/chrome-debug1"
+```
+
 | 옵션 | 설명 |
 |------|------|
 | `--remote-debugging-port=19222` | CDP 포트 (Puppeteer가 연결) |

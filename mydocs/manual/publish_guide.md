@@ -73,11 +73,13 @@ v{MAJOR}.{MINOR}.{PATCH}
 
 | 파일 | 패키지 | 예시 |
 |------|--------|------|
-| `Cargo.toml` | rhwp (Rust) + @rhwp/core 원본 | `version = "0.6.0"` |
-| `rhwp-vscode/package.json` | VSCode 익스텐션 | `"version": "0.6.0"` |
-| `npm/editor/package.json` | @rhwp/editor | `"version": "0.6.3"` |
+| `Cargo.toml` | rhwp (Rust) + @rhwp/core 원본 | `version = "0.7.0"` |
+| `rhwp-vscode/package.json` | VSCode 익스텐션 | `"version": "0.7.0"` |
+| `npm/editor/package.json` | @rhwp/editor | `"version": "0.7.0"` |
+| `rhwp-studio/package.json` | rhwp-studio (GitHub Pages 데모) | `"version": "0.7.0"` |
 
 > `pkg/package.json`은 직접 편집하지 않는다. `scripts/prepare-npm.sh`가 `Cargo.toml`에서 버전을 읽어 자동 생성한다.
+> `rhwp-studio/package.json` 버전은 빌드 시 `__APP_VERSION__`으로 주입되어 제품정보 대화창에 표시된다.
 
 ### 버전 동기화 원칙
 
@@ -91,9 +93,10 @@ v{MAJOR}.{MINOR}.{PATCH}
 
 **MINOR 릴리즈** (조판 개선, 새 기능):
 ```
-Cargo.toml:               0.6.0 → 0.7.0
-rhwp-vscode/package.json: 0.6.0 → 0.7.0
-npm/editor/package.json:  0.6.3 → 0.7.0
+Cargo.toml:                  0.7.0 → 0.8.0
+rhwp-vscode/package.json:    0.7.0 → 0.8.0
+npm/editor/package.json:     0.7.0 → 0.8.0
+rhwp-studio/package.json:    0.7.0 → 0.8.0
 ```
 
 **PATCH 릴리즈** (npm README 수정 등):
@@ -129,19 +132,24 @@ CHROME_CDP=http://localhost:19222 node e2e/edit-pipeline.test.mjs --mode=host
 
 **Cargo.toml** (Rust 패키지 + npm @rhwp/core 버전 원본):
 ```toml
-version = "0.7.0"
+version = "0.8.0"
 ```
 
 **rhwp-vscode/package.json**:
 ```json
-"version": "0.7.0"
+"version": "0.8.0"
 ```
 
 **rhwp-vscode/CHANGELOG.md** 새 버전 항목 추가.
 
 **npm/editor/package.json**:
 ```json
-"version": "0.7.0"
+"version": "0.8.0"
+```
+
+**rhwp-studio/package.json** (제품정보 대화창 버전 자동 주입):
+```json
+"version": "0.8.0"
 ```
 
 ### 3단계: README 점검
