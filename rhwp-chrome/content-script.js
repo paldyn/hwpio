@@ -168,7 +168,20 @@
       card.appendChild(createEl('div', 'rhwp-hover-desc', truncate(description, 500)));
     }
 
-    card.appendChild(createEl('div', 'rhwp-hover-action', '클릭하여 rhwp로 열기'));
+    // 풋터 바 — 카드 전체 클릭 영역 암시
+    const footer = document.createElement('div');
+    footer.className = 'rhwp-hover-action';
+    const footerLabel = createEl('span', 'rhwp-hover-action-label', '▶\u2002rhwp로 열기');
+    const footerArrow = createEl('span', 'rhwp-hover-action-arrow', '→');
+    footer.appendChild(footerLabel);
+    footer.appendChild(footerArrow);
+    card.appendChild(footer);
+
+    // 카드 전체 클릭 시 HWP 열기
+    card.addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'open-hwp', url: anchor.href });
+      hideHoverCard();
+    });
 
     // 위치 계산 — 뷰포트 하단을 넘으면 링크 위쪽에 표시
     const rect = anchor.getBoundingClientRect();
