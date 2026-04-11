@@ -48,6 +48,20 @@
     return el;
   }
 
+  // 보안: 텍스트 길이 제한
+  function truncate(str, max) {
+    if (!str) return '';
+    return str.length > max ? str.slice(0, max) + '…' : str;
+  }
+
+  // 보안: 안전한 이미지 URL인지 검증 (javascript: 등 차단)
+  function isSafeImageUrl(url) {
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+    } catch { return false; }
+  }
+
   function insertThumbnailImg(thumbDiv, dataUri) {
     const img = document.createElement('img');
     img.src = dataUri;
@@ -119,7 +133,7 @@
     // 썸네일 영역 (사전 지정 또는 자동 추출 후 삽입)
     // DOM API로 안전하게 생성 — innerHTML 미사용 (H-01 XSS 방어)
     const thumbContainer = document.createElement('div');
-    if (thumbnail) {
+    if (thumbnail && isSafeImageUrl(thumbnail)) {
       insertThumbnailImg(thumbContainer, thumbnail);
     } else {
       // 자동 추출 플레이스홀더
@@ -129,29 +143,29 @@
     card.appendChild(thumbContainer);
 
     const titleText = title || anchor.href.split('/').pop().split('?')[0];
-    card.appendChild(createEl('div', 'rhwp-hover-title', titleText));
+    card.appendChild(createEl('div', 'rhwp-hover-title', truncate(titleText, 200)));
 
     const meta = [];
-    if (format) meta.push(format.toUpperCase());
-    if (pages) meta.push(`${pages}쪽`);
-    if (size) meta.push(formatSize(Number(size)));
+    if (format) meta.push(truncate(format.toUpperCase(), 10));
+    if (pages && !isNaN(Number(pages))) meta.push(`${pages}쪽`);
+    if (size && !isNaN(Number(size))) meta.push(formatSize(Number(size)));
     if (meta.length > 0) {
       card.appendChild(createEl('div', 'rhwp-hover-meta', meta.join(' · ')));
     }
 
     if (author || date) {
       const info = [];
-      if (author) info.push(author);
-      if (date) info.push(date);
+      if (author) info.push(truncate(author, 100));
+      if (date) info.push(truncate(date, 20));
       card.appendChild(createEl('div', 'rhwp-hover-info', info.join(' · ')));
     }
 
     if (category) {
-      card.appendChild(createEl('div', 'rhwp-hover-category', category));
+      card.appendChild(createEl('div', 'rhwp-hover-category', truncate(category, 50)));
     }
 
     if (description) {
-      card.appendChild(createEl('div', 'rhwp-hover-desc', description));
+      card.appendChild(createEl('div', 'rhwp-hover-desc', truncate(description, 500)));
     }
 
     card.appendChild(createEl('div', 'rhwp-hover-action', '클릭하여 rhwp로 열기'));
