@@ -92,6 +92,10 @@ window.addEventListener("message", (event) => {
       console.error("HWP 로드 실패:", err);
     }
   }
+
+  if (msg.type === "print") {
+    window.print();
+  }
 });
 
 // ── 상태 표시줄 업데이트 ──
