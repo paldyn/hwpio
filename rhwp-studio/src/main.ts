@@ -18,6 +18,7 @@ import { tableCommands } from '@/command/commands/table';
 import { pageCommands } from '@/command/commands/page';
 import { toolCommands } from '@/command/commands/tool';
 import { ContextMenu } from '@/ui/context-menu';
+import { CommandPalette } from '@/ui/command-palette';
 import { CellSelectionRenderer } from '@/engine/cell-selection-renderer';
 import { TableObjectRenderer } from '@/engine/table-object-renderer';
 import { TableResizeRenderer } from '@/engine/table-resize-renderer';
@@ -118,6 +119,7 @@ async function initialize(): Promise<void> {
     // InputHandler에 커맨드 디스패처 및 컨텍스트 메뉴 주입
     inputHandler.setDispatcher(dispatcher);
     inputHandler.setContextMenu(new ContextMenu(dispatcher, registry));
+    inputHandler.setCommandPalette(new CommandPalette(registry, dispatcher));
     inputHandler.setCellSelectionRenderer(
       new CellSelectionRenderer(container, canvasView.getVirtualScroll()),
     );
