@@ -529,7 +529,7 @@ window.addEventListener('message', async (e) => {
         reply(wasm.pageCount);
         break;
       case 'getPageSvg':
-        reply(wasm.doc?.renderPageSvg(params.page ?? 0));
+        reply(wasm.renderPageSvg(params.page ?? 0));
         break;
       case 'ready':
         reply(true);
