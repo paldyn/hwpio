@@ -2,7 +2,7 @@
   "name": "rhwp-vscode",
   "displayName": "HWP Viewer",
   "description": "HWP/HWPX 문서 뷰어 — rhwp 기반",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "publisher": "edwardkim",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -48,10 +48,6 @@
     ],
     "commands": [
       {
-        "command": "rhwp.print",
-        "title": "HWP: 인쇄"
-      },
-      {
         "command": "rhwp.exportSvg",
         "title": "HWP: SVG로 내보내기"
       },
@@ -67,46 +63,36 @@
     "menus": {
       "explorer/context": [
         {
-          "command": "rhwp.print",
+          "command": "rhwp.exportSvg",
           "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
           "group": "rhwp@1"
         },
         {
-          "command": "rhwp.exportSvg",
+          "command": "rhwp.debugOverlay",
           "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
           "group": "rhwp@2"
         },
         {
-          "command": "rhwp.debugOverlay",
-          "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
-          "group": "rhwp@3"
-        },
-        {
           "command": "rhwp.dumpParagraph",
           "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
-          "group": "rhwp@4"
+          "group": "rhwp@3"
         }
       ],
       "editor/title/context": [
         {
-          "command": "rhwp.print",
+          "command": "rhwp.exportSvg",
           "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
           "group": "rhwp@1"
         },
         {
-          "command": "rhwp.exportSvg",
+          "command": "rhwp.debugOverlay",
           "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
           "group": "rhwp@2"
         },
         {
-          "command": "rhwp.debugOverlay",
-          "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
-          "group": "rhwp@3"
-        },
-        {
           "command": "rhwp.dumpParagraph",
           "when": "resourceExtname == .hwp || resourceExtname == .hwpx",
-          "group": "rhwp@4"
+          "group": "rhwp@3"
         }
       ]
     }

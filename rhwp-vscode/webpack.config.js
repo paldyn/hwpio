@@ -38,6 +38,7 @@ const extensionConfig = {
       },
     ],
   },
+  performance: { hints: false },
   devtool: "nosources-source-map",
 };
 
@@ -95,6 +96,7 @@ const webviewConfig = {
       ],
     }),
   ],
+  performance: { hints: false },
   devtool: "nosources-source-map",
 };
 
