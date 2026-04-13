@@ -37,6 +37,12 @@ rhwp applies a **hyper-waterfall methodology** with strict quality gates. Contri
 - No function or file should mix parsing, rendering, and serialization concerns
 - Trait-based abstraction for parsers, serializers, and editors — avoid concrete type coupling
 
+**CQRS (Command Query Responsibility Segregation)**
+- Methods that mutate state (`&mut self`) are **Commands**: `insert_*`, `delete_*`, `set_*`, `apply_*`
+- Methods that read state (`&self`) are **Queries**: `get_*`, `render_*`, `export_*`, `has_*`
+- Commands must not trigger unnecessary re-pagination; batch Commands should defer layout recomputation until export
+- Queries must not mutate state — Rust's `&self` vs `&mut self` enforces this at compile time
+
 **Code Review**
 - PRs must include a clear description of what changed and why
 - Breaking changes require prior discussion (Issue or Discussion)
