@@ -72,7 +72,7 @@ export const viewCommands: CommandDef[] = [
     id: 'view:ctrl-mark',
     label: '조판 부호',
     icon: 'icon-ctrl-mark',
-    shortcutLabel: 'Ctrl+G+C',
+    shortcutLabel: 'Ctrl+G,C',
     canExecute: (ctx) => ctx.hasDocument,
     execute(services) {
       const ctx = services.getContext();

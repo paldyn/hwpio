@@ -66,6 +66,20 @@ const chordMapV: Record<string, string> = {
   ㅅ: 'view:border-transparent', // 한글 IME
 };
 
+/** 코드 단축키 → 커맨드 ID 매핑 (Ctrl+G,? 형태 — 보기/조판 메뉴) */
+const chordMapG: Record<string, string> = {
+  c: 'view:ctrl-mark',        // 조판 부호
+  ㅊ: 'view:ctrl-mark',       // 한글 IME
+  t: 'view:para-mark',        // 문단 부호
+  ㅅ: 'view:para-mark',       // 한글 IME
+  p: 'view:zoom-fit-page',    // 쪽 맞춤
+  ㅍ: 'view:zoom-fit-page',   // 한글 IME
+  w: 'view:zoom-fit-width',   // 폭 맞춤
+  ㅈ: 'view:zoom-fit-width',  // 한글 IME
+  q: 'view:zoom-100',         // 100%
+  ㅂ: 'view:zoom-100',        // 한글 IME
+};
+
 /**
  * 키보드 이벤트 처리 순서:
  *
@@ -110,6 +124,16 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
     this._pendingChordV = false;
     const key = e.key.toLowerCase();
     const cmdId = chordMapV[key];
+    if (cmdId && this.dispatcher) {
+      e.preventDefault();
+      this.dispatcher.dispatch(cmdId);
+      return;
+    }
+  }
+  if (this._pendingChordG) {
+    this._pendingChordG = false;
+    const key = e.key.toLowerCase();
+    const cmdId = chordMapG[key];
     if (cmdId && this.dispatcher) {
       e.preventDefault();
       this.dispatcher.dispatch(cmdId);
@@ -830,6 +854,13 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
 }
 
 export function handleCtrlKey(this: any, e: KeyboardEvent): void {
+  // Ctrl+/ → 커맨드 팔레트 열기
+  if (e.key === '/' && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    this.commandPalette?.open();
+    return;
+  }
+
   // 커맨드 시스템 경유 단축키 처리
   if (this.dispatcher) {
     const cmdId = matchShortcut(e, defaultShortcuts);
@@ -849,6 +880,11 @@ export function handleCtrlKey(this: any, e: KeyboardEvent): void {
   if ((e.key === 'n' || e.key === 'N' || e.key === 'ㅜ') && !e.shiftKey && !e.altKey) {
     e.preventDefault();
     this._pendingChordN = true;
+    return;
+  }
+  if ((e.key === 'g' || e.key === 'G' || e.key === 'ㅎ') && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    this._pendingChordG = true;
     return;
   }
 

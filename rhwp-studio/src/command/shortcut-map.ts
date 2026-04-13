@@ -68,6 +68,21 @@ export const defaultShortcuts: [ShortcutDef, string][] = [
   [{ key: 'ㄷ', alt: true, shift: true }, 'format:font-size-increase'],
   [{ key: 'r', alt: true, shift: true }, 'format:font-size-decrease'],
   [{ key: 'ㄱ', alt: true, shift: true }, 'format:font-size-decrease'],
+  // 글꼴 크기 — Ctrl+]/[ (한컴 호환, 브라우저 충돌 없음)
+  [{ key: ']', ctrl: true }, 'format:font-size-increase'],
+  [{ key: '[', ctrl: true }, 'format:font-size-decrease'],
+
+  // 문단 정렬
+  // Ctrl+Shift+L: 왼쪽 정렬 (브라우저 주소창 포커스이나 편집 영역에서 양보)
+  [{ key: 'l', ctrl: true, shift: true }, 'format:align-left'],
+  // Ctrl+Shift+M: 양쪽 정렬 (브라우저 충돌 없음)
+  [{ key: 'm', ctrl: true, shift: true }, 'format:align-justify'],
+  // Ctrl+Shift+R: 브라우저 강제새로고침 충돌 → Alt+Shift+H로 재매핑 (Alt+Shift+R은 글꼴크기축소)
+  // Ctrl+Shift+C: 브라우저 요소검사 충돌 → Alt+Shift+C로 재매핑
+  // Ctrl+Shift+T: 브라우저 탭복원 충돌 → Alt+Shift+T로 재매핑
+  [{ key: 'h', alt: true, shift: true }, 'format:align-right'],   // 오른쪽 정렬 (재매핑, H=rigHt)
+  [{ key: 'c', alt: true, shift: true }, 'format:align-center'],  // 가운데 정렬 (재매핑)
+  [{ key: 'd', alt: true, shift: true }, 'format:align-distribute'], // 배분 정렬 (재매핑)
 
   // 표
   [{ key: 'insert', alt: true }, 'table:insert-col-left'],
