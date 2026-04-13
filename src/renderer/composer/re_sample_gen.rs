@@ -109,6 +109,11 @@ mod tests {
         _font_name: Option<&str>,  // 미사용 (폰트는 템플릿으로 결정)
         alignment: Option<crate::model::style::Alignment>,
     ) -> Result<(), String> {
+        // output/ 디렉토리 자동 생성
+        if let Some(parent) = Path::new(output_path).parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+
         let tmpl = Path::new(template_path);
         if !tmpl.exists() {
             return Err(format!("템플릿 없음: {}", template_path));
@@ -204,7 +209,7 @@ mod tests {
         let text = hangul_repeat("가나다라마바사아자차카타파하", 100);
         let result = generate_sample(
             "samples/lseg-01-basic.hwp",
-            "samples/re-01-hangul-only.hwp",
+            "output/re-01-hangul-only.hwp",
             &[&text],
         );
         if let Err(e) = result {
@@ -218,7 +223,7 @@ mod tests {
         let text = hangul_with_spaces("가나다라마바사아자차카타파하", 100);
         let result = generate_sample(
             "samples/lseg-01-basic.hwp",
-            "samples/re-02-space-count.hwp",
+            "output/re-02-space-count.hwp",
             &[&text],
         );
         if let Err(e) = result {
@@ -232,7 +237,7 @@ mod tests {
         let text = "abcdefghijklmnopqrstuvwxyz".repeat(8); // 208자
         let result = generate_sample(
             "samples/lseg-01-basic.hwp",
-            "samples/re-03-latin-only.hwp",
+            "output/re-03-latin-only.hwp",
             &[&text],
         );
         if let Err(e) = result {
@@ -246,7 +251,7 @@ mod tests {
         let text = "1234567890".repeat(20); // 200자
         let result = generate_sample(
             "samples/lseg-01-basic.hwp",
-            "samples/re-04-digit-only.hwp",
+            "output/re-04-digit-only.hwp",
             &[&text],
         );
         if let Err(e) = result {
@@ -261,7 +266,7 @@ mod tests {
         let text = base.repeat(8);
         let result = generate_sample(
             "samples/lseg-01-basic.hwp",
-            "samples/re-05-mixed-koen.hwp",
+            "output/re-05-mixed-koen.hwp",
             &[&text],
         );
         if let Err(e) = result {
@@ -276,7 +281,7 @@ mod tests {
         let text = base.repeat(5);
         let result = generate_sample(
             "samples/lseg-01-basic.hwp",
-            "samples/re-06-punctuation.hwp",
+            "output/re-06-punctuation.hwp",
             &[&text],
         );
         if let Err(e) = result {
@@ -303,7 +308,7 @@ mod tests {
         let long_text = format!("{} {}", text, text); // 2줄 이상
 
         for (suffix, font_name) in &fonts {
-            let output = format!("samples/re-font-{}.hwp", suffix);
+            let output = format!("output/re-font-{}.hwp", suffix);
             let result = generate_sample_with_font(
                 "samples/lseg-01-basic.hwp",
                 &output,
@@ -333,7 +338,7 @@ mod tests {
         let text = hangul_repeat("가나다라마바사아자차카타파하", 100);
 
         for (suffix, alignment) in &aligns {
-            let output = format!("samples/re-align-{}.hwp", suffix);
+            let output = format!("output/re-align-{}.hwp", suffix);
             let result = generate_sample_with_options(
                 "samples/lseg-01-basic.hwp",
                 &output,
@@ -423,15 +428,15 @@ mod tests {
 
         for (suffix, ko_font, en_font) in &fonts {
             // 영문 연속 (공백 없음)
-            let output = format!("samples/re-eng-nospace-{}.hwp", suffix);
+            let output = format!("output/re-eng-nospace-{}.hwp", suffix);
             let _ = generate_sample_with_font_pair(&output, &[&latin_nospace], Some(ko_font), *en_font, None);
 
             // 영문 단어 (공백 있음)
-            let output = format!("samples/re-eng-words-{}.hwp", suffix);
+            let output = format!("output/re-eng-words-{}.hwp", suffix);
             let _ = generate_sample_with_font_pair(&output, &[&latin_words_long], Some(ko_font), *en_font, None);
 
             // 한영 혼합
-            let output = format!("samples/re-eng-mixed-{}.hwp", suffix);
+            let output = format!("output/re-eng-mixed-{}.hwp", suffix);
             let _ = generate_sample_with_font_pair(&output, &[&mixed_long], Some(ko_font), *en_font, None);
         }
     }
@@ -449,7 +454,7 @@ mod tests {
         ];
 
         for (suffix, text, desc) in &samples {
-            let output = format!("samples/re-mixed-{}.hwp", suffix);
+            let output = format!("output/re-mixed-{}.hwp", suffix);
             let _ = generate_sample_with_font_pair(&output, &[text], Some("돋움"), None, None);
             eprintln!("  {}: {}", suffix, desc);
         }
@@ -481,8 +486,10 @@ mod tests {
             ("10-10", 1000, 1000),  // 동일 크기 (기준선)
         ];
 
+        fs::create_dir_all("output").unwrap();
+
         for (suffix, base_size, big_size) in &sizes {
-            let output = format!("samples/re-multisize-{}.hwp", suffix);
+            let output = format!("output/re-multisize-{}.hwp", suffix);
 
             let data = fs::read("template/empty.hwp").unwrap();
             let mut core = crate::document_core::DocumentCore::from_bytes(&data).unwrap();
