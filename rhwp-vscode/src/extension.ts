@@ -10,21 +10,12 @@ export function activate(context: vscode.ExtensionContext) {
   const { provider, disposable } = HwpEditorProvider.register(context);
   context.subscriptions.push(disposable);
 
-  // rhwp.print — 해당 파일의 webview에 인쇄 요청
-  context.subscriptions.push(
-    vscode.commands.registerCommand("rhwp.print", async (uri?: vscode.Uri) => {
-      const target = resolveUri(uri);
-      if (!target) return;
-      await provider.sendPrint(target);
-    })
-  );
-
   // rhwp.exportSvg — SVG 내보내기
   context.subscriptions.push(
     vscode.commands.registerCommand("rhwp.exportSvg", async (uri?: vscode.Uri) => {
       const target = resolveUri(uri);
       if (!target) return;
-      await cmdExportSvg(target, context.extensionPath);
+      await cmdExportSvg(target, provider);
     })
   );
 
@@ -33,7 +24,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("rhwp.debugOverlay", async (uri?: vscode.Uri) => {
       const target = resolveUri(uri);
       if (!target) return;
-      await cmdDebugOverlay(target, context.extensionPath);
+      await cmdDebugOverlay(target, provider);
     })
   );
 
@@ -61,8 +52,7 @@ function resolveUri(uri?: vscode.Uri): vscode.Uri | undefined {
 
 // ── SVG 내보내기 ─────────────────────────────────────────────────
 
-async function cmdExportSvg(uri: vscode.Uri, extensionPath: string): Promise<void> {
-  // 출력 폴더 선택 (기본: 파일과 동일 폴더)
+async function cmdExportSvg(uri: vscode.Uri, provider: HwpEditorProvider): Promise<void> {
   const defaultDir = vscode.Uri.file(path.dirname(uri.fsPath));
   const folders = await vscode.window.showOpenDialog({
     defaultUri: defaultDir,
@@ -73,89 +63,34 @@ async function cmdExportSvg(uri: vscode.Uri, extensionPath: string): Promise<voi
   });
   if (!folders || folders.length === 0) return;
   const outDir = folders[0].fsPath;
-
   const baseName = path.basename(uri.fsPath, path.extname(uri.fsPath));
 
-  await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: `SVG 내보내기: ${path.basename(uri.fsPath)}`,
-      cancellable: false,
-    },
-    async (progress) => {
-      try {
-        initWasmHost(extensionPath);
+  vscode.window.showInformationMessage(`SVG 렌더링 중... (${path.basename(uri.fsPath)})`);
 
-        const fileBytes = fs.readFileSync(uri.fsPath);
-        const doc: InstanceType<typeof HwpDocument> = new HwpDocument(new Uint8Array(fileBytes));
-        doc.setClipEnabled(false);
-
-        const docInfo = JSON.parse(doc.getDocumentInfo());
-        const pageCount: number = docInfo.page_count ?? docInfo.pageCount ?? 0;
-
-        if (pageCount === 0) {
-          vscode.window.showWarningMessage("페이지가 없는 문서입니다.");
-          return;
-        }
-
-        for (let i = 0; i < pageCount; i++) {
-          progress.report({
-            increment: 100 / pageCount,
-            message: `${i + 1} / ${pageCount} 페이지`,
-          });
-          const svg = doc.renderPageSvg(i);
-          const outPath = path.join(outDir, `${baseName}_p${i + 1}.svg`);
-          fs.writeFileSync(outPath, svg, "utf8");
-        }
-
-        doc.free();
-
-        const outDirUri = vscode.Uri.file(outDir);
-        const sel = await vscode.window.showInformationMessage(
-          `SVG ${pageCount}개 저장 완료 → ${outDir}`,
-          "폴더 열기"
-        );
-        if (sel === "폴더 열기") {
-          vscode.commands.executeCommand("revealFileInOS", outDirUri);
-        }
-      } catch (err: any) {
-        vscode.window.showErrorMessage(`SVG 내보내기 실패: ${err.message ?? err}`);
-      }
+  await provider.sendExportSvg(uri, async (svgs) => {
+    for (let i = 0; i < svgs.length; i++) {
+      const outPath = path.join(outDir, `${baseName}_p${i + 1}.svg`);
+      fs.writeFileSync(outPath, svgs[i], "utf8");
     }
-  );
+    const outDirUri = vscode.Uri.file(outDir);
+    const sel = await vscode.window.showInformationMessage(
+      `SVG ${svgs.length}개 저장 완료 → ${outDir}`,
+      "폴더 열기"
+    );
+    if (sel === "폴더 열기") {
+      vscode.commands.executeCommand("revealFileInOS", outDirUri);
+    }
+  });
 }
 
 // ── 디버그 오버레이 ───────────────────────────────────────────────
 
-async function cmdDebugOverlay(uri: vscode.Uri, extensionPath: string): Promise<void> {
-  try {
-    initWasmHost(extensionPath);
+async function cmdDebugOverlay(uri: vscode.Uri, provider: HwpEditorProvider): Promise<void> {
+  const baseName = path.basename(uri.fsPath);
+  const hash = crypto.createHash("md5").update(uri.fsPath).digest("hex").slice(0, 8);
+  const tmpFile = path.join(os.tmpdir(), `rhwp-debug-${hash}.html`);
 
-    const fileBytes = fs.readFileSync(uri.fsPath);
-    const doc: InstanceType<typeof HwpDocument> = new HwpDocument(new Uint8Array(fileBytes));
-    doc.setClipEnabled(false);
-
-    const docInfo = JSON.parse(doc.getDocumentInfo());
-    const pageCount: number = docInfo.page_count ?? docInfo.pageCount ?? 0;
-
-    if (pageCount === 0) {
-      vscode.window.showWarningMessage("페이지가 없는 문서입니다.");
-      return;
-    }
-
-    doc.set_debug_overlay(true);
-    const svgs: string[] = [];
-    for (let i = 0; i < pageCount; i++) {
-      svgs.push(doc.renderPageSvg(i));
-    }
-    doc.set_debug_overlay(false);
-    doc.free();
-
-    // 전 페이지를 하나의 HTML로 합쳐 임시 파일에 저장
-    const baseName = path.basename(uri.fsPath);
-    const hash = crypto.createHash("md5").update(uri.fsPath).digest("hex").slice(0, 8);
-    const tmpFile = path.join(os.tmpdir(), `rhwp-debug-${hash}.html`);
-
+  await provider.sendDebugOverlay(uri, (svgs) => {
     const pageHtml = svgs
       .map(
         (svg, i) =>
@@ -182,9 +117,7 @@ ${pageHtml}
 
     fs.writeFileSync(tmpFile, html, "utf8");
     vscode.commands.executeCommand("vscode.open", vscode.Uri.file(tmpFile));
-  } catch (err: any) {
-    vscode.window.showErrorMessage(`디버그 오버레이 실패: ${err.message ?? err}`);
-  }
+  });
 }
 
 // ── 문단 덤프 ─────────────────────────────────────────────────────
