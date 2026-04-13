@@ -839,15 +839,6 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       this.eventBus.emit('insert-mode-changed', this.insertMode);
       break;
     }
-    case '/': {
-      // `/` → 커맨드 팔레트 열기 (Ctrl/Alt/Meta 없는 순수 `/` 키)
-      if (this.commandPalette && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
-        e.preventDefault();
-        this.commandPalette.open();
-        return;
-      }
-      break;
-    }
     default: {
       // Function 키(F1~F12) 등 Ctrl 없는 단축키 처리
       if (this.dispatcher) {
@@ -863,6 +854,13 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
 }
 
 export function handleCtrlKey(this: any, e: KeyboardEvent): void {
+  // Ctrl+/ → 커맨드 팔레트 열기
+  if (e.key === '/' && !e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    this.commandPalette?.open();
+    return;
+  }
+
   // 커맨드 시스템 경유 단축키 처리
   if (this.dispatcher) {
     const cmdId = matchShortcut(e, defaultShortcuts);

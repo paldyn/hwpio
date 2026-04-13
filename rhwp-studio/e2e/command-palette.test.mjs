@@ -20,15 +20,15 @@ runTest('/커맨드 팔레트', async ({ page }) => {
   await clickEditArea(page);
   await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
 
-  // ── TC1: `/` 키로 팔레트 열기 ──────────────────────────
-  await page.keyboard.press('/');
+  // ── TC1: Ctrl+/ 키로 팔레트 열기 ──────────────────────────
+  await page.keyboard.down('Control'); await page.keyboard.press('/'); await page.keyboard.up('Control');
   await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
 
   const paletteVisible = await page.evaluate(() =>
     !!document.querySelector('.cp-panel')
   );
   await screenshot(page, 'palette-01-opened');
-  assert(paletteVisible, 'TC1: `/` 키로 팔레트 열림');
+  assert(paletteVisible, 'TC1: Ctrl+/ 키로 팔레트 열림');
 
   // ── TC2: 검색어 입력 → 필터링 ─────────────────────────
   // 영문 검색어 사용 (한글은 IME 이벤트 타이밍 문제 가능성)
@@ -68,7 +68,7 @@ runTest('/커맨드 팔레트', async ({ page }) => {
   await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
 
   // ── TC4: `/` 다시 열고 단축키 검색 ──────────────────────
-  await page.keyboard.press('/');
+  await page.keyboard.down('Control'); await page.keyboard.press('/'); await page.keyboard.up('Control');
   await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
 
   const reopened = await page.evaluate(() => !!document.querySelector('.cp-panel'));
@@ -119,7 +119,7 @@ runTest('/커맨드 팔레트', async ({ page }) => {
   // ── TC6: 팔레트 닫힌 후 `/` 다시 입력하면 팔레트 열림 ──
   await clickEditArea(page);
   await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
-  await page.keyboard.press('/');
+  await page.keyboard.down('Control'); await page.keyboard.press('/'); await page.keyboard.up('Control');
   await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
 
   const reopenedAgain = await page.evaluate(() => !!document.querySelector('.cp-panel'));
@@ -132,7 +132,7 @@ runTest('/커맨드 팔레트', async ({ page }) => {
   // ── TC7: 빈 검색어 → 전체 목록 표시 ─────────────────────
   await clickEditArea(page);
   await page.evaluate(() => new Promise(r => setTimeout(r, 200)));
-  await page.keyboard.press('/');
+  await page.keyboard.down('Control'); await page.keyboard.press('/'); await page.keyboard.up('Control');
   await page.evaluate(() => new Promise(r => setTimeout(r, 300)));
 
   const allItemsCount = await page.evaluate(() =>
