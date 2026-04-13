@@ -64,7 +64,7 @@
 
   function insertThumbnailImg(thumbDiv, dataUri) {
     const img = document.createElement('img');
-    img.src = dataUri;
+    img.src = new URL(dataUri).href;
     img.alt = '미리보기';
     img.referrerPolicy = 'no-referrer';
     thumbDiv.className = 'rhwp-hover-thumb';
