@@ -133,7 +133,7 @@ export const fileCommands: CommandDef[] = [
         const svgPages: string[] = [];
         for (let i = 0; i < pageCount; i++) {
           if (statusEl) statusEl.textContent = `인쇄 준비 중... (${i + 1}/${pageCount})`;
-          const svg = wasm.doc!.renderPageSvg(i);
+          const svg = wasm.renderPageSvg(i);
           svgPages.push(svg);
           // UI 갱신을 위한 양보
           if (i % 5 === 0) await new Promise(r => setTimeout(r, 0));

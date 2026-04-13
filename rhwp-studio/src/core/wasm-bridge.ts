@@ -140,6 +140,11 @@ export class WasmBridge {
     this.doc.renderPageToCanvas(pageNum, canvas, scale);
   }
 
+  renderPageSvg(pageNum: number): string {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return this.doc.renderPageSvg(pageNum);
+  }
+
   getCursorRect(sec: number, para: number, charOffset: number): CursorRect {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.getCursorRect(sec, para, charOffset));
@@ -952,6 +957,11 @@ export class WasmBridge {
   setShowControlCodes(enabled: boolean): void {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     this.doc.setShowControlCodes(enabled);
+  }
+
+  getShowTransparentBorders(): boolean {
+    if (!this.doc) return false;
+    return this.doc.getShowTransparentBorders();
   }
 
   setShowTransparentBorders(enabled: boolean): void {

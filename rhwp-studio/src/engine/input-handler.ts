@@ -13,6 +13,7 @@ import type { DocumentPosition, CharProperties, ParaProperties, CursorRect, Form
 import type { CommandDispatcher } from '@/command/dispatcher';
 import { matchShortcut, defaultShortcuts } from '@/command/shortcut-map';
 import type { ContextMenu, ContextMenuItem } from '@/ui/context-menu';
+import type { CommandPalette } from '@/ui/command-palette';
 import type { CellSelectionRenderer } from './cell-selection-renderer';
 import type { TableObjectRenderer } from './table-object-renderer';
 import type { TableResizeRenderer, BorderEdge } from './table-resize-renderer';
@@ -37,6 +38,7 @@ export class InputHandler {
   private lastCellKey: string | null = null;
   private dispatcher: CommandDispatcher | null = null;
   private contextMenu: ContextMenu | null = null;
+  private commandPalette: CommandPalette | null = null;
   private cellSelectionRenderer: CellSelectionRenderer | null = null;
   private tableObjectRenderer: TableObjectRenderer | null = null;
   private tableResizeRenderer: TableResizeRenderer | null = null;
@@ -1790,8 +1792,14 @@ export class InputHandler {
   /** 커맨드 디스패처를 주입한다 (main.ts에서 호출) */
   setDispatcher(d: CommandDispatcher): void { this.dispatcher = d; }
 
+  /** 편집 영역이 활성 상태인지 (문서 로드 + 편집 영역 포커스) */
+  isActive(): boolean { return this.active; }
+
   /** 컨텍스트 메뉴를 주입한다 (main.ts에서 호출) */
   setContextMenu(cm: ContextMenu): void { this.contextMenu = cm; }
+
+  /** 커맨드 팔레트를 주입한다 (main.ts에서 호출) */
+  setCommandPalette(cp: CommandPalette): void { this.commandPalette = cp; }
 
   /** 셀 선택 렌더러를 주입한다 (main.ts에서 호출) */
   setCellSelectionRenderer(r: CellSelectionRenderer): void { this.cellSelectionRenderer = r; }

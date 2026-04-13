@@ -17,6 +17,9 @@ const extensionConfig = {
   },
   resolve: {
     extensions: [".ts", ".js"],
+    alias: {
+      "@rhwp-wasm": path.resolve(__dirname, "..", "pkg"),
+    },
   },
   module: {
     rules: [
@@ -27,6 +30,11 @@ const extensionConfig = {
           loader: "ts-loader",
           options: { configFile: "tsconfig.json" },
         },
+      },
+      {
+        test: /\.wasm$/,
+        type: "javascript/auto",
+        loader: "null-loader",
       },
     ],
   },
