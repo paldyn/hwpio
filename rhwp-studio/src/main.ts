@@ -175,6 +175,7 @@ async function initialize(): Promise<void> {
     setupFileInput();
     setupZoomControls();
     setupEventListeners();
+    setupGlobalShortcuts();
     loadFromUrlParam();
 
     // E2E 테스트용 전역 노출 (개발 모드 전용)
@@ -186,6 +187,31 @@ async function initialize(): Promise<void> {
     msg.textContent = `WASM 초기화 실패: ${error}`;
     console.error('[main] WASM 초기화 실패:', error);
   }
+}
+
+/**
+ * 전역 단축키 핸들러 — InputHandler.active 여부와 무관하게 동작해야 하는 단축키.
+ * 예: 문서 미로드 상태에서도 Alt+N(새 문서), Ctrl+O(열기) 등.
+ */
+function setupGlobalShortcuts(): void {
+  document.addEventListener('keydown', (e) => {
+    // input/textarea 등 편집 가능 요소 내부에서는 무시
+    const target = e.target as HTMLElement;
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
+    // InputHandler가 활성 상태이면 자체 처리에 맡김
+    if (inputHandler?.isActive()) return;
+
+    const ctrlOrMeta = e.ctrlKey || e.metaKey;
+
+    // Alt+N / Alt+ㅜ → 새 문서 (문서 미로드 상태에서도 동작)
+    if (e.altKey && !ctrlOrMeta && !e.shiftKey) {
+      if (e.key === 'n' || e.key === 'N' || e.key === 'ㅜ') {
+        e.preventDefault();
+        dispatcher.dispatch('file:new-doc');
+        return;
+      }
+    }
+  }, false);
 }
 
 function setupFileInput(): void {

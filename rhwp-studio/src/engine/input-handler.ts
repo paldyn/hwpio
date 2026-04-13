@@ -1792,6 +1792,9 @@ export class InputHandler {
   /** 커맨드 디스패처를 주입한다 (main.ts에서 호출) */
   setDispatcher(d: CommandDispatcher): void { this.dispatcher = d; }
 
+  /** 편집 영역이 활성 상태인지 (문서 로드 + 편집 영역 포커스) */
+  isActive(): boolean { return this.active; }
+
   /** 컨텍스트 메뉴를 주입한다 (main.ts에서 호출) */
   setContextMenu(cm: ContextMenu): void { this.contextMenu = cm; }
 
