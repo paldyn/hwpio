@@ -3,18 +3,42 @@ import * as vscode from "vscode";
 export class HwpEditorProvider implements vscode.CustomReadonlyEditorProvider {
   private static readonly viewType = "rhwp.hwpViewer";
 
-  static register(context: vscode.ExtensionContext): vscode.Disposable {
-    return vscode.window.registerCustomEditorProvider(
+  /** 파일 URI 문자열 → 열린 WebviewPanel 추적 */
+  private readonly panels = new Map<string, vscode.WebviewPanel>();
+
+  static register(context: vscode.ExtensionContext): { provider: HwpEditorProvider; disposable: vscode.Disposable } {
+    const provider = new HwpEditorProvider(context);
+    const disposable = vscode.window.registerCustomEditorProvider(
       HwpEditorProvider.viewType,
-      new HwpEditorProvider(context),
+      provider,
       {
         webviewOptions: { retainContextWhenHidden: true },
         supportsMultipleEditorsPerDocument: false,
       }
     );
+    return { provider, disposable };
   }
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  /** 해당 파일의 webview에 인쇄 메시지 전송 */
+  async sendPrint(uri: vscode.Uri): Promise<void> {
+    const key = uri.toString();
+    const panel = this.panels.get(key);
+    if (panel) {
+      panel.reveal();
+      panel.webview.postMessage({ type: "print" });
+    } else {
+      // 뷰어가 열려있지 않으면 먼저 열기
+      await vscode.commands.executeCommand("vscode.openWith", uri, HwpEditorProvider.viewType);
+      // ready 수신 후 print 전송은 resolveCustomEditor의 onDidReceiveMessage에서 처리
+      // pending print 플래그 설정
+      this.pendingPrint.add(uri.toString());
+    }
+  }
+
+  /** 열린 직후 인쇄해야 할 URI 집합 */
+  private readonly pendingPrint = new Set<string>();
 
   async openCustomDocument(
     uri: vscode.Uri,
@@ -30,6 +54,11 @@ export class HwpEditorProvider implements vscode.CustomReadonlyEditorProvider {
     _token: vscode.CancellationToken
   ): Promise<void> {
     const webview = webviewPanel.webview;
+
+    // 패널 추적 등록
+    const key = document.uri.toString();
+    this.panels.set(key, webviewPanel);
+    webviewPanel.onDidDispose(() => this.panels.delete(key));
 
     webview.options = {
       enableScripts: true,
@@ -51,6 +80,12 @@ export class HwpEditorProvider implements vscode.CustomReadonlyEditorProvider {
           fileName,
           fileData: new Uint8Array(fileData),
         });
+
+        // 열리자마자 인쇄해야 하는 경우
+        if (this.pendingPrint.delete(key)) {
+          // load 처리 후 약간의 지연 후 print 전송
+          setTimeout(() => webview.postMessage({ type: "print" }), 500);
+        }
       }
     });
   }
