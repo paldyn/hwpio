@@ -1,6 +1,6 @@
 {
   "name": "rhwp-studio",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -12,7 +12,7 @@
   "devDependencies": {
     "@types/chrome": "^0.1.40",
     "puppeteer-core": "^24.38.0",
-    "typescript": "^5.7.0",
+    "typescript": "^6.0.2",
     "vite": "^6.1.0"
   }
 }
