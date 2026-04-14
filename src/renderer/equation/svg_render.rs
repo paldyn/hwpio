@@ -7,6 +7,9 @@ use super::layout::*;
 use super::symbols::{DecoKind, FontStyleKind};
 use super::ast::MatrixStyle;
 
+/// 수식 전용 font-family (Latin Modern Math → STIX Two Math → Cambria Math → Pretendard → serif)
+const EQ_FONT_FAMILY: &str = " font-family=\"'Latin Modern Math', 'STIX Two Math', 'Cambria Math', 'Pretendard', serif\"";
+
 /// 수식을 SVG 조각 문자열로 렌더링
 pub fn render_equation_svg(layout: &LayoutBox, color: &str, base_font_size: f64) -> String {
     let mut svg = String::new();
@@ -39,8 +42,8 @@ fn render_box(
             let esc = escape_xml(text);
             let fi = font_size_from_box(lb, fs);
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" font-style=\"italic\">{}</text>\n",
-                text_x, text_y, fi, color, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" font-style=\"italic\"{}>{}</text>\n",
+                text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
             ));
         }
         LayoutKind::Number(text) => {
@@ -50,8 +53,8 @@ fn render_box(
             let fi = font_size_from_box(lb, fs);
             let style_attr = if bold { " font-weight=\"bold\"" } else { "" };
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
-                text_x, text_y, fi, color, style_attr, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}{}>{}</text>\n",
+                text_x, text_y, fi, color, style_attr, EQ_FONT_FAMILY, esc,
             ));
         }
         LayoutKind::Symbol(text) => {
@@ -60,8 +63,8 @@ fn render_box(
             let esc = escape_xml(text);
             let fi = font_size_from_box(lb, fs);
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" text-anchor=\"middle\">{}</text>\n",
-                text_x, text_y, fi, color, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" text-anchor=\"middle\"{}>{}</text>\n",
+                text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
             ));
         }
         LayoutKind::MathSymbol(text) => {
@@ -70,8 +73,8 @@ fn render_box(
             let esc = escape_xml(text);
             let fi = font_size_from_box(lb, fs);
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\">{}</text>\n",
-                text_x, text_y, fi, color, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
+                text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
             ));
         }
         LayoutKind::Function(name) => {
@@ -80,8 +83,8 @@ fn render_box(
             let esc = escape_xml(name);
             let fi = font_size_from_box(lb, fs);
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\">{}</text>\n",
-                text_x, text_y, fi, color, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
+                text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
             ));
         }
         LayoutKind::Fraction { numer, denom } => {
@@ -152,8 +155,8 @@ fn render_box(
             let op_y = y + sup_h + op_fs * 0.8;
             let esc = escape_xml(symbol);
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\">{}</text>\n",
-                op_x, op_y, op_fs, color, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
+                op_x, op_y, op_fs, color, EQ_FONT_FAMILY, esc,
             ));
             // 위/아래 첨자
             if let Some(sup_box) = sup {
@@ -167,8 +170,8 @@ fn render_box(
             let name = if *is_upper { "Lim" } else { "lim" };
             let fi = font_size_from_box(lb, fs);
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\">{}</text>\n",
-                x, y + fi * 0.8, fi, color, name,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
+                x, y + fi * 0.8, fi, color, EQ_FONT_FAMILY, name,
             ));
             if let Some(sub_box) = sub {
                 render_box(svg, sub_box, x, y, color, fs * super::layout::SCRIPT_SCALE, false, false);
@@ -338,8 +341,8 @@ fn draw_stretch_bracket(svg: &mut String, bracket: &str, x: f64, y: f64, w: f64,
             // 기타 문자 (⌈, ⌉, ⌊, ⌋ 등)은 텍스트로 렌더링
             let esc = escape_xml(bracket);
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" text-anchor=\"middle\">{}</text>\n",
-                mid_x, y + h * 0.7, h, color, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" text-anchor=\"middle\"{}>{}</text>\n",
+                mid_x, y + h * 0.7, h, color, EQ_FONT_FAMILY, esc,
             ));
         }
     }
