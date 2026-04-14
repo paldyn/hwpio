@@ -129,7 +129,7 @@ pub(crate) const BIG_OP_SCALE: f64 = 1.5;        // 큰 연산자 크기 비율
 const MATRIX_COL_GAP: f64 = 0.8;      // 행렬 열 간격 (font_size 비율)
 const MATRIX_ROW_GAP: f64 = 0.3;      // 행렬 행 간격 (font_size 비율)
 /// 수식 축 높이 (TeX axis_height = 0.25em) — 분수선이 배치되는 기준 위치
-const AXIS_HEIGHT: f64 = 0.25;
+pub(crate) const AXIS_HEIGHT: f64 = 0.25;
 /// 텍스트 기본 baseline 비율 (상단에서 baseline까지)
 const TEXT_BASELINE: f64 = 0.8;
 
