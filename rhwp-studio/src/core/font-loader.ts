@@ -90,6 +90,8 @@ const FONT_LIST: FontEntry[] = [
   { name: 'Cafe24 Ssurround Bold', file: 'fonts/Cafe24Ssurround-v2.0.woff2' },
   { name: '카페24 슈퍼매직', file: 'fonts/Cafe24Supermagic-Regular-v1.0.woff2' },
   { name: 'Cafe24 Supermagic', file: 'fonts/Cafe24Supermagic-Regular-v1.0.woff2' },
+  // === 수식 전용 폰트 (OFL/GUST, 로컬) ===
+  { name: 'Latin Modern Math', file: 'fonts/LatinModernMath-Regular.woff2' },
   // === 기타 ===
   { name: 'SpoqaHanSans', file: 'fonts/SpoqaHanSans-Regular.woff2' },
   // === Gowun (OFL, 로컬) ===
