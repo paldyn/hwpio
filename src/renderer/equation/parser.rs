@@ -203,7 +203,16 @@ impl EqParser {
             return self.parse_sqrt();
         }
 
-        // 큰 연산자 — 대문자로 조회
+        // 적분 기호 — nolimits 스타일 (첨자가 기호 옆에 배치)
+        if matches!(cu, "INT" | "INTEGRAL" | "SMALLINT" | "DINT" | "TINT"
+            | "OINT" | "SMALLOINT" | "ODINT" | "OTINT")
+        {
+            let symbol = lookup_symbol(cu).or_else(|| lookup_symbol(cmd)).unwrap_or("∫").to_string();
+            let node = EqNode::MathSymbol(symbol);
+            return self.try_parse_scripts(node);
+        }
+
+        // 큰 연산자 (∑, ∏ 등) — limits 스타일 (첨자가 위/아래 중앙)
         if is_big_operator(cu) {
             let symbol = lookup_symbol(cu).unwrap_or("?").to_string();
             return self.parse_big_op(symbol);
@@ -504,6 +513,8 @@ impl EqParser {
     }
 
     /// 첨자(subscript/superscript) 파싱 시도
+    /// 한컴 수식에서 함수/기호 뒤에 Thin 공백(`)이 오고 첨자가 따라오는 패턴이 일반적이므로,
+    /// Thin 공백 뒤에 첨자가 있으면 공백을 건너뛰고 첨자를 파싱한다.
     fn try_parse_scripts(&mut self, base: EqNode) -> EqNode {
         let mut result = base;
         let mut has_sub = false;
@@ -514,6 +525,18 @@ impl EqParser {
         loop {
             if self.at_end() {
                 break;
+            }
+            // Thin 공백(`) 뒤에 첨자가 바로 오는 경우 공백을 건너뛰기
+            if self.current_type() == TokenType::Whitespace
+                && self.current_value() == "`"
+            {
+                let next_pos = self.pos + 1;
+                if next_pos < self.tokens.len() {
+                    let next_ty = self.tokens[next_pos].ty;
+                    if next_ty == TokenType::Subscript || next_ty == TokenType::Superscript {
+                        self.pos += 1; // Thin 공백 건너뛰기
+                    }
+                }
             }
             let ty = self.current_type();
             if ty == TokenType::Subscript && !has_sub {
@@ -1181,14 +1204,15 @@ mod tests {
 
     #[test]
     fn test_integral() {
+        // 적분은 nolimits 스타일 — SubSup으로 파싱
         let ast = parse("INT_0^{inf}");
         match &ast {
-            EqNode::BigOp { symbol, sub, sup } => {
-                assert_eq!(symbol, "∫");
-                assert!(sub.is_some());
-                assert!(sup.is_some());
+            EqNode::SubSup { base, sub, sup } => {
+                assert!(matches!(base.as_ref(), EqNode::MathSymbol(s) if s == "∫"));
+                assert!(!matches!(sub.as_ref(), EqNode::Empty));
+                assert!(!matches!(sup.as_ref(), EqNode::Empty));
             }
-            _ => panic!("Expected BigOp, got {:?}", ast),
+            _ => panic!("Expected SubSup, got {:?}", ast),
         }
     }
 
