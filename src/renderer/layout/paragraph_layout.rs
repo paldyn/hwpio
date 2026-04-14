@@ -1502,8 +1502,6 @@ impl LayoutEngine {
                         // 인라인 수식: 직접 EquationNode로 렌더링
                         if let Some(p) = para {
                             if let Some(Control::Equation(eq)) = p.controls.get(tac_ci) {
-                                let eq_h = hwpunit_to_px(eq.common.height as i32, self.dpi);
-                                let eq_y = (y + baseline - eq_h).max(y);
                                 // 수식 스크립트 → AST → 레이아웃 → SVG 조각
                                 let tokens = crate::renderer::equation::tokenizer::tokenize(&eq.script);
                                 let ast = crate::renderer::equation::parser::EqParser::new(tokens).parse();
@@ -1513,6 +1511,9 @@ impl LayoutEngine {
                                 let svg_content = crate::renderer::equation::svg_render::render_equation_svg(
                                     &layout_box, &color_str, font_size_px,
                                 );
+                                let eq_h = layout_box.height;
+                                // 수식 baseline을 텍스트 baseline에 맞춤
+                                let eq_y = (y + baseline - layout_box.baseline).max(y);
                                 let (eq_cell_idx, eq_cell_para_idx) = if let Some(ref ctx) = cell_ctx {
                                     (Some(ctx.path[0].cell_index), Some(ctx.path[0].cell_para_index))
                                 } else {
