@@ -40,7 +40,7 @@ fn render_box(
             let text_x = x;
             let text_y = y + lb.baseline;
             let esc = escape_xml(text);
-            let fi = font_size_from_box(lb, fs);
+            let fi = fs;
             svg.push_str(&format!(
                 "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" font-style=\"italic\"{}>{}</text>\n",
                 text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
@@ -50,7 +50,7 @@ fn render_box(
             let text_x = x;
             let text_y = y + lb.baseline;
             let esc = escape_xml(text);
-            let fi = font_size_from_box(lb, fs);
+            let fi = fs;
             let style_attr = if bold { " font-weight=\"bold\"" } else { "" };
             svg.push_str(&format!(
                 "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}{}>{}</text>\n",
@@ -61,7 +61,7 @@ fn render_box(
             let text_x = x + lb.width / 2.0;
             let text_y = y + lb.baseline;
             let esc = escape_xml(text);
-            let fi = font_size_from_box(lb, fs);
+            let fi = fs;
             svg.push_str(&format!(
                 "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" text-anchor=\"middle\"{}>{}</text>\n",
                 text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
@@ -71,7 +71,7 @@ fn render_box(
             let text_x = x;
             let text_y = y + lb.baseline;
             let esc = escape_xml(text);
-            let fi = font_size_from_box(lb, fs);
+            let fi = fs;
             svg.push_str(&format!(
                 "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
                 text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
@@ -81,7 +81,7 @@ fn render_box(
             let text_x = x;
             let text_y = y + lb.baseline;
             let esc = escape_xml(name);
-            let fi = font_size_from_box(lb, fs);
+            let fi = fs;
             svg.push_str(&format!(
                 "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
                 text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
@@ -168,7 +168,7 @@ fn render_box(
         }
         LayoutKind::Limit { is_upper, sub } => {
             let name = if *is_upper { "Lim" } else { "lim" };
-            let fi = font_size_from_box(lb, fs);
+            let fi = fs;
             svg.push_str(&format!(
                 "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}>{}</text>\n",
                 x, y + fi * 0.8, fi, color, EQ_FONT_FAMILY, name,
