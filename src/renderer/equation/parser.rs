@@ -84,20 +84,11 @@ impl EqParser {
 
     /// 수식 전체 파싱 (엔트리 포인트)
     pub fn parse(&mut self) -> EqNode {
-        // 최상위 OVER 분수 확인
-        let non_eof: Vec<Token> = self.tokens.iter()
-            .filter(|t| t.ty != TokenType::Eof)
-            .cloned()
-            .collect();
-
-        if Self::has_toplevel_over(&non_eof) {
-            self.parse_fraction()
-        } else {
-            self.parse_expression()
-        }
+        self.parse_expression()
     }
 
     /// 표현식 파싱 (중단 조건 없이 끝까지)
+    /// OVER를 중위 연산자로 처리: 바로 앞 요소가 분자, 바로 뒤 요소가 분모
     fn parse_expression(&mut self) -> EqNode {
         let mut children = Vec::new();
         while !self.at_end() {
@@ -109,6 +100,19 @@ impl EqParser {
                 && Self::cmd_eq(self.current_value(), "RIGHT")
             {
                 break;
+            }
+            // OVER 중위 연산자: 직전 요소를 분자, 직후 요소를 분모로 결합
+            if self.current_type() == TokenType::Command
+                && Self::cmd_eq(self.current_value(), "OVER")
+            {
+                self.pos += 1; // OVER 건너뛰기
+                let numer = children.pop().unwrap_or(EqNode::Empty);
+                let denom = self.parse_element();
+                children.push(EqNode::Fraction {
+                    numer: Box::new(numer),
+                    denom: Box::new(denom),
+                });
+                continue;
             }
             children.push(self.parse_element());
         }
@@ -408,35 +412,37 @@ impl EqParser {
     }
 
     /// 중괄호 그룹 파싱: {...}
+    /// 그룹 내의 OVER는 parse_expression의 중위 연산자 처리로 자동 처리된다.
     fn parse_group(&mut self) -> EqNode {
         if !self.expect(TokenType::LBrace) {
             return self.parse_element();
         }
 
-        // 그룹 내용에서 OVER 확인 (중첩 괄호 내부 제외)
-        let start = self.pos;
-        let end = self.find_matching_brace(start);
-
-        let group_tokens: Vec<Token> = self.tokens[start..end].to_vec();
-        let has_over = Self::has_toplevel_over(&group_tokens);
-
-        let result = if has_over {
-            self.parse_fraction_until_rbrace()
-        } else {
-            let mut children = Vec::new();
-            while self.pos < end && !self.at_end() {
-                if self.current_type() == TokenType::RBrace {
-                    break;
-                }
-                children.push(self.parse_element());
+        let mut children = Vec::new();
+        while !self.at_end() {
+            if self.current_type() == TokenType::RBrace {
+                break;
             }
-            EqNode::Row(children).simplify()
-        };
+            // OVER 중위 연산자: 그룹 내에서도 동일하게 처리
+            if self.current_type() == TokenType::Command
+                && Self::cmd_eq(self.current_value(), "OVER")
+            {
+                self.pos += 1;
+                let numer = children.pop().unwrap_or(EqNode::Empty);
+                let denom = self.parse_element();
+                children.push(EqNode::Fraction {
+                    numer: Box::new(numer),
+                    denom: Box::new(denom),
+                });
+                continue;
+            }
+            children.push(self.parse_element());
+        }
 
         // 닫는 괄호 건너뛰기
         self.expect(TokenType::RBrace);
 
-        result
+        EqNode::Row(children).simplify()
     }
 
     /// 매칭되는 닫는 괄호 위치 찾기
@@ -539,20 +545,67 @@ impl EqParser {
         }
     }
 
-    /// 분수 파싱: OVER 기준으로 분자/분모 분리
+    /// 분수 파싱: 최상위 OVER 기준으로 분자/분모 분리
+    /// LEFT-RIGHT 내부의 OVER는 무시하고 최상위 레벨의 OVER만 분수 분기점으로 사용한다.
     fn parse_fraction(&mut self) -> EqNode {
-        let mut numer_nodes = Vec::new();
-        while !self.at_end() {
-            if self.current_type() == TokenType::Command
-                && (Self::cmd_eq(self.current_value(), "OVER"))
-            {
-                self.pos += 1;
-                break;
+        // 최상위 OVER 위치를 먼저 찾는다 (brace_depth==0 && lr_depth==0)
+        let toplevel_over_pos = {
+            let mut brace_depth = 0i32;
+            let mut lr_depth = 0i32;
+            let mut found = None;
+            for i in self.pos..self.tokens.len() {
+                let t = &self.tokens[i];
+                match t.ty {
+                    TokenType::LBrace => brace_depth += 1,
+                    TokenType::RBrace => brace_depth -= 1,
+                    TokenType::Command => {
+                        if Self::cmd_eq(&t.value, "LEFT") {
+                            lr_depth += 1;
+                        } else if Self::cmd_eq(&t.value, "RIGHT") {
+                            lr_depth -= 1;
+                        } else if Self::cmd_eq(&t.value, "OVER") && brace_depth == 0 && lr_depth == 0 {
+                            found = Some(i);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
             }
-            numer_nodes.push(self.parse_element());
+            found
+        };
+
+        let over_pos = match toplevel_over_pos {
+            Some(p) => p,
+            None => return self.parse_expression(), // fallback
+        };
+
+        // OVER 앞의 모든 요소를 파싱
+        let mut before_nodes = Vec::new();
+        while self.pos < over_pos && !self.at_end() {
+            before_nodes.push(self.parse_element());
+        }
+        // OVER 건너뛰기
+        if self.current_type() == TokenType::Command && Self::cmd_eq(self.current_value(), "OVER") {
+            self.pos += 1;
         }
 
-        let mut denom_nodes = Vec::new();
+        // 분자: OVER 바로 앞의 마지막 요소 (그룹 또는 단일 요소)
+        let (pre_nodes, numer) = if before_nodes.len() > 1 {
+            let numer = before_nodes.pop().unwrap();
+            (before_nodes, numer)
+        } else {
+            (Vec::new(), EqNode::Row(before_nodes).simplify())
+        };
+
+        // 분모: OVER 바로 뒤의 첫 번째 요소 (그룹 또는 단일 요소)
+        let denom = if !self.at_end() {
+            self.parse_element()
+        } else {
+            EqNode::Empty
+        };
+
+        // 분수 뒤 나머지 요소
+        let mut after_nodes = Vec::new();
         while !self.at_end() {
             if self.current_type() == TokenType::RBrace {
                 break;
@@ -560,12 +613,22 @@ impl EqParser {
             if self.current_type() == TokenType::Command && Self::cmd_eq(self.current_value(), "RIGHT") {
                 break;
             }
-            denom_nodes.push(self.parse_element());
+            after_nodes.push(self.parse_element());
         }
 
-        EqNode::Fraction {
-            numer: Box::new(EqNode::Row(numer_nodes).simplify()),
-            denom: Box::new(EqNode::Row(denom_nodes).simplify()),
+        let fraction = EqNode::Fraction {
+            numer: Box::new(numer),
+            denom: Box::new(denom),
+        };
+
+        // 앞/뒤 요소와 분수를 Row로 조립
+        if pre_nodes.is_empty() && after_nodes.is_empty() {
+            fraction
+        } else {
+            let mut all = pre_nodes;
+            all.push(fraction);
+            all.extend(after_nodes);
+            EqNode::Row(all).simplify()
         }
     }
 
@@ -601,7 +664,7 @@ impl EqParser {
 
     /// 제곱근 파싱: SQRT x, SQRT(n) of x
     fn parse_sqrt(&mut self) -> EqNode {
-        // SQRT(n) of x 패턴 확인
+        // SQRT(n) of x 패턴 확인 — 소괄호
         if self.current_type() == TokenType::LParen {
             self.pos += 1; // (
             let mut index_nodes = Vec::new();
@@ -622,6 +685,35 @@ impl EqParser {
                 index: Some(Box::new(EqNode::Row(index_nodes).simplify())),
                 body: Box::new(body),
             };
+        }
+
+        // SQRT {n} of {x} 패턴 확인 — 중괄호 + of
+        if self.current_type() == TokenType::LBrace {
+            // 먼저 {n} 뒤에 'of'가 있는지 미리 확인
+            let saved_pos = self.pos;
+            let brace_end = self.find_matching_brace(self.pos + 1);
+            let after_brace = brace_end + 1;
+            let has_of = after_brace < self.tokens.len()
+                && self.tokens[after_brace].ty == TokenType::Command
+                && self.tokens[after_brace].value.eq_ignore_ascii_case("of");
+
+            if has_of {
+                // {n} 파싱
+                let index = self.parse_group();
+                // 'of' 건너뛰기
+                if self.current_type() == TokenType::Command
+                    && self.current_value().eq_ignore_ascii_case("of")
+                {
+                    self.pos += 1;
+                }
+                let body = self.parse_single_or_group();
+                return EqNode::Sqrt {
+                    index: Some(Box::new(index)),
+                    body: Box::new(body),
+                };
+            }
+            // of가 없으면 되돌리고 일반 제곱근으로 처리
+            self.pos = saved_pos;
         }
 
         // 일반 제곱근
@@ -838,32 +930,14 @@ impl EqParser {
     }
 
     /// LEFT-RIGHT 괄호 파싱
+    /// 내부의 OVER는 parse_expression의 중위 연산자 처리로 자동 처리된다.
     fn parse_left_right(&mut self) -> EqNode {
         // LEFT 다음 괄호 문자 읽기
         let left = self.read_bracket_char();
 
-        // RIGHT까지의 내용 파싱
-        // RIGHT 위치 찾기
-        let right_pos = self.find_right_pos();
-        let content_end = right_pos;
-
-        // 내용에 OVER가 있는지 확인
-        let content_tokens: Vec<Token> = self.tokens[self.pos..content_end].to_vec();
-        let has_over = Self::has_toplevel_over(&content_tokens);
-
-        let body = if has_over {
-            let saved_end = self.tokens.len();
-            self.parse_fraction_in_range(content_end)
-        } else {
-            let mut children = Vec::new();
-            while self.pos < content_end && !self.at_end() {
-                if self.current_type() == TokenType::Command && Self::cmd_eq(self.current_value(), "RIGHT") {
-                    break;
-                }
-                children.push(self.parse_element());
-            }
-            EqNode::Row(children).simplify()
-        };
+        // RIGHT까지의 내용을 parse_expression으로 파싱
+        // parse_expression은 RIGHT를 만나면 자동 중단하고, OVER도 중위 연산자로 처리
+        let body = self.parse_expression();
 
         // RIGHT 건너뛰기
         if self.current_type() == TokenType::Command && Self::cmd_eq(self.current_value(), "RIGHT") {
@@ -939,29 +1013,59 @@ impl EqParser {
     }
 
     /// 범위 내 분수 파싱
+    /// OVER 앞/뒤에 중괄호 그룹이 있으면 해당 그룹만 분자/분모로 사용하고
+    /// 나머지는 분수 바깥 요소로 처리한다.
     fn parse_fraction_in_range(&mut self, end: usize) -> EqNode {
-        let mut numer_nodes = Vec::new();
+        // OVER 앞의 모든 요소를 파싱
+        let mut before_nodes = Vec::new();
         while self.pos < end && !self.at_end() {
             if self.current_type() == TokenType::Command
-                && (Self::cmd_eq(self.current_value(), "OVER"))
+                && Self::cmd_eq(self.current_value(), "OVER")
             {
                 self.pos += 1;
                 break;
             }
-            numer_nodes.push(self.parse_element());
+            before_nodes.push(self.parse_element());
         }
 
-        let mut denom_nodes = Vec::new();
+        // 분자: OVER 바로 앞의 마지막 요소 (또는 그룹)
+        // 나머지 앞 요소들은 분수 앞에 배치
+        let (pre_nodes, numer) = if before_nodes.len() > 1 {
+            let numer = before_nodes.pop().unwrap();
+            (before_nodes, numer)
+        } else {
+            (Vec::new(), EqNode::Row(before_nodes).simplify())
+        };
+
+        // 분모: OVER 바로 뒤의 첫 번째 요소 (또는 그룹)
+        let denom = if self.pos < end && !self.at_end() {
+            self.parse_element()
+        } else {
+            EqNode::Empty
+        };
+
+        // 분수 뒤 나머지 요소
+        let mut after_nodes = Vec::new();
         while self.pos < end && !self.at_end() {
             if self.current_type() == TokenType::Command && Self::cmd_eq(self.current_value(), "RIGHT") {
                 break;
             }
-            denom_nodes.push(self.parse_element());
+            after_nodes.push(self.parse_element());
         }
 
-        EqNode::Fraction {
-            numer: Box::new(EqNode::Row(numer_nodes).simplify()),
-            denom: Box::new(EqNode::Row(denom_nodes).simplify()),
+        let fraction = EqNode::Fraction {
+            numer: Box::new(numer),
+            denom: Box::new(denom),
+        };
+
+        // 앞/뒤 요소와 분수를 Row로 조립
+        if pre_nodes.is_empty() && after_nodes.is_empty() {
+            fraction
+        } else {
+            let mut all = pre_nodes;
+            all.push(fraction);
+            all.extend(after_nodes);
+            EqNode::Row(all).simplify()
         }
     }
 
@@ -1184,5 +1288,23 @@ mod tests {
             }
             _ => {} // 단일 노드도 허용
         }
+    }
+
+    #[test]
+    fn test_cos_fraction_with_left_right() {
+        // cos`left({pi} over {2}+theta right)=`-{1} over {5}`
+        // OVER는 바로 앞/뒤 그룹만 분수로 만든다:
+        //   LEFT-RIGHT 안: {pi} over {2} → Fraction{π,2}, +θ는 분수 밖
+        //   최상위: {1} over {5} → Fraction{1,5}, cos(...)=-는 분수 밖
+        let script = " cos ` left({ pi} over {2}+ theta  right)=`-{1} over {5}`";
+        let ast = parse(script);
+        eprintln!("AST: {:#?}", ast);
+        // 최상위는 Row: [cos, Paren{π/2+θ}, =, -, Fraction{1,5}]
+        let ast_str = format!("{:?}", ast);
+        assert!(ast_str.contains("cos"), "cos가 있어야 함");
+        assert!(ast_str.contains("Paren"), "Paren이 있어야 함");
+        // Fraction{1,5}가 독립적으로 존재해야 함
+        assert!(ast_str.contains("Fraction { numer: Number(\"1\"), denom: Number(\"5\")"),
+            "Fraction{{1,5}}가 있어야 함: {}", ast_str);
     }
 }

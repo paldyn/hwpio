@@ -128,7 +128,15 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
                     Some((pos, s.common().width as i32, i))
                 }
                 Control::Equation(eq) => {
-                    Some((pos, eq.common.width as i32, i))
+                    // 수식 레이아웃 엔진으로 실제 렌더링 너비 계산 (HWP 저장값 대신)
+                    let tokens = super::equation::tokenizer::tokenize(&eq.script);
+                    let ast = super::equation::parser::EqParser::new(tokens).parse();
+                    let font_size_px = super::hwpunit_to_px(eq.font_size as i32, super::DEFAULT_DPI);
+                    let layout_box = super::equation::layout::EqLayout::new(font_size_px).layout(&ast);
+                    let eq_width_hu = super::px_to_hwpunit(layout_box.width, super::DEFAULT_DPI);
+                    // 최소 너비를 HWP 저장값과 레이아웃 산출값 중 큰 값으로 선택
+                    let width = eq_width_hu.max(eq.common.width as i32);
+                    Some((pos, width, i))
                 }
                 Control::Form(f) => {
                     Some((pos, f.width as i32, i))
