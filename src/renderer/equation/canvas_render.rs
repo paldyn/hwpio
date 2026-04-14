@@ -219,7 +219,10 @@ fn estimate_op_width(text: &str, fs: f64) -> f64 {
 fn set_font(ctx: &CanvasRenderingContext2d, size: f64, italic: bool, bold: bool) {
     let style = if italic { "italic " } else { "" };
     let weight = if bold { "bold " } else { "" };
-    ctx.set_font(&format!("{}{}{:.1}px serif", style, weight, size));
+    ctx.set_font(&format!(
+        "{}{}{:.1}px 'Latin Modern Math', 'STIX Two Math', 'Cambria Math', 'Pretendard', serif",
+        style, weight, size,
+    ));
 }
 
 /// 늘림 괄호 렌더링
