@@ -128,6 +128,10 @@ const PAREN_PAD: f64 = 0.08;          // 괄호 내부 좌우 여백
 pub(crate) const BIG_OP_SCALE: f64 = 1.5;        // 큰 연산자 크기 비율
 const MATRIX_COL_GAP: f64 = 0.8;      // 행렬 열 간격 (font_size 비율)
 const MATRIX_ROW_GAP: f64 = 0.3;      // 행렬 행 간격 (font_size 비율)
+/// 수식 축 높이 (TeX axis_height = 0.25em) — 분수선이 배치되는 기준 위치
+const AXIS_HEIGHT: f64 = 0.25;
+/// 텍스트 기본 baseline 비율 (상단에서 baseline까지)
+const TEXT_BASELINE: f64 = 0.8;
 
 impl EqLayout {
     pub fn new(font_size: f64) -> Self {
@@ -275,14 +279,18 @@ impl EqLayout {
 
         let pad = fs * FRAC_LINE_PAD;
         let line_thick = fs * FRAC_LINE_THICK;
+        let axis = fs * AXIS_HEIGHT;
         let w = n.width.max(d.width) + pad * 2.0;
 
         let numer_h = n.height + pad;
         let denom_h = d.height + pad;
-        let total_h = numer_h + line_thick + denom_h;
 
-        // 분수선은 중앙에 배치, 기준선은 분수선 위치
-        let baseline = numer_h + line_thick / 2.0;
+        // TeX 방식: 분수선은 baseline에서 axis_height 위에 배치
+        // baseline(상단에서) = 분자높이 + 분수선두께/2 + axis_height
+        // 즉, 분수선 y = baseline - axis_height (상단 기준)
+        let frac_line_from_top = numer_h + line_thick / 2.0;
+        let baseline = frac_line_from_top + axis;
+        let total_h = numer_h + line_thick + denom_h;
 
         let mut n_box = n;
         n_box.x = (w - n_box.width) / 2.0;
