@@ -1308,3 +1308,16 @@ mod tests {
             "Fraction{{1,5}}가 있어야 함: {}", ast_str);
     }
 }
+
+#[cfg(test)]
+#[test]
+fn test_lim_fraction() {
+    let script = " lim _{h ``rarrow`` 0} {f left(2+h  right)-f left(2  right)} over {h}`";
+    let ast = parse(script);
+    eprintln!("LIM AST: {:#?}", ast);
+    let ast_str = format!("{:?}", ast);
+    // lim_{h→0} 가 있어야 함
+    assert!(ast_str.contains("Limit"), "Limit가 있어야 함: {}", ast_str);
+    // Fraction이 있어야 함
+    assert!(ast_str.contains("Fraction"), "Fraction이 있어야 함: {}", ast_str);
+}
