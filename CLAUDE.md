@@ -183,8 +183,13 @@ HWPX↔HWP 불일치 디버깅 시 추가 단계:
 
 ### 출력 폴더
 
-- `output/` - 렌더링 결과물 (SVG, HTML 등) 기본 출력 폴더
-- `.gitignore`에 등록되어 있으므로 Git에 포함되지 않음
+`output/` 하위를 용도별 서브폴더로 분리한다. `.gitignore`에 등록되어 있으므로 Git에 포함되지 않음.
+
+| 폴더 | 용도 |
+|------|------|
+| `output/re/` | 재현검증용 샘플 (`re_sample_gen.rs` 테스트 자동 생성) |
+| `output/svg/` | SVG 내보내기 기본 출력 (`rhwp export-svg`) |
+| `output/debug/` | 디버그 오버레이 HTML (`rhwp export-svg --debug-overlay`) |
 
 ### E2E 테스트
 
