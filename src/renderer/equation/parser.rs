@@ -471,6 +471,11 @@ impl EqParser {
             return EqNode::Empty;
         }
 
+        // RBrace는 그룹 종료 마커 — 소비하지 않고 빈 노드 반환
+        if self.current_type() == TokenType::RBrace {
+            return EqNode::Empty;
+        }
+
         if self.current_type() == TokenType::LBrace {
             return self.parse_group();
         }
@@ -1320,4 +1325,16 @@ fn test_lim_fraction() {
     assert!(ast_str.contains("Limit"), "Limit가 있어야 함: {}", ast_str);
     // Fraction이 있어야 함
     assert!(ast_str.contains("Fraction"), "Fraction이 있어야 함: {}", ast_str);
+}
+
+#[cfg(test)]
+#[test]
+fn test_bar_rm_it() {
+    let script = "bar {{rm{AB}} it }< bar {{rm{AC}} it }`";
+    let ast = parse(script);
+    eprintln!("BAR AST: {:#?}", ast);
+    let ast_str = format!("{:?}", ast);
+    assert!(ast_str.contains("Decoration"), "Decoration이 있어야 함");
+    // }} 가 텍스트로 나오면 안 됨
+    assert!(!ast_str.contains(r#"Text("}")"#), "brace가 텍스트로 나오면 안 됨");
 }
