@@ -42,7 +42,7 @@ export class AboutDialog extends ModalDialog {
     // 버전
     const version = document.createElement('div');
     version.className = 'about-version';
-    version.textContent = 'Version 0.6.0';
+    version.textContent = `Version ${__APP_VERSION__}`;
     body.appendChild(version);
 
     // 기술 스택

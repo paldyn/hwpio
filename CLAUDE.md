@@ -9,6 +9,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - WebAssembly(WASM)로 빌드하여 웹브라우저에서 HWP 문서를 볼 수 있도록 함
 - 한컴 웹기안기의 오픈소스 대안
 
+## 클로드 코드 사용 시 주의사항
+
+이 프로젝트는 **하이퍼-워터폴** 방법론을 적용한다. 클로드 코드의 기본 동작(빠른 실행, 자율 수정)과 충돌이 발생할 수 있으므로 반드시 숙지한다.
+
+상세 내용: [`mydocs/troubleshootings/claude_code_hyperfall_rule_conflict.md`](mydocs/troubleshootings/claude_code_hyperfall_rule_conflict.md)
+
+**핵심 규칙 요약**:
+- 소스 수정 전 반드시 작업지시자 승인 요청
+- 이슈→브랜치→할일→계획서→구현 순서 절대 생략 금지
+- 각 단계 완료 후 승인 없이 다음 단계 진행 금지
+- 이슈 클로즈는 작업지시자 승인 후에만 수행
+
+---
+
 ## 문서 생성 규칙
 
 모든 문서는 한국어로 작성한다.
@@ -23,6 +37,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `tech/` - 기술 사항 정리 문서
 - `manual/` - 매뉴얼, 가이드 문서
 - `troubleshootings/` - 트러블슈팅 관련 문서
+
+### 필수 참조 문서
+
+- `mydocs/manual/browser_extension_dev_guide.md` — 브라우저 확장 개발 가이드 (Safari/Chrome/Edge 보안, UX, 빌드 규칙)
+- `mydocs/tech/font_fallback_strategy.md` — 폰트 폴백 전략 (오픈소스 대체, 라이선스)
+- `mydocs/report/browser_extension_security_audit.md` — 보안 감사 보고서
 
 문서 파일명 규칙 (`plans/`, `working/`):
 - 수행 계획서: `task_{milestone}_{이슈번호}.md` (예: task_m100_71.md)
@@ -60,7 +80,22 @@ rhwp export-svg sample.hwp -p 0                    # 특정 페이지만 출력 
 rhwp export-svg sample.hwp --show-para-marks       # 문단부호(↵/↓) 표시
 rhwp export-svg sample.hwp --show-control-codes    # 조판부호 표시 (문단부호+개체마커)
 rhwp export-svg sample.hwp --debug-overlay         # 디버그 오버레이 (문단/표 경계+인덱스)
+rhwp export-svg sample.hwp --font-style            # @font-face local() 참조 삽입
+rhwp export-svg sample.hwp --embed-fonts           # 폰트 서브셋 임베딩 (사용 글자만)
+rhwp export-svg sample.hwp --embed-fonts=full      # 폰트 전체 임베딩
+rhwp export-svg sample.hwp --font-path ~/fonts     # 폰트 파일 탐색 경로 (여러 번 지정 가능)
 ```
+
+#### 폰트 임베딩 옵션
+
+| 옵션 | SVG 크기 | 오프라인 | 설명 |
+|------|---------|---------|------|
+| (없음) | 최소 | ❌ | CSS font-family 체인만 |
+| `--font-style` | +수 KB | ❌ | `@font-face { src: local("폰트명") }` 참조 |
+| `--embed-fonts` | +수십~수백 KB | ✅ | 사용 글자만 서브셋 추출 + base64 |
+| `--embed-fonts=full` | +수 MB | ✅ | 전체 폰트 base64 |
+
+`--font-path`로 TTF/OTF 파일 탐색 경로를 지정한다. 여러 번 지정 가능하며 기본 탐색 경로(`ttfs/`, 시스템 폰트)보다 우선한다.
 
 #### 디버그 오버레이 (`--debug-overlay`)
 
@@ -148,8 +183,13 @@ HWPX↔HWP 불일치 디버깅 시 추가 단계:
 
 ### 출력 폴더
 
-- `output/` - 렌더링 결과물 (SVG, HTML 등) 기본 출력 폴더
-- `.gitignore`에 등록되어 있으므로 Git에 포함되지 않음
+`output/` 하위를 용도별 서브폴더로 분리한다. `.gitignore`에 등록되어 있으므로 Git에 포함되지 않음.
+
+| 폴더 | 용도 |
+|------|------|
+| `output/re/` | 재현검증용 샘플 (`re_sample_gen.rs` 테스트 자동 생성) |
+| `output/svg/` | SVG 내보내기 기본 출력 (`rhwp export-svg`) |
+| `output/debug/` | 디버그 오버레이 HTML (`rhwp export-svg --debug-overlay`) |
 
 ### E2E 테스트
 
@@ -239,30 +279,44 @@ local/task{N}  ──커밋──커밋──┐
 local/task{N+1}──커밋──커밋──┤
                               ├─→ local/devel merge (작업 단위)
                               │
-                              ├─→ devel PR 생성 + 리뷰 + merge
+                              ├─→ devel merge (로컬) + push
                               │
                               ├─→ main PR 생성 + 리뷰 + merge + 태그 (릴리즈 시점)
 ```
 
 - **타스크 브랜치**: `local/task{N}`에서 잘게 커밋. 작업 단위마다 커밋.
 - **local/devel 작업**: devel에서 직접 작업하지 않고 `local/devel` 브랜치에서 작업한다. 타스크 브랜치도 `local/devel`에서 분기하고 `local/devel`로 merge한다.
-- **devel merge (PR 기반)**: `local/devel` → `devel` PR 생성 → 리뷰(approve) → merge.
+- **원격 push**: `devel`만 push. `local/devel`과 `local/task` 브랜치는 **로컬 유지 (원격 push 금지)**.
 - **main merge (PR 기반)**: 릴리즈 시점에 `devel` → `main` PR 생성 → 리뷰(approve) → merge 후 태그 생성.
-- **원격 push**: PR 생성 전 `local/devel`을 push. `local/task` 브랜치는 로컬 유지.
 
-#### PR + 리뷰 절차
+#### 메인테이너 워크플로우
 
 ```bash
-# 1. local/devel → devel PR
-git push origin local/devel
-gh pr create --base devel --head local/devel --title "제목"
-gh pr review --approve
-gh pr merge --merge --delete-branch=false
+# 1. local/devel → devel (로컬 merge + push)
+git checkout devel
+git merge local/devel --no-ff -m "Merge local/devel: 제목"
+git push origin devel
 
 # 2. devel → main PR (릴리즈 시)
 gh pr create --base main --head devel --title "Release: 제목"
 gh pr review --approve
 gh pr merge --merge --delete-branch=false
+```
+
+#### 컨트리뷰터 워크플로우 (Fork 기반)
+
+```bash
+# 1. 원본 저장소 Fork (GitHub에서 1회)
+# 2. Fork한 저장소에서 작업
+git clone https://github.com/{contributor}/rhwp.git
+git checkout -b feature/my-task
+# ... 작업 + 커밋 ...
+git push origin feature/my-task
+
+# 3. 원본 저장소의 devel로 PR 생성
+gh pr create --repo edwardkim/rhwp --base devel --head {contributor}:feature/my-task --title "제목"
+
+# 4. 메인테이너가 리뷰 + merge
 ```
 
 ### 타스크 번호 관리
@@ -283,11 +337,13 @@ gh pr merge --merge --delete-branch=false
 4. 구현 계획서 작성 (최소 3단계, 최대 6단계) → 승인 요청
 5. 단계별 진행 시작
 6. 각 단계 완료 후 단계별 완료보고서 작성 → 승인 요청
-7. 승인 후 다음 단계 진행
-8. 모든 단계 완료 시 최종 결과 보고서 작성 → 승인 요청
-9. 승인 요청 시 작업지시자가 피드백 문서를 `mydocs/feedback/`에 등록
-10. 모든 테스트 통과 시 피드백 없음
-11. 최종 결과보고서 작성 후 오늘할일 해당 타스크 상태 갱신
+7. **단계별 완료보고서(`_stage{N}.md`)는 해당 단계 소스 커밋과 함께 타스크 브랜치에서 커밋한다.**
+8. 승인 후 다음 단계 진행
+9. 모든 단계 완료 시 최종 결과 보고서 작성 → 승인 요청
+10. **최종 결과보고서(`_report.md`)와 오늘할일(`orders/`) 갱신도 타스크 브랜치에서 커밋한다. merge 전 반드시 `git status`로 미커밋 파일이 없는지 확인한다.**
+11. 승인 요청 시 작업지시자가 피드백 문서를 `mydocs/feedback/`에 등록
+12. 모든 테스트 통과 시 피드백 없음
+13. 최종 결과보고서 작성 후 오늘할일 해당 타스크 상태 갱신
 
 ### 작업 규칙
 

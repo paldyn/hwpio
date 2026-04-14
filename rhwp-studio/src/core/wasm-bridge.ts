@@ -140,6 +140,11 @@ export class WasmBridge {
     this.doc.renderPageToCanvas(pageNum, canvas, scale);
   }
 
+  renderPageSvg(pageNum: number): string {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return this.doc.renderPageSvg(pageNum);
+  }
+
   getCursorRect(sec: number, para: number, charOffset: number): CursorRect {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.getCursorRect(sec, para, charOffset));
@@ -954,6 +959,11 @@ export class WasmBridge {
     this.doc.setShowControlCodes(enabled);
   }
 
+  getShowTransparentBorders(): boolean {
+    if (!this.doc) return false;
+    return this.doc.getShowTransparentBorders();
+  }
+
   setShowTransparentBorders(enabled: boolean): void {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     this.doc.setShowTransparentBorders(enabled);
@@ -1189,6 +1199,12 @@ export class WasmBridge {
   setFormValue(sec: number, para: number, ci: number, valueJson: string): { ok: boolean } {
     if (!this.doc || typeof (this.doc as any).setFormValue !== 'function') return { ok: false };
     return JSON.parse((this.doc as any).setFormValue(sec, para, ci, valueJson));
+  }
+
+  /** 셀 내부 양식 개체 값을 설정한다. */
+  setFormValueInCell(sec: number, tablePara: number, tableCi: number, cellIdx: number, cellPara: number, formCi: number, valueJson: string): { ok: boolean } {
+    if (!this.doc || typeof (this.doc as any).setFormValueInCell !== 'function') return { ok: false };
+    return JSON.parse((this.doc as any).setFormValueInCell(sec, tablePara, tableCi, cellIdx, cellPara, formCi, valueJson));
   }
 
   /** 양식 개체 상세 정보를 반환한다. */

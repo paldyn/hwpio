@@ -1,20 +1,67 @@
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 
 export class HwpEditorProvider implements vscode.CustomReadonlyEditorProvider {
   private static readonly viewType = "rhwp.hwpViewer";
 
-  static register(context: vscode.ExtensionContext): vscode.Disposable {
-    return vscode.window.registerCustomEditorProvider(
+  /** 파일 URI 문자열 → 열린 WebviewPanel 추적 */
+  private readonly panels = new Map<string, vscode.WebviewPanel>();
+
+  static register(context: vscode.ExtensionContext): { provider: HwpEditorProvider; disposable: vscode.Disposable } {
+    const provider = new HwpEditorProvider(context);
+    const disposable = vscode.window.registerCustomEditorProvider(
       HwpEditorProvider.viewType,
-      new HwpEditorProvider(context),
+      provider,
       {
         webviewOptions: { retainContextWhenHidden: true },
         supportsMultipleEditorsPerDocument: false,
       }
     );
+    return { provider, disposable };
   }
 
   constructor(private readonly context: vscode.ExtensionContext) {}
+
+  /** 해당 파일의 webview에 디버그 오버레이 렌더링 요청 */
+  async sendDebugOverlay(uri: vscode.Uri, onSvgs: (svgs: string[]) => void): Promise<void> {
+    const key = uri.toString();
+    const panel = this.panels.get(key);
+    this.debugOverlayCallbacks.set(key, onSvgs);
+    if (panel) {
+      panel.reveal();
+      panel.webview.postMessage({ type: "exportDebugOverlay" });
+    } else {
+      await vscode.commands.executeCommand("vscode.openWith", uri, HwpEditorProvider.viewType);
+      this.pendingDebugOverlay.add(key);
+    }
+  }
+
+  /** 해당 파일의 webview에 SVG 내보내기 요청 */
+  async sendExportSvg(uri: vscode.Uri, onSvgs: (svgs: string[]) => void): Promise<void> {
+    const key = uri.toString();
+    const panel = this.panels.get(key);
+    this.exportSvgCallbacks.set(key, onSvgs);
+    if (panel) {
+      panel.reveal();
+      panel.webview.postMessage({ type: "exportSvg" });
+    } else {
+      await vscode.commands.executeCommand("vscode.openWith", uri, HwpEditorProvider.viewType);
+      this.pendingExportSvg.add(key);
+    }
+  }
+
+  /** 열린 직후 SVG 내보내기를 해야 할 URI 집합 */
+  private readonly pendingExportSvg = new Set<string>();
+
+  /** 열린 직후 디버그 오버레이를 내보내야 할 URI 집합 */
+  private readonly pendingDebugOverlay = new Set<string>();
+
+  /** SVG 내보내기 응답 콜백 */
+  private readonly exportSvgCallbacks = new Map<string, (svgs: string[]) => void>();
+
+  /** 디버그 오버레이 SVG 응답 콜백 */
+  private readonly debugOverlayCallbacks = new Map<string, (svgs: string[]) => void>();
 
   async openCustomDocument(
     uri: vscode.Uri,
@@ -30,6 +77,11 @@ export class HwpEditorProvider implements vscode.CustomReadonlyEditorProvider {
     _token: vscode.CancellationToken
   ): Promise<void> {
     const webview = webviewPanel.webview;
+
+    // 패널 추적 등록
+    const key = document.uri.toString();
+    this.panels.set(key, webviewPanel);
+    webviewPanel.onDidDispose(() => this.panels.delete(key));
 
     webview.options = {
       enableScripts: true,
@@ -51,6 +103,68 @@ export class HwpEditorProvider implements vscode.CustomReadonlyEditorProvider {
           fileName,
           fileData: new Uint8Array(fileData),
         });
+
+        // 열리자마자 SVG 내보내기를 해야 하는 경우
+        if (this.pendingExportSvg.delete(key)) {
+          setTimeout(() => webview.postMessage({ type: "exportSvg" }), 500);
+        }
+        // 열리자마자 디버그 오버레이를 내보내야 하는 경우
+        if (this.pendingDebugOverlay.delete(key)) {
+          setTimeout(() => webview.postMessage({ type: "exportDebugOverlay" }), 500);
+        }
+      }
+
+      if (msg.type === "exportSvgDone") {
+        const cb = this.exportSvgCallbacks.get(key);
+        this.exportSvgCallbacks.delete(key);
+        if (msg.error) {
+          vscode.window.showErrorMessage(`SVG 내보내기 실패: ${msg.error}`);
+        } else if (cb) {
+          cb(msg.svgs);
+        } else {
+          // 뷰어 내부 우클릭으로 요청된 경우 — 콜백 없이 직접 폴더 선택 → 저장
+          const defaultDir = vscode.Uri.file(
+            require("path").dirname(document.uri.fsPath)
+          );
+          const folders = await vscode.window.showOpenDialog({
+            defaultUri: defaultDir,
+            canSelectFolders: true,
+            canSelectFiles: false,
+            canSelectMany: false,
+            openLabel: "이 폴더에 SVG 저장",
+          });
+          if (!folders || folders.length === 0) return;
+          const outDir = folders[0].fsPath;
+          const baseName = require("path").basename(
+            document.uri.fsPath,
+            require("path").extname(document.uri.fsPath)
+          );
+          const fs = require("fs");
+          for (let i = 0; i < msg.svgs.length; i++) {
+            fs.writeFileSync(
+              require("path").join(outDir, `${baseName}_p${i + 1}.svg`),
+              msg.svgs[i],
+              "utf8"
+            );
+          }
+          const sel = await vscode.window.showInformationMessage(
+            `SVG ${msg.svgs.length}개 저장 완료 → ${outDir}`,
+            "폴더 열기"
+          );
+          if (sel === "폴더 열기") {
+            vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(outDir));
+          }
+        }
+      }
+
+      if (msg.type === "debugOverlaySvgs") {
+        const cb = this.debugOverlayCallbacks.get(key);
+        this.debugOverlayCallbacks.delete(key);
+        if (msg.error) {
+          vscode.window.showErrorMessage(`디버그 오버레이 실패: ${msg.error}`);
+        } else if (cb) {
+          cb(msg.svgs);
+        }
       }
     });
   }

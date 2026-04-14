@@ -92,6 +92,41 @@ window.addEventListener("message", (event) => {
       console.error("HWP 로드 실패:", err);
     }
   }
+
+  if (msg.type === "exportSvg") {
+    if (!hwpDoc) {
+      vscode.postMessage({ type: "exportSvgDone", error: "문서가 로드되지 않았습니다" });
+      return;
+    }
+    try {
+      const svgs: string[] = [];
+      for (let i = 0; i < pageInfos.length; i++) {
+        svgs.push(hwpDoc.renderPageSvg(i));
+      }
+      vscode.postMessage({ type: "exportSvgDone", svgs });
+    } catch (err: any) {
+      vscode.postMessage({ type: "exportSvgDone", error: err.message ?? String(err) });
+    }
+  }
+
+  if (msg.type === "exportDebugOverlay") {
+    if (!hwpDoc) {
+      vscode.postMessage({ type: "debugOverlaySvgs", error: "문서가 로드되지 않았습니다" });
+      return;
+    }
+    try {
+      hwpDoc.set_debug_overlay(true);
+      const svgs: string[] = [];
+      for (let i = 0; i < pageInfos.length; i++) {
+        svgs.push(hwpDoc.renderPageSvg(i));
+      }
+      hwpDoc.set_debug_overlay(false);
+      vscode.postMessage({ type: "debugOverlaySvgs", svgs });
+    } catch (err: any) {
+      hwpDoc.set_debug_overlay(false);
+      vscode.postMessage({ type: "debugOverlaySvgs", error: err.message ?? String(err) });
+    }
+  }
 });
 
 // ── 상태 표시줄 업데이트 ──
@@ -274,6 +309,11 @@ function toUint8Array(data: unknown): Uint8Array {
   }
   throw new Error(`Uint8Array로 변환할 수 없는 데이터: ${typeof data}`);
 }
+
+// 기본 컨텍스트 메뉴 억제
+document.addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+});
 
 function installMeasureTextWidth(): void {
   if ((globalThis as any).measureTextWidth) return;

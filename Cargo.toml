@@ -1,6 +1,6 @@
 [package]
 name = "rhwp"
-version = "0.6.0"
+version = "0.7.2"
 edition = "2021"
 description = "HWP file viewer and editor written in Rust, targeting WebAssembly"
 license = "MIT"
@@ -19,18 +19,18 @@ path = "src/tools/font_metric_gen.rs"
 
 [dependencies]
 wasm-bindgen = "0.2"
-cfb = "0.13"
+cfb = "0.14"
 flate2 = "1.0"
 byteorder = "1.5"
 base64 = "0.22"
-zip = { version = "2.4", default-features = false, features = ["deflate"] }
-quick-xml = "0.37"
+zip = { version = "8.5", default-features = false, features = ["deflate"] }
+quick-xml = "0.39"
 codepage = "0.1.2"
 embedded-io = "0.7.1"
 encoding_rs = "0.8.35"
 paste = "1.0.15"
-snafu = "0.8.9"
-strum = { version = "0.27.2", default-features = false, features = ["derive"] }
+snafu = "0.9.0"
+strum = { version = "0.28.0", default-features = false, features = ["derive"] }
 unicode-segmentation = "1.12.0"
 unicode-width = "0.2.2"
 
