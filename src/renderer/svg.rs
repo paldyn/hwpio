@@ -976,6 +976,12 @@ impl SvgRenderer {
             }
         };
 
+        // 그림 효과(그레이스케일/흑백) → SVG 필터 래핑
+        let effect_filter_id = self.ensure_image_effect_filter(img.effect);
+        if let Some(ref fid) = effect_filter_id {
+            self.output.push_str(&format!("<g filter=\"url(#{})\">\n", fid));
+        }
+
         let mime_type = detect_image_mime_type(data);
 
         // WMF → SVG 변환 (브라우저는 WMF를 렌더링할 수 없으므로 SVG로 변환)
@@ -1065,6 +1071,56 @@ impl SvgRenderer {
                 self.render_positioned_image(&render_data, &data_uri, bbox, fill_mode, img.original_size);
             }
         }
+
+        if effect_filter_id.is_some() {
+            self.output.push_str("</g>\n");
+        }
+    }
+
+    /// 그림 효과(ImageEffect)에 해당하는 SVG 필터를 defs에 보장하고 ID를 반환한다.
+    /// RealPic(기본)은 필터가 필요 없으므로 None 반환.
+    fn ensure_image_effect_filter(&mut self, effect: crate::model::image::ImageEffect) -> Option<String> {
+        use crate::model::image::ImageEffect;
+        let (id, def) = match effect {
+            ImageEffect::RealPic => return None,
+            ImageEffect::GrayScale => (
+                "rhwp-img-grayscale",
+                "<filter id=\"rhwp-img-grayscale\"><feColorMatrix type=\"matrix\" values=\"\
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0 0 0 1 0\"/></filter>\n",
+            ),
+            ImageEffect::BlackWhite => (
+                "rhwp-img-blackwhite",
+                "<filter id=\"rhwp-img-blackwhite\">\
+                    <feColorMatrix type=\"matrix\" values=\"\
+                        0.299 0.587 0.114 0 0 \
+                        0.299 0.587 0.114 0 0 \
+                        0.299 0.587 0.114 0 0 \
+                        0 0 0 1 0\"/>\
+                    <feComponentTransfer>\
+                        <feFuncR type=\"discrete\" tableValues=\"0 1\"/>\
+                        <feFuncG type=\"discrete\" tableValues=\"0 1\"/>\
+                        <feFuncB type=\"discrete\" tableValues=\"0 1\"/>\
+                    </feComponentTransfer>\
+                </filter>\n",
+            ),
+            // Pattern8x8은 SVG 필터로 표현하기 어려워 그레이스케일로 폴백
+            ImageEffect::Pattern8x8 => (
+                "rhwp-img-grayscale",
+                "<filter id=\"rhwp-img-grayscale\"><feColorMatrix type=\"matrix\" values=\"\
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0 0 0 1 0\"/></filter>\n",
+            ),
+        };
+        let def_str = def.to_string();
+        if !self.defs.iter().any(|d| d == &def_str) {
+            self.defs.push(def_str);
+        }
+        Some(id.to_string())
     }
 
     /// 이미지를 원래 크기로 지정 위치에 배치 (배치 모드)
