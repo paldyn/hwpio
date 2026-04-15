@@ -1480,6 +1480,7 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            effect: pic.image_attr.effect,
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -1727,6 +1728,7 @@ impl LayoutEngine {
                                         section_index: Some(section_index),
                                         para_index: Some(para_index),
                                         control_index: Some(tac_ci),
+                                        effect: pic.image_attr.effect,
                                         ..ImageNode::new(bin_data_id, image_data)
                                     }),
                                     BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -1809,6 +1811,7 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            effect: pic.image_attr.effect,
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(img_x, img_y, tac_w, pic_h),
