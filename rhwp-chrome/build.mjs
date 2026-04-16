@@ -60,6 +60,7 @@ copy(resolve(__dirname, 'content-script.css'), resolve(DIST, 'content-script.css
 copy(resolve(__dirname, 'dev-tools-inject.js'), resolve(DIST, 'dev-tools-inject.js'));
 copy(resolve(__dirname, 'sw'), resolve(DIST, 'sw'));
 copy(resolve(__dirname, 'options.html'), resolve(DIST, 'options.html'));
+copy(resolve(__dirname, 'options.js'), resolve(DIST, 'options.js'));
 
 // 아이콘
 mkdirSync(resolve(DIST, 'icons'), { recursive: true });
