@@ -8,6 +8,7 @@
   document.getElementById('labelHoverPreview').textContent = chrome.i18n.getMessage('optionsHoverPreview');
   document.getElementById('saved').textContent = chrome.i18n.getMessage('optionsSaved');
   document.getElementById('privacy').textContent = chrome.i18n.getMessage('optionsPrivacy');
+  document.getElementById('version').textContent = chrome.runtime.getManifest().version;
 
   const inputs = ['autoOpen', 'showBadges', 'hoverPreview'];
 
