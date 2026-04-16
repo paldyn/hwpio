@@ -57,9 +57,13 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
     // 7. META-INF/container.rdf
     z.write_deflated("META-INF/container.rdf", META_INF_CONTAINER_RDF.as_bytes())?;
 
-    // 8. Contents/content.hpf
-    let content_hpf = content::write_content_hpf(&section_hrefs, &[])?;
-    z.write_deflated("Contents/content.hpf", &content_hpf)?;
+    // 8. Contents/content.hpf — 정확히 1섹션 + BinData 없는 빈 문서일 때는 레퍼런스 템플릿
+    if doc.sections.len() == 1 && doc.bin_data_content.is_empty() {
+        z.write_deflated("Contents/content.hpf", EMPTY_CONTENT_HPF.as_bytes())?;
+    } else {
+        let content_hpf = content::write_content_hpf(&section_hrefs, &[])?;
+        z.write_deflated("Contents/content.hpf", &content_hpf)?;
+    }
 
     // 9. META-INF/container.xml
     z.write_deflated("META-INF/container.xml", META_INF_CONTAINER_XML.as_bytes())?;

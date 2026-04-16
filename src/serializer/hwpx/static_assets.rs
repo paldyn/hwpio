@@ -1,19 +1,12 @@
 //! HWPX 빈 문서에 필요한 정적 보일러플레이트 파일
 //!
-//! 한컴 오피스가 HWPX를 열 때 요구하는 고정 메타 파일들을 인라인으로 보관한다.
-//! Stage 1 범위: 빈 문서 기준. Stage 2+에서 실제 IR 기반으로 대체/확장될 수 있다.
+//! 한컴2020 레퍼런스(ref_empty.hwpx) 기반 정적 템플릿.
+//! Stage 2+에서 IR 기반 동적 생성으로 점진 교체한다.
 
-/// version.xml — HCF 버전 선언
-/// 한컴 스펙의 `tagetApplication` 오타(=target)는 의도적으로 유지한다.
-pub const VERSION_XML: &str = concat!(
-    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
-    r#"<hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version""#,
-    r#" tagetApplication="WORDPROCESSOR" major="5" minor="1" micro="0""#,
-    r#" buildNumber="0" os="1" xmlVersion="1.2""#,
-    r#" application="rhwp" appVersion="0.7.2"/>"#,
-);
+/// version.xml — 한컴 레퍼런스와 동일 형식
+pub const VERSION_XML: &str = include_str!("templates/version.xml");
 
-/// META-INF/container.xml — OCF 루트 엔트리 (한컴은 3개 rootfile 요구)
+/// META-INF/container.xml — OCF 루트 엔트리 (3개 rootfile)
 pub const META_INF_CONTAINER_XML: &str = concat!(
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
     r#"<ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container""#,
@@ -48,36 +41,30 @@ pub const META_INF_CONTAINER_RDF: &str = concat!(
     r#"</rdf:RDF>"#,
 );
 
-/// META-INF/manifest.xml — 빈 ODF manifest (Hancom 관례상 필수)
+/// META-INF/manifest.xml — 빈 ODF manifest
 pub const META_INF_MANIFEST_XML: &str = concat!(
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
     r#"<odf:manifest xmlns:odf="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>"#,
 );
 
-/// settings.xml — 애플리케이션 설정 (캐럿 위치)
-pub const SETTINGS_XML: &str = concat!(
-    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
-    r#"<ha:HWPApplicationSetting xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app""#,
-    r#" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0">"#,
-    r#"<ha:CaretPosition listIDRef="0" paraIDRef="0" pos="16"/>"#,
-    r#"</ha:HWPApplicationSetting>"#,
-);
+/// settings.xml — 한컴 레퍼런스와 동일 형식
+pub const SETTINGS_XML: &str = include_str!("templates/settings.xml");
 
-/// Preview/PrvText.txt — 미리보기 텍스트 (빈 문서는 CRLF만)
+/// Contents/content.hpf — OPF manifest 한컴 레퍼런스 기반 (metadata 일반화)
+pub const EMPTY_CONTENT_HPF: &str = include_str!("templates/empty_content.hpf");
+
+/// Preview/PrvText.txt — 빈 문서 미리보기 텍스트
 pub const PRV_TEXT: &[u8] = b"\r\n";
 
-/// Preview/PrvImage.png — 1x1 투명 PNG (67바이트, 한컴 호환 최소 썸네일)
-///
-/// 표준 base64 인코딩:
-/// `iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=`
+/// Preview/PrvImage.png — 1x1 투명 PNG (한컴 호환 최소 썸네일)
 pub const PRV_IMAGE_PNG: &[u8] = &[
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
-    0x08, 0x04, 0x00, 0x00, 0x00, 0xB5, 0x1C, 0x0C, // 8-bit GA, CRC
-    0x02, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, // IDAT length=11 + "IDA"
-    0x54, 0x78, 0x9C, 0x63, 0x64, 0x60, 0x00, 0x00, // "T" + zlib header + data
-    0x00, 0x05, 0x00, 0x01, 0x6F, 0x68, 0x67, 0xBC, // IDAT CRC
-    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND
-    0xAE, 0x42, 0x60, 0x82,                         // IEND CRC
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x04, 0x00, 0x00, 0x00, 0xB5, 0x1C, 0x0C,
+    0x02, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41,
+    0x54, 0x78, 0x9C, 0x63, 0x64, 0x60, 0x00, 0x00,
+    0x00, 0x05, 0x00, 0x01, 0x6F, 0x68, 0x67, 0xBC,
+    0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+    0xAE, 0x42, 0x60, 0x82,
 ];
