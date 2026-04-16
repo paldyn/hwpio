@@ -38,7 +38,7 @@
 - **Files are never sent to any server.** All HWP/HWPX file processing is performed locally in your browser using WebAssembly (WASM).
 - **No personal data is collected.** We do not collect your name, email, location, browsing history, or any other personal information.
 - **No external server communication.** This extension does not communicate with any external servers for analytics, tracking, or advertising.
-- **Only local settings are stored.** User preferences (auto-open, badge display, etc.) are saved in `chrome.storage.sync`, which syncs within your browser account.
+- **Only local settings are stored.** User preferences (auto-open, badge display, etc.) are saved in `browser.storage.sync`, which syncs within your browser account.
 
 ### Permission Usage
 
