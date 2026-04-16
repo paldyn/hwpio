@@ -928,17 +928,26 @@ impl EqParser {
                 self.pos += 1;
             } else if self.current_type() == TokenType::Whitespace && self.current_value() == "&" {
                 // & 구분: 왼쪽→오른쪽 전환
+                // 연속 &&: 큰 탭 공간 (조건 부분 분리용)
+                let mut amp_count = 0;
+                while self.pos < end && self.current_type() == TokenType::Whitespace && self.current_value() == "&" {
+                    amp_count += 1;
+                    self.pos += 1;
+                }
                 if current_right.is_none() {
                     current_right = Some(Vec::new());
-                }
-                // 이미 오른쪽인 경우 왼쪽에 합침
-                if current_right.as_ref().map_or(false, |r| r.is_empty()) && !current_left.is_empty() {
-                    // 첫 번째 &: left 확정, right 시작
+                    // 연속 && 이면 큰 탭 공간 삽입
+                    if amp_count >= 2 {
+                        if let Some(ref mut right) = current_right {
+                            right.push(EqNode::Space(super::ast::SpaceKind::Tab));
+                        }
+                    }
                 } else if let Some(ref mut right) = current_right {
-                    // 추가 &는 right에 탭으로 추가
-                    right.push(EqNode::Space(super::ast::SpaceKind::Normal));
+                    // 이미 오른쪽: 추가 & → 탭 공간
+                    for _ in 0..amp_count {
+                        right.push(EqNode::Space(super::ast::SpaceKind::Tab));
+                    }
                 }
-                self.pos += 1;
             } else {
                 if let Some(ref mut right) = current_right {
                     right.push(self.parse_element());
