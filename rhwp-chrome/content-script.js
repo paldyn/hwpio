@@ -67,6 +67,7 @@
     img.src = new URL(dataUri).href;
     img.alt = '미리보기';
     img.referrerPolicy = 'no-referrer';
+    thumbDiv.textContent = '';
     thumbDiv.className = 'rhwp-hover-thumb';
     thumbDiv.appendChild(img);
   }
