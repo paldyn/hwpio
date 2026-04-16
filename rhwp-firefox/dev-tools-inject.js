@@ -128,7 +128,7 @@
    data-hwp="true"
    data-hwp-title="전입신고서"
    data-hwp-pages="2"
-   data-hwp-thumbnail="/thumbs/preview.webp"
+   data-hwp-thumbnail="https://example.com/thumbs/preview.webp"
    data-hwp-category="민원서식"
    data-hwp-form-fields="true">전입신고서</a>
 
