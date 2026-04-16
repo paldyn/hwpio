@@ -615,7 +615,7 @@ fn resolve_single_para_style(ps: &ParaShape, tab_defs: &[TabDef], dpi: f64) -> R
     let tab_def = tab_defs.get(ps.tab_def_id as usize);
     let tab_stops: Vec<TabStop> = tab_def
         .map(|td| td.tabs.iter().map(|t| TabStop {
-            position: hwpunit_to_px(t.position as i32, dpi) / 2.0,
+            position: hwpunit_to_px(t.position as i32, dpi) / 2.0, // FIXME #159: /2.0의 이유 분석 필요 — 탭 좌표 기준 확인
             tab_type: t.tab_type,
             fill_type: t.fill_type,
         }).collect())

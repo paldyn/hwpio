@@ -792,6 +792,12 @@ fn is_fullwidth_symbol(c: char) -> bool {
         '\u{00A3}' |                   // £ POUND SIGN
         '\u{00A5}'                     // ¥ YEN SIGN
     )
+    || ('\u{2460}'..='\u{24FF}').contains(&c) // Enclosed Alphanumerics (①②③ 등)
+    || ('\u{2600}'..='\u{26FF}').contains(&c) // Miscellaneous Symbols (☆★ 등)
+    || ('\u{2700}'..='\u{27BF}').contains(&c) // Dingbats (✓✗ 등)
+    || ('\u{3200}'..='\u{32FF}').contains(&c) // Enclosed CJK Letters (㉠㉡ 등)
+    || ('\u{3300}'..='\u{33FF}').contains(&c) // CJK Compatibility (㎜㎝ 등)
+    || ('\u{2160}'..='\u{217F}').contains(&c) // Roman Numerals (Ⅰ Ⅱ Ⅲ 등)
 }
 
 /// 한글 자모 초성 여부 (옛한글 포함)
