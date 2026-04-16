@@ -408,9 +408,48 @@ impl EqLayout {
     }
 
     fn layout_subsup(&self, base: &EqNode, sub: &EqNode, sup: &EqNode, fs: f64) -> LayoutBox {
+        // 적분 기호: 상한은 기호 상단, 하한은 기호 하단에 맞춤
+        let is_integral = matches!(base, EqNode::MathSymbol(s) if is_integral_symbol(s));
+
         let b = self.layout_node(base, fs);
         let sb = self.layout_node(sub, fs * SCRIPT_SCALE);
         let sp = self.layout_node(sup, fs * SCRIPT_SCALE);
+
+        if is_integral {
+            // 적분 전용 배치: 상한은 기호 상단 오른쪽, 하한은 기호 하단 오른쪽
+            let sup_offset_y = fs * 0.13;  // 위로 ~2mm (격자 기준)
+            let sub_offset_y = fs * 0.13;  // 아래로 ~2mm
+            let sub_offset_x = -(fs * 0.07); // 왼쪽으로 ~1mm
+
+            let mut base_box = b;
+            let sup_y = 0.0; // 상단에 배치
+            let base_y = sp.height - sup_offset_y; // 상한 아래에 기호
+            base_box.x = 0.0;
+            base_box.y = base_y.max(0.0);
+
+            let mut sup_box = sp;
+            sup_box.x = base_box.width;
+            sup_box.y = sup_y;
+
+            let mut sub_box = sb;
+            sub_box.x = base_box.width + sub_offset_x;
+            sub_box.y = base_box.y + base_box.height - sub_offset_y;
+
+            let script_w = sup_box.width.max(sub_box.x + sub_box.width - base_box.width);
+            let total_w = base_box.width + script_w.max(0.0);
+            let total_h = (sub_box.y + sub_box.height).max(base_box.y + base_box.height);
+
+            return LayoutBox {
+                x: 0.0, y: 0.0, width: total_w,
+                height: total_h,
+                baseline: base_box.y + base_box.baseline,
+                kind: LayoutKind::SubSup {
+                    base: Box::new(base_box),
+                    sub: Box::new(sub_box),
+                    sup: Box::new(sup_box),
+                },
+            };
+        }
 
         let sup_shift = b.baseline - sp.height * 0.7;
         let sub_shift = b.baseline * 0.4;
