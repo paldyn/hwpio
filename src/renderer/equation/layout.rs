@@ -417,9 +417,9 @@ impl EqLayout {
 
         if is_integral {
             // 적분 전용 배치: 상한은 기호 상단 오른쪽, 하한은 기호 하단 오른쪽
-            let sup_offset_y = fs * 0.13;  // 위로 ~2mm (격자 기준)
-            let sub_offset_y = fs * 0.13;  // 아래로 ~2mm
-            let sub_offset_x = -(fs * 0.07); // 왼쪽으로 ~1mm
+            let sup_offset_y = fs * 0.13;  // 상한: 기호 상단에서 위로 ~2mm
+            let sub_offset_y = fs * 0.25;  // 하한: 기호 하단에서 위로 이동
+            let sub_offset_x = -(fs * 0.42); // 하한: 왼쪽으로 추가 1mm
 
             let mut base_box = b;
             let sup_y = 0.0; // 상단에 배치
