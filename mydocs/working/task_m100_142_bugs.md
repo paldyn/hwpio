@@ -25,7 +25,7 @@ exam_math.hwp 20페이지 시각 검증 중 발견된 문제 기록.
 | ? | 적분 ∫의 상한/하한이 기호 위/아래 중앙에 배치됨 | ✅ 해결 (적분을 nolimits 스타일로 변경) |
 | ? | sin/cos/tan 등 함수의 첨자 위치 | ✅ 해결 (Thin 공백 건너뛰기로 함수 첨자 정상 파싱) |
 | ? | `bar{rm AD it}` 중괄호 `}` 텍스트 출력 | ✅ 해결 (parse_single_or_group에서 RBrace 처리) |
-| 2 | ③ 위에 수식 `0`이 겹침 | 미해결 — 탭+TAC 조합 위치 계산 오류 |
+| 2 | ③ 위에 수식 `0`이 겹침 | 미해결 — 근본 원인 발견: `compute_char_positions`(SVG 렌더링)와 `estimate_text_width`(레이아웃 x 전진)의 탭 계산 불일치. ③ 위치는 char_positions로, 수식 x는 seg_w로 계산하여 어긋남 |
 
 ## 미검증 페이지
 
