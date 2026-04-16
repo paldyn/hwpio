@@ -1,10 +1,8 @@
 //! HWPX(ZIP+XML) 직렬화 모듈 — `parser::hwpx`의 역방향.
 //!
-//! Document IR을 HWPX 파일(ZIP 컨테이너)로 변환한다.
-//!
 //! ## 단계
-//! - Stage 1 (현재): 모듈 스켈레톤 + 빈 HWPX 생성 (parse_hwpx 라운드트립)
-//! - Stage 2: 본문 문단·텍스트·lineSegArray
+//! - Stage 1 (현재): 한컴2020 호환 빈 HWPX 생성 (11개 필수 파일)
+//! - Stage 2: 본문 문단·텍스트·lineSegArray IR 직렬화
 //! - Stage 3: 표(Table)
 //! - Stage 4: 그림(Picture) + BinData
 //! - Stage 5: 라운드트립 테스트 + CLI
@@ -12,31 +10,35 @@
 pub mod content;
 pub mod header;
 pub mod section;
+pub mod static_assets;
 pub mod utils;
 pub mod writer;
 
 use crate::model::document::Document;
 
 use super::SerializeError;
-use content::write_container_xml;
 use writer::HwpxZipWriter;
 
 /// Document IR을 HWPX(ZIP+XML) 바이트로 직렬화한다.
+///
+/// Stage 1: 한컴2020이 요구하는 11개 필수 파일을 모두 생성한다. 빈 Document의 경우
+/// 보일러플레이트와 최소 골격(1개 섹션, 1개 문단)만 포함된다.
 pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
+    use static_assets::*;
+
     let mut z = HwpxZipWriter::new();
 
-    // 1. mimetype (반드시 최초 엔트리, STORED)
+    // 1. mimetype (반드시 최초 엔트리, STORED, extra field 없음)
     z.write_stored("mimetype", b"application/hwp+zip")?;
 
-    // 2. META-INF/container.xml (OCF — 한컴 호환용)
-    let container_xml = write_container_xml()?;
-    z.write_deflated("META-INF/container.xml", &container_xml)?;
+    // 2. version.xml
+    z.write_deflated("version.xml", VERSION_XML.as_bytes())?;
 
     // 3. Contents/header.xml
     let header_xml = header::write_header(doc)?;
     z.write_deflated("Contents/header.xml", &header_xml)?;
 
-    // 4. Contents/section{N}.xml (섹션 수만큼)
+    // 4. Contents/section{N}.xml — 실제 섹션만큼, 없으면 0개
     let section_hrefs: Vec<String> = (0..doc.sections.len())
         .map(|i| format!("Contents/section{}.xml", i))
         .collect();
@@ -45,9 +47,25 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
         z.write_deflated(&section_hrefs[i], &xml)?;
     }
 
-    // 5. Contents/content.hpf (OPF 매니페스트 — 마지막에 써도 무방)
+    // 5. Preview/PrvText.txt + Preview/PrvImage.png
+    z.write_deflated("Preview/PrvText.txt", PRV_TEXT)?;
+    z.write_deflated("Preview/PrvImage.png", PRV_IMAGE_PNG)?;
+
+    // 6. settings.xml
+    z.write_deflated("settings.xml", SETTINGS_XML.as_bytes())?;
+
+    // 7. META-INF/container.rdf
+    z.write_deflated("META-INF/container.rdf", META_INF_CONTAINER_RDF.as_bytes())?;
+
+    // 8. Contents/content.hpf
     let content_hpf = content::write_content_hpf(&section_hrefs, &[])?;
     z.write_deflated("Contents/content.hpf", &content_hpf)?;
+
+    // 9. META-INF/container.xml
+    z.write_deflated("META-INF/container.xml", META_INF_CONTAINER_XML.as_bytes())?;
+
+    // 10. META-INF/manifest.xml
+    z.write_deflated("META-INF/manifest.xml", META_INF_MANIFEST_XML.as_bytes())?;
 
     z.finish()
 }
@@ -62,7 +80,7 @@ mod tests {
         let doc = Document::default();
         let bytes = serialize_hwpx(&doc).expect("serialize empty");
         let parsed = parse_hwpx(&bytes).expect("parse back");
-        assert_eq!(parsed.sections.len(), 0, "empty doc should have 0 sections");
+        assert_eq!(parsed.sections.len(), 0);
         assert!(parsed.bin_data_content.is_empty());
     }
 
@@ -79,8 +97,6 @@ mod tests {
     fn mimetype_is_first_entry() {
         let doc = Document::default();
         let bytes = serialize_hwpx(&doc).expect("serialize");
-        // ZIP local file header 시그니처 PK\x03\x04 이후 30바이트 뒤에 파일명이 온다.
-        // 이름 길이는 offset 26-27 (LE u16).
         assert_eq!(&bytes[0..4], b"PK\x03\x04", "ZIP signature");
         let name_len = u16::from_le_bytes([bytes[26], bytes[27]]) as usize;
         let name = &bytes[30..30 + name_len];
@@ -91,8 +107,38 @@ mod tests {
     fn mimetype_stored_not_deflated() {
         let doc = Document::default();
         let bytes = serialize_hwpx(&doc).expect("serialize");
-        // compression method 필드는 offset 8-9 (LE u16). STORED=0.
         let method = u16::from_le_bytes([bytes[8], bytes[9]]);
         assert_eq!(method, 0, "mimetype must be STORED (method=0)");
+    }
+
+    #[test]
+    fn hancom_required_files_present() {
+        let mut doc = Document::default();
+        doc.sections.push(crate::model::document::Section::default());
+        let bytes = serialize_hwpx(&doc).expect("serialize");
+        // ZIP 파일 목록에 한컴 필수 11개가 모두 있는지 확인
+        let cursor = std::io::Cursor::new(&bytes);
+        let archive = zip::ZipArchive::new(cursor).expect("valid zip");
+        let names: Vec<String> = archive.file_names().map(String::from).collect();
+        let required = [
+            "mimetype",
+            "version.xml",
+            "Contents/header.xml",
+            "Contents/section0.xml",
+            "Contents/content.hpf",
+            "Preview/PrvText.txt",
+            "Preview/PrvImage.png",
+            "settings.xml",
+            "META-INF/container.xml",
+            "META-INF/container.rdf",
+            "META-INF/manifest.xml",
+        ];
+        for r in &required {
+            assert!(
+                names.iter().any(|n| n == r),
+                "missing required file: {}",
+                r
+            );
+        }
     }
 }
