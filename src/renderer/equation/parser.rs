@@ -405,6 +405,10 @@ impl EqParser {
         // 함수 (sin, cos, log 등)
         if is_function(cmd) {
             let func_name = lookup_function(cmd).unwrap_or(cmd).to_string();
+            // 함수명 바로 뒤의 Thin 공백(`)은 한컴에서 무시 — 소비하고 건너뛰기
+            if self.current_type() == TokenType::Whitespace && self.current_value() == "`" {
+                self.pos += 1;
+            }
             let node = EqNode::Function(func_name);
             return self.try_parse_scripts(node);
         }
