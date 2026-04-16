@@ -203,7 +203,16 @@ impl EqParser {
             return self.parse_sqrt();
         }
 
-        // 큰 연산자 — 적분 포함. 레이아웃에서 적분은 nolimits(옆 첨자), ∑/∏는 limits(위아래)
+        // 적분 기호 — nolimits: 큰 기호 + 일반 첨자 (BigOp이 아닌 MathSymbol로 처리)
+        if matches!(cu, "INT" | "INTEGRAL" | "SMALLINT" | "DINT" | "TINT"
+            | "OINT" | "SMALLOINT" | "ODINT" | "OTINT")
+        {
+            let symbol = lookup_symbol(cu).or_else(|| lookup_symbol(cmd)).unwrap_or("∫").to_string();
+            let node = EqNode::MathSymbol(symbol);
+            return self.try_parse_scripts(node);
+        }
+
+        // 큰 연산자 (∑, ∏ 등) — limits: 기호 위/아래 중앙
         if is_big_operator(cu) {
             let symbol = lookup_symbol(cu).unwrap_or("?").to_string();
             return self.parse_big_op(symbol);
@@ -1195,15 +1204,13 @@ mod tests {
 
     #[test]
     fn test_integral() {
-        // 적분은 BigOp으로 파싱, 레이아웃에서 nolimits(옆 첨자) 배치
+        // 적분은 nolimits: MathSymbol + SubSup (일반 첨자)
         let ast = parse("INT_0^{inf}");
         match &ast {
-            EqNode::BigOp { symbol, sub, sup } => {
-                assert_eq!(symbol, "∫");
-                assert!(sub.is_some());
-                assert!(sup.is_some());
+            EqNode::SubSup { base, sub, sup } => {
+                assert!(matches!(base.as_ref(), EqNode::MathSymbol(s) if s == "∫"));
             }
-            _ => panic!("Expected BigOp, got {:?}", ast),
+            _ => panic!("Expected SubSup, got {:?}", ast),
         }
     }
 

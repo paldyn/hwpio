@@ -256,6 +256,16 @@ impl EqLayout {
     }
 
     fn layout_math_symbol(&self, text: &str, fs: f64) -> LayoutBox {
+        // 적분 기호: 큰 크기로 렌더링 (BIG_OP_SCALE 적용)
+        if is_integral_symbol(text) {
+            let op_fs = fs * BIG_OP_SCALE;
+            let w = estimate_text_width(text, op_fs, false);
+            return LayoutBox {
+                x: 0.0, y: 0.0, width: w, height: op_fs,
+                baseline: op_fs * 0.7, // 적분 기호 baseline: 기호 높이의 70%
+                kind: LayoutKind::MathSymbol(text.to_string()),
+            };
+        }
         let w = estimate_text_width(text, fs, false);
         LayoutBox {
             x: 0.0, y: 0.0, width: w, height: fs,
@@ -846,7 +856,7 @@ impl EqLayout {
 }
 
 /// 적분 기호 여부 판별
-fn is_integral_symbol(symbol: &str) -> bool {
+pub(crate) fn is_integral_symbol(symbol: &str) -> bool {
     matches!(symbol, "∫" | "∬" | "∭" | "∮" | "∯" | "∰")
 }
 
