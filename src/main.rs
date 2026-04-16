@@ -44,6 +44,7 @@ fn print_help() {
     println!("      --show-para-marks       문단부호(↵/↓) 표시");
     println!("      --show-control-codes    조판부호 보이기 (문단부호 + 개체 마커 등)");
     println!("      --debug-overlay         디버그 오버레이 (문단/표 경계 + 인덱스 라벨)");
+    println!("      --show-grid             1mm 격자 오버레이 (레이아웃 디버깅용)");
     println!("      --font-style            @font-face local() 참조 삽입 (폰트 데이터 미포함)");
     println!("      --embed-fonts           폰트 서브셋 임베딩 (사용 글자만 base64)");
     println!("      --embed-fonts=full      폰트 전체 임베딩 (base64)");
@@ -92,6 +93,7 @@ fn export_svg(args: &[String]) {
     let mut show_para_marks = false;
     let mut show_control_codes = false;
     let mut debug_overlay = false;
+    let mut show_grid = false;
     let mut font_embed_mode = rhwp::renderer::svg::FontEmbedMode::None;
     let mut font_paths: Vec<std::path::PathBuf> = Vec::new();
 
@@ -132,6 +134,10 @@ fn export_svg(args: &[String]) {
             }
             "--debug-overlay" => {
                 debug_overlay = true;
+                i += 1;
+            }
+            "--show-grid" => {
+                show_grid = true;
                 i += 1;
             }
             "--font-style" => {
@@ -227,7 +233,11 @@ fn export_svg(args: &[String]) {
             doc.render_page_svg_native(*page_num)
         };
         match svg_result {
-            Ok(svg) => {
+            Ok(mut svg) => {
+                // 격자 오버레이 삽입
+                if show_grid {
+                    svg = insert_grid_overlay(&svg);
+                }
                 let svg_filename = if page_count == 1 {
                     format!("{}.svg", file_stem)
                 } else {
@@ -247,6 +257,86 @@ fn export_svg(args: &[String]) {
     }
 
     println!("내보내기 완료: {}개 SVG 파일 → {}/", pages.len(), output_dir);
+}
+
+/// SVG에 1mm 격자 오버레이를 삽입한다.
+/// `<svg ...>` 태그 직후에 격자 패턴 정의와 배경 rect를 추가.
+fn insert_grid_overlay(svg: &str) -> String {
+    // SVG viewBox에서 크기 추출
+    let (width, height) = extract_svg_dimensions(svg);
+    // 1mm = 96dpi 기준 3.7795px
+    let grid_px = 96.0 * 25.4 / 96.0; // 1mm in px at 96dpi... 실제로 SVG 좌표는 px
+    // 96dpi: 1inch = 25.4mm, 1px = 25.4/96 = 0.2646mm, 1mm = 96/25.4 = 3.7795px
+    let grid_size = 96.0 / 25.4; // 3.7795 px per mm
+
+    let g = format!("{:.4}", grid_size);
+    let w = format!("{:.2}", width);
+    let h = format!("{:.2}", height);
+    let grid_defs = format!(
+        "<defs><pattern id=\"rhwp-grid\" width=\"{g}\" height=\"{g}\" patternUnits=\"userSpaceOnUse\"><path d=\"M {g} 0 L 0 0 0 {g}\" fill=\"none\" stroke=\"#CCCCCC\" stroke-width=\"0.3\"/></pattern></defs>\n<rect width=\"{w}\" height=\"{h}\" fill=\"url(#rhwp-grid)\"/>\n"
+    );
+
+    // 페이지 배경(fill="#ffffff") rect 직후에 격자를 삽입
+    // 이렇게 해야 흰색 배경 위에, 본문 컨텐츠 아래에 격자가 표시됨
+    let bg_pattern = "fill=\"#ffffff\"/>";
+    if let Some(pos) = svg.find(bg_pattern) {
+        let insert_pos = pos + bg_pattern.len();
+        // defs는 SVG 시작 부분에, 격자 rect는 배경 뒤에
+        let defs_part = format!(
+            "<defs><pattern id=\"rhwp-grid\" width=\"{g}\" height=\"{g}\" patternUnits=\"userSpaceOnUse\"><path d=\"M {g} 0 L 0 0 0 {g}\" fill=\"none\" stroke=\"#CCCCCC\" stroke-width=\"0.3\"/></pattern></defs>"
+        );
+        let grid_rect = format!(
+            "\n<rect width=\"{w}\" height=\"{h}\" fill=\"url(#rhwp-grid)\"/>"
+        );
+        // defs를 <svg> 태그 직후에 삽입
+        let mut result = svg.to_string();
+        // 배경 rect 뒤에 격자 rect 삽입
+        result.insert_str(insert_pos, &grid_rect);
+        // <svg ...>\n 직후에 defs 삽입
+        if let Some(svg_end) = result.find(">\n") {
+            result.insert_str(svg_end + 2, &format!("{}\n", defs_part));
+        }
+        result
+    } else {
+        // 배경 rect가 없으면 기존 방식
+        if let Some(pos) = svg.find(">\n") {
+            let insert_pos = pos + 2;
+            format!("{}{}{}", &svg[..insert_pos], grid_defs, &svg[insert_pos..])
+        } else {
+            svg.to_string()
+        }
+    }
+}
+
+/// SVG의 width/height 속성 또는 viewBox에서 크기를 추출한다.
+fn extract_svg_dimensions(svg: &str) -> (f64, f64) {
+    // viewBox="0 0 W H" 패턴에서 추출
+    if let Some(vb_start) = svg.find("viewBox=\"") {
+        let vb = &svg[vb_start + 9..];
+        if let Some(vb_end) = vb.find('"') {
+            let parts: Vec<&str> = vb[..vb_end].split_whitespace().collect();
+            if parts.len() == 4 {
+                let w: f64 = parts[2].parse().unwrap_or(800.0);
+                let h: f64 = parts[3].parse().unwrap_or(1100.0);
+                return (w, h);
+            }
+        }
+    }
+    // width/height 속성에서 추출
+    let w = extract_attr_f64(svg, "width").unwrap_or(800.0);
+    let h = extract_attr_f64(svg, "height").unwrap_or(1100.0);
+    (w, h)
+}
+
+fn extract_attr_f64(svg: &str, attr: &str) -> Option<f64> {
+    let pattern = format!("{}=\"", attr);
+    if let Some(start) = svg.find(&pattern) {
+        let val = &svg[start + pattern.len()..];
+        if let Some(end) = val.find('"') {
+            return val[..end].trim_end_matches("px").parse().ok();
+        }
+    }
+    None
 }
 
 fn export_pdf(args: &[String]) {
