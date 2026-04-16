@@ -25,6 +25,12 @@ CASES: list[tuple[str, list[str], int | None]] = [
         ["첫째 줄", "줄바꿈A", "줄바꿈B", "탭", "끝"],
         4,
     ),
+    # 라운드트립 검증
+    (
+        "output/rt_ref_mixed.hwpx",
+        ["첫째 줄", "줄바꿈A", "줄바꿈B", "탭", "끝"],
+        4,
+    ),
 ]
 
 
