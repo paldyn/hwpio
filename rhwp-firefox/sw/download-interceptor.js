@@ -23,20 +23,26 @@ export function setupDownloadInterceptor() {
 
   // 2차: filename 확정 시 재판정
   browser.downloads.onChanged.addListener(async (delta) => {
-    if (handled.has(delta.id)) return;
-
-    if (delta.filename?.current && HWP_EXTENSIONS.test(delta.filename.current)) {
+    // filename 확정으로 HWP가 처음 판정되는 경우에만 처리
+    if (!handled.has(delta.id)
+      && delta.filename?.current
+      && HWP_EXTENSIONS.test(delta.filename.current)) {
       handled.add(delta.id);
 
-      // 최신 DownloadItem 재조회 (url, fileSize 등 완전한 정보 확보)
-      const [item] = await browser.downloads.search({ id: delta.id });
-      if (item) {
-        handleHwpDownload(item);
+      try {
+        // 최신 DownloadItem 재조회 (url, fileSize 등 완전한 정보 확보)
+        const [item] = await browser.downloads.search({ id: delta.id });
+        if (item) {
+          handleHwpDownload(item);
+        }
+      } catch (err) {
+        console.error('[rhwp] 다운로드 항목 재조회 오류:', err);
       }
     }
 
     // 완료/에러 시 handled 정리 (메모리 누수 방지)
-    if (delta.state?.current === 'complete' || delta.error) {
+    // onCreated/onChanged 양쪽 경로에서 들어간 id 모두에 대해 cleanup 보장
+    if (handled.has(delta.id) && (delta.state?.current === 'complete' || delta.error)) {
       setTimeout(() => handled.delete(delta.id), 30000);
     }
   });
