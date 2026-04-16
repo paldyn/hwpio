@@ -104,7 +104,8 @@
     badge.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      browser.runtime.sendMessage({ type: 'open-hwp', url: anchor.href });
+      browser.runtime.sendMessage({ type: 'open-hwp', url: anchor.href })
+        .catch((err) => console.error('[rhwp] 파일 열기 요청 오류:', err));
     });
 
     return badge;
@@ -183,7 +184,8 @@
 
     // 카드 전체 클릭 시 HWP 열기
     card.addEventListener('click', () => {
-      browser.runtime.sendMessage({ type: 'open-hwp', url: anchor.href });
+      browser.runtime.sendMessage({ type: 'open-hwp', url: anchor.href })
+        .catch((err) => console.error('[rhwp] 파일 열기 요청 오류:', err));
       hideHoverCard();
     });
 
