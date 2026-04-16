@@ -956,7 +956,11 @@ impl LayoutEngine {
                 let img_id = tree.next_id();
                 let img_node = RenderNode::new(
                     img_id,
-                    RenderNodeType::Image(ImageNode { transform, ..ImageNode::new(bin_data_id, image_data) }),
+                    RenderNodeType::Image(ImageNode {
+                        transform,
+                        effect: pic.image_attr.effect,
+                        ..ImageNode::new(bin_data_id, image_data)
+                    }),
                     BoundingBox::new(render_x, render_y, render_w, render_h),
                 );
                 parent.children.push(img_node);

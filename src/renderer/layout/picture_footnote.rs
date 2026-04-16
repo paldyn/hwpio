@@ -100,6 +100,7 @@ impl LayoutEngine {
                 para_index,
                 control_index,
                 crop,
+                effect: picture.image_attr.effect,
                 ..ImageNode::new(bin_data_id, image_data)
             }),
             BoundingBox::new(pic_x, pic_y, pic_width, pic_height),
@@ -296,6 +297,7 @@ impl LayoutEngine {
                 para_index: Some(para_index),
                 control_index: Some(control_index),
                 crop,
+                effect: picture.image_attr.effect,
                 ..ImageNode::new(bin_data_id, image_data)
             }),
             BoundingBox::new(adjusted_pic_x, pic_y, pic_width, pic_height),
