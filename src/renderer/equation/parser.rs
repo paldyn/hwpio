@@ -856,6 +856,16 @@ impl EqParser {
                 rows.push(EqNode::Row(current_row).simplify());
                 current_row = Vec::new();
                 self.pos += 1;
+            } else if self.current_type() == TokenType::Whitespace && self.current_value() == "&" {
+                // && (연속 &): 큰 탭 공간으로 조건 부분 분리
+                let mut amp_count = 0;
+                while self.pos < end && self.current_type() == TokenType::Whitespace && self.current_value() == "&" {
+                    amp_count += 1;
+                    self.pos += 1;
+                }
+                for _ in 0..amp_count {
+                    current_row.push(EqNode::Space(super::ast::SpaceKind::Tab));
+                }
             } else {
                 current_row.push(self.parse_element());
             }
