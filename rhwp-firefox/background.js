@@ -13,11 +13,13 @@ browser.runtime.onInstalled.addListener((details) => {
   setupContextMenus();
 
   if (details.reason === 'install') {
-    // 최초 설치 시 기본 설정 저장
+    // 최초 설치 시 기본 설정 저장 (fire-and-forget, 실패 시 로깅만)
     browser.storage.sync.set({
       autoOpen: true,
       showBadges: true,
       hoverPreview: true
+    }).catch((err) => {
+      console.error('[rhwp] 초기 설정 저장 오류:', err);
     });
   }
 });
