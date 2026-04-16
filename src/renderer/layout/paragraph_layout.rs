@@ -804,6 +804,7 @@ impl LayoutEngine {
                 ts.tab_stops = tab_stops.clone();
                 ts.auto_tab_right = auto_tab_right;
                 ts.available_width = available_width;
+                ts.inline_tabs = composed.tab_extended.clone();
                 // 교차 run 오른쪽/가운데 탭: 이 run의 시작 위치를 역방향으로 조정
                 if let Some((tab_pos, tab_type)) = pending_right_tab_est.take() {
                     ts.line_x_offset = est_x;
