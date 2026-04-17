@@ -1383,3 +1383,13 @@ fn test_bar_rm_it() {
     // }} 가 텍스트로 나오면 안 됨
     assert!(!ast_str.contains(r#"Text("}")"#), "brace가 텍스트로 나오면 안 됨");
 }
+
+#[cfg(test)]
+#[test]
+fn test_cases_double_amp() {
+    let script = "{cases{eqalign{``x^{3}#}&&eqalign{~LEFT(x LEQ 0 RIGHT)#}#``f LEFT(x RIGHT)&&~LEFT(x>0 RIGHT)}}";
+    let ast = parse(script);
+    eprintln!("CASES AST: {:#?}", ast);
+    let s = format!("{:?}", ast);
+    assert!(s.contains("Tab"), "Tab이 있어야 함: {}", s);
+}
