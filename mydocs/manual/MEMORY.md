@@ -13,3 +13,4 @@
 - [오늘할일 문서 작업일지 갱신 필수](feedback_update_daily_orders.md) — 작업한 내용은 반드시 mydocs/orders/yyyymmdd.md에 기록. 세션 종료 전 커밋
 - [알한글 iOS 프로젝트](project_alhangeul_ios.md) — iPad HWP 학습 도구, 맥북 전용(ios/devel), 리눅스에서 빌드 불가. 현재 환경에서 작업 불가
 - [output 폴더 서브폴더 구조](project_output_folder_structure.md) — output/re/(재현검증), output/svg/(SVG), output/debug/(디버그) 용도별 분리. 새 출력 코드는 반드시 서브폴더에 저장
+- [수식 컨트롤은 항상 TAC](project_equation_always_tac.md) — 한컴 수식은 모두 treat_as_char. paragraph_layout 인라인 배치가 핵심 경로
