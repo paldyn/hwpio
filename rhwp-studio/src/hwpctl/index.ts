@@ -68,11 +68,32 @@ export class HwpCtrl {
     this.cursorPos = 0;
   }
 
-  /** HWP 파일로 내보내기 */
+  /** 원본 파일 형식에 맞게 HWP 또는 HWPX로 내보내기 */
   SaveAs(filename: string, format?: string, arg?: string): boolean {
     try {
-      const bytes = this.wasmDoc.exportHwp();
-      const blob = new Blob([bytes as BlobPart], { type: 'application/x-hwp' });
+      const sourceFormat = this.wasmDoc.getSourceFormat();
+      const isHwpx = format === 'hwpx' || (!format && sourceFormat === 'hwpx');
+
+      let bytes: Uint8Array;
+      let mimeType: string;
+      let ext: string;
+
+      if (isHwpx) {
+        bytes = this.wasmDoc.exportHwpx();
+        mimeType = 'application/hwp+zip';
+        ext = '.hwpx';
+      } else {
+        bytes = this.wasmDoc.exportHwp();
+        mimeType = 'application/x-hwp';
+        ext = '.hwp';
+      }
+
+      // 파일명에 확장자가 없으면 원본 형식에 맞게 추가
+      if (!filename.endsWith(ext) && !filename.endsWith('.hwp') && !filename.endsWith('.hwpx')) {
+        filename += ext;
+      }
+
+      const blob = new Blob([bytes as BlobPart], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;

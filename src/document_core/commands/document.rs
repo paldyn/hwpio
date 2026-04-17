@@ -13,6 +13,7 @@ use crate::error::HwpError;
 
 impl DocumentCore {
     pub fn from_bytes(data: &[u8]) -> Result<DocumentCore, HwpError> {
+        let source_format = crate::parser::detect_format(data);
         let mut document = crate::parser::parse_document(data)
             .map_err(|e| HwpError::InvalidFile(e.to_string()))?;
 
@@ -63,6 +64,7 @@ impl DocumentCore {
             file_name: String::new(),
             active_field: None,
             para_offset: Vec::new(),
+            source_format,
         };
 
         doc.paginate();
@@ -253,9 +255,15 @@ impl DocumentCore {
         Ok(self.get_document_info())
     }
 
-    /// SVG 렌더링 (네이티브 에러 타입)
+    /// Document IR을 HWP 5.0 CFB 바이너리로 직렬화 (네이티브 에러 타입)
     pub fn export_hwp_native(&self) -> Result<Vec<u8>, HwpError> {
         crate::serializer::serialize_document(&self.document)
+            .map_err(|e| HwpError::RenderError(e.to_string()))
+    }
+
+    /// Document IR을 HWPX(ZIP+XML)로 직렬화 (네이티브 에러 타입)
+    pub fn export_hwpx_native(&self) -> Result<Vec<u8>, HwpError> {
+        crate::serializer::serialize_hwpx(&self.document)
             .map_err(|e| HwpError::RenderError(e.to_string()))
     }
 
