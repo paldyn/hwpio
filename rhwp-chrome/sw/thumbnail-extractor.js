@@ -24,7 +24,6 @@ export async function extractThumbnailFromUrl(url) {
     const data = new Uint8Array(buffer);
 
     // HWP(CFB) 또는 HWPX(ZIP) 감지
-    // HWP(CFB) 또는 HWPX(ZIP) 감지
     const isZip = data.length >= 4 && data[0] === 0x50 && data[1] === 0x4B;
     const result = isZip
       ? await extractPrvImageFromZipAsync(data)
