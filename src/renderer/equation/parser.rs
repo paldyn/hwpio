@@ -395,7 +395,15 @@ impl EqParser {
 
         // 글꼴 스타일
         if let Some(&style) = FONT_STYLES.get(cmd) {
-            let body = self.parse_single_or_group();
+            // 다음 토큰이 구조 명령어(LEFT, RIGHT 등)이면 body 없이 반환
+            // rm P it LEFT(...) 에서 it이 LEFT를 body로 먹지 않도록
+            let body = if self.current_type() == TokenType::Command
+                && is_structure_command(&self.current_value().to_ascii_uppercase())
+            {
+                EqNode::Empty
+            } else {
+                self.parse_single_or_group()
+            };
             return EqNode::FontStyle {
                 style,
                 body: Box::new(body),
@@ -1392,4 +1400,14 @@ fn test_cases_double_amp() {
     eprintln!("CASES AST: {:#?}", ast);
     let s = format!("{:?}", ast);
     assert!(s.contains("Tab"), "Tab이 있어야 함: {}", s);
+}
+
+#[cfg(test)]
+#[test]
+fn test_rm_p_left() {
+    let script = "{rm{P}} it  left(A``|` B` right)";
+    let ast = parse(script);
+    eprintln!("RM_P AST: {:#?}", ast);
+    let s = format!("{:?}", ast);
+    assert!(s.contains("Paren"), "Paren이 있어야 함: {}", s);
 }
