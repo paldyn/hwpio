@@ -277,7 +277,7 @@ impl EqLayout {
     fn layout_function(&self, name: &str, fs: f64) -> LayoutBox {
         let w = estimate_text_width(name, fs, false);
         LayoutBox {
-            x: 0.0, y: 0.0, width: w + fs * 0.1, height: fs,
+            x: 0.0, y: 0.0, width: w + fs * 0.02, height: fs,
             baseline: fs * 0.8,
             kind: LayoutKind::Function(name.to_string()),
         }
