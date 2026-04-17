@@ -44,8 +44,8 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
     // 2. version.xml
     z.write_deflated("version.xml", VERSION_XML.as_bytes())?;
 
-    // 3. Contents/header.xml — Stage 1에서 동적 생성으로 전환 예정
-    let header_xml = header::write_header(doc)?;
+    // 3. Contents/header.xml — Stage 1 동적 생성 (IR 기반)
+    let header_xml = header::write_header(doc, &ctx)?;
     z.write_deflated("Contents/header.xml", &header_xml)?;
 
     // 4. Contents/section{N}.xml — 실제 섹션만큼, 없으면 0개
