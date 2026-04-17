@@ -73,6 +73,7 @@ export class HwpCtrl {
     try {
       const sourceFormat = this.wasmDoc.getSourceFormat();
       const isHwpx = format === 'hwpx' || (!format && sourceFormat === 'hwpx');
+      console.log(`[hwpctl] SaveAs: filename=${filename}, sourceFormat=${sourceFormat}, isHwpx=${isHwpx}`);
 
       let bytes: Uint8Array;
       let mimeType: string;
@@ -93,6 +94,7 @@ export class HwpCtrl {
         filename += ext;
       }
 
+      console.log(`[hwpctl] SaveAs: ${isHwpx ? 'HWPX' : 'HWP'}, ${bytes.length} bytes, ext=${ext}`);
       const blob = new Blob([bytes as BlobPart], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
