@@ -49,8 +49,13 @@ export const fileCommands: CommandDef[] = [
     async execute(services) {
       try {
         const saveName = services.wasm.fileName;
-        const bytes = services.wasm.exportHwp();
-        const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/x-hwp' });
+        const sourceFormat = services.wasm.getSourceFormat();
+        const isHwpx = sourceFormat === 'hwpx';
+        const bytes = isHwpx ? services.wasm.exportHwpx() : services.wasm.exportHwp();
+        const mimeType = isHwpx ? 'application/hwp+zip' : 'application/x-hwp';
+        const ext = isHwpx ? '.hwpx' : '.hwp';
+        const blob = new Blob([bytes as unknown as BlobPart], { type: mimeType });
+        console.log(`[file:save] format=${sourceFormat}, isHwpx=${isHwpx}, ${bytes.length} bytes`);
 
         // 1) File System Access API 지원 시 네이티브 저장 대화상자 사용
         if ('showSaveFilePicker' in window) {
@@ -58,8 +63,10 @@ export const fileCommands: CommandDef[] = [
             const handle = await window.showSaveFilePicker!({
               suggestedName: saveName,
               types: [{
-                description: 'HWP 문서',
-                accept: { 'application/x-hwp': ['.hwp'] },
+                description: isHwpx ? 'HWPX 문서' : 'HWP 문서',
+                accept: isHwpx
+                  ? { 'application/hwp+zip': ['.hwpx'] }
+                  : { 'application/x-hwp': ['.hwp'] },
               }],
             });
             const writable = await handle.createWritable();

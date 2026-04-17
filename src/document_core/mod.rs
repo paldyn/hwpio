@@ -101,6 +101,8 @@ pub struct DocumentCore {
     /// 구역별 문단 인덱스 오프셋 (삽입=+N, 삭제=-N, 페이지네이션 수렴 감지용)
     /// paginate() 후 리셋.
     pub(crate) para_offset: Vec<i32>,
+    /// 원본 파일 형식 (HWP/HWPX) — 저장 시 형식 분기용
+    pub(crate) source_format: crate::parser::FileFormat,
 }
 
 /// 활성 필드 위치 정보
@@ -216,6 +218,7 @@ impl DocumentCore {
             file_name: String::new(),
             active_field: None,
             para_offset: Vec::new(),
+            source_format: crate::parser::FileFormat::Hwp,
         }
     }
 }
