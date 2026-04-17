@@ -16,6 +16,7 @@ pub mod header;
 pub mod roundtrip;
 pub mod section;
 pub mod static_assets;
+pub mod table;
 pub mod utils;
 pub mod writer;
 
