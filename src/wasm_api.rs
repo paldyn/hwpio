@@ -2787,6 +2787,21 @@ impl HwpDocument {
         self.export_hwp_native().map_err(|e| e.into())
     }
 
+    /// Document IR을 HWPX(ZIP+XML)로 직렬화하여 반환한다.
+    #[wasm_bindgen(js_name = exportHwpx)]
+    pub fn export_hwpx(&self) -> Result<Vec<u8>, JsValue> {
+        self.export_hwpx_native().map_err(|e| e.into())
+    }
+
+    /// 원본 파일 형식을 반환한다 ("hwp" 또는 "hwpx").
+    #[wasm_bindgen(js_name = getSourceFormat)]
+    pub fn get_source_format(&self) -> String {
+        match self.core.source_format {
+            crate::parser::FileFormat::Hwpx => "hwpx".to_string(),
+            _ => "hwp".to_string(),
+        }
+    }
+
     /// 배포용(읽기전용) 문서를 편집 가능한 일반 문서로 변환한다.
     ///
     /// 반환값: JSON `{"ok":true,"converted":true}` 또는 `{"ok":true,"converted":false}`
