@@ -19,6 +19,7 @@ import { pageCommands } from '@/command/commands/page';
 import { toolCommands } from '@/command/commands/tool';
 import { ContextMenu } from '@/ui/context-menu';
 import { CommandPalette } from '@/ui/command-palette';
+import { showValidationModalIfNeeded } from '@/ui/validation-modal';
 import { CellSelectionRenderer } from '@/engine/cell-selection-renderer';
 import { TableObjectRenderer } from '@/engine/table-object-renderer';
 import { TableResizeRenderer } from '@/engine/table-resize-renderer';
@@ -423,6 +424,25 @@ async function initializeDocument(docInfo: DocumentInfo, displayName: string): P
     console.log('[initDoc] 7. inputHandler activateWithCaretPosition');
     inputHandler?.activateWithCaretPosition();
     console.log('[initDoc] 8. 완료');
+
+    // #177: HWPX 비표준 lineseg 감지 → 경고 있으면 모달로 사용자 선택 요청
+    try {
+      const report = wasm.getValidationWarnings();
+      console.log(`[validation] ${report.count} warnings`, report.summary);
+      if (report.count > 0) {
+        const choice = await showValidationModalIfNeeded(report);
+        console.log(`[validation] user choice: ${choice}`);
+        if (choice === 'auto-fix') {
+          const n = wasm.reflowLinesegs();
+          console.log(`[validation] reflowed ${n} paragraphs`);
+          // 렌더 재계산
+          canvasView?.loadDocument();
+          msg.textContent = `${displayName} (비표준 lineseg ${n}건 자동 보정됨)`;
+        }
+      }
+    } catch (e) {
+      console.warn('[validation] 감지/보정 실패 (치명적이지 않음):', e);
+    }
   } catch (error) {
     console.error('[initDoc] 오류:', error);
     if (window.innerWidth < 768) alert(`초기화 오류: ${error}`);

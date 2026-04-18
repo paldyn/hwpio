@@ -2802,6 +2802,93 @@ impl HwpDocument {
         }
     }
 
+    /// HWPX 비표준 감지 경고를 JSON 문자열로 반환한다 (#177).
+    ///
+    /// ## 반환 형식
+    ///
+    /// ```json
+    /// {
+    ///   "count": 3,
+    ///   "summary": {
+    ///     "lineseg 배열이 비어있음": 1,
+    ///     "lineseg 가 미계산 상태 (line_height=0)": 2
+    ///   },
+    ///   "warnings": [
+    ///     {
+    ///       "section": 0,
+    ///       "paragraph": 5,
+    ///       "kind": "LinesegArrayEmpty",
+    ///       "cell": null
+    ///     },
+    ///     {
+    ///       "section": 0,
+    ///       "paragraph": 10,
+    ///       "kind": "LinesegUncomputed",
+    ///       "cell": {"ctrl": 0, "row": 0, "col": 1, "innerPara": 0}
+    ///     }
+    ///   ]
+    /// }
+    /// ```
+    #[wasm_bindgen(js_name = getValidationWarnings)]
+    pub fn get_validation_warnings(&self) -> String {
+        let report = self.core.validation_report();
+
+        // summary 직렬화 (HashMap 순서 안정화를 위해 키 정렬)
+        let mut summary_parts: Vec<String> = Vec::new();
+        let mut entries: Vec<(String, usize)> = report.summary().into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        for (k, v) in &entries {
+            // 경고 메시지는 한국어 고정 문자열이므로 `"` / `\` 만 escape.
+            let escaped = k.replace('\\', "\\\\").replace('"', "\\\"");
+            summary_parts.push(format!("\"{}\":{}", escaped, v));
+        }
+
+        // warnings 직렬화
+        let mut warning_parts: Vec<String> = Vec::new();
+        for w in &report.warnings {
+            let cell_part = match &w.cell_path {
+                Some(cp) => format!(
+                    r#"{{"ctrl":{},"row":{},"col":{},"innerPara":{}}}"#,
+                    cp.table_ctrl_idx, cp.row, cp.col, cp.inner_para_idx,
+                ),
+                None => "null".to_string(),
+            };
+            let kind_name = match &w.kind {
+                crate::document_core::validation::WarningKind::LinesegArrayEmpty =>
+                    "LinesegArrayEmpty",
+                crate::document_core::validation::WarningKind::LinesegUncomputed =>
+                    "LinesegUncomputed",
+                crate::document_core::validation::WarningKind::LinesegTextRunReflow =>
+                    "LinesegTextRunReflow",
+            };
+            warning_parts.push(format!(
+                r#"{{"section":{},"paragraph":{},"kind":"{}","cell":{}}}"#,
+                w.section_idx,
+                w.paragraph_idx,
+                kind_name,
+                cell_part,
+            ));
+        }
+
+        format!(
+            r#"{{"count":{},"summary":{{{}}},"warnings":[{}]}}"#,
+            report.len(),
+            summary_parts.join(","),
+            warning_parts.join(","),
+        )
+    }
+
+    /// 사용자 명시 요청에 의한 lineseg 전체 reflow (#177).
+    ///
+    /// `reflow_zero_height_paragraphs` 의 자동 경로와 달리, "빈 line_segs + text 존재"
+    /// 케이스까지 포함해 재계산한다. 반환값은 실제로 reflow 된 문단 개수.
+    ///
+    /// 호출 이후 렌더 캐시·페이지네이션이 갱신되므로 즉시 렌더링하면 보정된 결과가 보인다.
+    #[wasm_bindgen(js_name = reflowLinesegs)]
+    pub fn reflow_linesegs(&mut self) -> usize {
+        self.core.reflow_linesegs_on_demand()
+    }
+
     /// 배포용(읽기전용) 문서를 편집 가능한 일반 문서로 변환한다.
     ///
     /// 반환값: JSON `{"ok":true,"converted":true}` 또는 `{"ok":true,"converted":false}`

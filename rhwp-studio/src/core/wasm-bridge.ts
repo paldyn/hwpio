@@ -1,5 +1,20 @@
 import init, { HwpDocument, version } from '@wasm/rhwp.js';
 import type { DocumentInfo, PageInfo, PageDef, SectionDef, CursorRect, HitTestResult, LineInfo, TableDimensions, CellInfo, CellBbox, CellProperties, TableProperties, DocumentPosition, MoveVerticalResult, SelectionRect, CharProperties, ParaProperties, CellPathEntry, NavContextEntry, FieldInfoResult, BookmarkInfo } from './types';
+
+/** HWPX 비표준 감지 경고 리포트 (#177). */
+export interface ValidationReport {
+  /** 경고 총 개수 */
+  count: number;
+  /** 경고 종류별 요약 (key: 한국어 설명, value: 개수) */
+  summary: Record<string, number>;
+  /** 개별 경고 목록 */
+  warnings: Array<{
+    section: number;
+    paragraph: number;
+    kind: 'LinesegArrayEmpty' | 'LinesegUncomputed' | 'LinesegTextRunReflow';
+    cell: { ctrl: number; row: number; col: number; innerPara: number } | null;
+  }>;
+}
 import { resolveFont, fontFamilyWithFallback } from './font-substitution';
 import { REGISTERED_FONTS } from './font-loader';
 
@@ -108,6 +123,24 @@ export class WasmBridge {
 
   getSourceFormat(): string {
     return this.doc?.getSourceFormat?.() ?? 'hwp';
+  }
+
+  /** HWPX 비표준 감지 경고 조회 (#177). */
+  getValidationWarnings(): ValidationReport {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    const raw = (this.doc as any).getValidationWarnings?.();
+    if (!raw) return { count: 0, summary: {}, warnings: [] };
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return { count: 0, summary: {}, warnings: [] };
+    }
+  }
+
+  /** 사용자 명시 요청에 의한 lineseg reflow (#177). 반환: reflow된 문단 수. */
+  reflowLinesegs(): number {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return (this.doc as any).reflowLinesegs?.() ?? 0;
   }
 
   get pageCount(): number {

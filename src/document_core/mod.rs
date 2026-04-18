@@ -10,6 +10,7 @@ mod commands;
 mod queries;
 pub(crate) mod html_table_import;
 pub mod table_calc;
+pub mod validation;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -103,6 +104,9 @@ pub struct DocumentCore {
     pub(crate) para_offset: Vec<i32>,
     /// 원본 파일 형식 (HWP/HWPX) — 저장 시 형식 분기용
     pub(crate) source_format: crate::parser::FileFormat,
+    /// HWPX 비표준 감지 등 문서 검증 경고.
+    /// `from_bytes` 에서 자동 생성되며, 사용자 고지·선택적 reflow 에 사용 (#177).
+    pub(crate) validation_report: validation::ValidationReport,
 }
 
 /// 활성 필드 위치 정보
@@ -219,6 +223,16 @@ impl DocumentCore {
             active_field: None,
             para_offset: Vec::new(),
             source_format: crate::parser::FileFormat::Hwp,
+            validation_report: validation::ValidationReport::new(),
         }
+    }
+
+    /// 문서 검증 리포트에 대한 참조를 반환한다.
+    ///
+    /// `from_bytes` 시점에 HWPX 비표준 lineseg 감지가 수행되며, 경고가 있으면
+    /// 사용자에게 고지되어야 한다. 자동 reflow 는 적용되지 않고 사용자가
+    /// 명시적으로 `reflow_linesegs_on_demand()` 를 호출해야 보정된다.
+    pub fn validation_report(&self) -> &validation::ValidationReport {
+        &self.validation_report
     }
 }
