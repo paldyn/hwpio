@@ -11,11 +11,13 @@
 pub mod canonical_defaults;
 pub mod content;
 pub mod context;
+pub mod field;
 pub mod fixtures;
 pub mod header;
 pub mod picture;
 pub mod roundtrip;
 pub mod section;
+pub mod shape;
 pub mod static_assets;
 pub mod table;
 pub mod utils;

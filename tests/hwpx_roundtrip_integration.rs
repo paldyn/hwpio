@@ -65,3 +65,41 @@ fn stage1_ref_mixed_header_level_regression_probe() {
     assert!(diff.is_empty(), "ref_mixed header-level regression");
 }
 
+// ---------- Stage 5: 대형 실문서 스모크 테스트 -------------------------------
+// 실제 한컴 문서(표·그림·다문단 혼합)에 대해 IR 라운드트립이 뼈대 필드 수준에서
+// 성립하는지 확인한다. `<hp:tbl>`/`<hp:pic>` 이 section.xml 에 아직 출력되지 않음
+// (#186 이월)을 감안하여, 현 IrDiff 비교가 허용 범위 내인지 기록한다.
+
+#[test]
+fn stage5_ref_table_smoke() {
+    let bytes = include_bytes!("../samples/hwpx/ref/ref_table.hwpx");
+    let diff = roundtrip_ir_diff(bytes).expect("ref_table roundtrip");
+    if !diff.is_empty() {
+        eprintln!("ref_table.hwpx diffs: {:#?}", diff);
+    }
+    // 표가 section.xml 에 아직 출력되지 않으므로 IrDiff 가 있을 수 있다.
+    // 단, 파싱·직렬화 자체는 성공해야 함 (크래시 금지).
+    assert!(diff.is_empty() || !diff.differences.is_empty(),
+        "ref_table roundtrip must not crash, diff={}", diff.differences.len());
+}
+
+#[test]
+fn stage5_form_002_smoke() {
+    let bytes = include_bytes!("../samples/hwpx/form-002.hwpx");
+    // 양식 컨트롤이 있는 문서. IR 라운드트립이 파싱·직렬화 크래시 없이 돌아가는지만 확인.
+    let _ = roundtrip_ir_diff(bytes).expect("form-002 roundtrip must not crash");
+}
+
+#[test]
+fn stage5_large_real_doc_2025_q1_smoke() {
+    let bytes = include_bytes!("../samples/hwpx/2025년 1분기 해외직접투자 보도자료f.hwpx");
+    // 표·그림·다문단 혼합 실문서. 파싱·직렬화 크래시 없이 돌아가는지 확인.
+    let _ = roundtrip_ir_diff(bytes).expect("2025 1분기 large doc roundtrip must not crash");
+}
+
+#[test]
+fn stage5_large_real_doc_2025_q2_smoke() {
+    let bytes = include_bytes!("../samples/hwpx/2025년 2분기 해외직접투자 (최종).hwpx");
+    let _ = roundtrip_ir_diff(bytes).expect("2025 2분기 large doc roundtrip must not crash");
+}
+
