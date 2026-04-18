@@ -2858,6 +2858,8 @@ impl HwpDocument {
                     "LinesegArrayEmpty",
                 crate::document_core::validation::WarningKind::LinesegUncomputed =>
                     "LinesegUncomputed",
+                crate::document_core::validation::WarningKind::LinesegTextRunReflow =>
+                    "LinesegTextRunReflow",
             };
             warning_parts.push(format!(
                 r#"{{"section":{},"paragraph":{},"kind":"{}","cell":{}}}"#,

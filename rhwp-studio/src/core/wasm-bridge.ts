@@ -11,7 +11,7 @@ export interface ValidationReport {
   warnings: Array<{
     section: number;
     paragraph: number;
-    kind: 'LinesegArrayEmpty' | 'LinesegUncomputed';
+    kind: 'LinesegArrayEmpty' | 'LinesegUncomputed' | 'LinesegTextRunReflow';
     cell: { ctrl: number; row: number; col: number; innerPara: number } | null;
   }>;
 }

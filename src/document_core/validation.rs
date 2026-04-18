@@ -38,6 +38,13 @@ pub enum WarningKind {
     /// lineseg 가 1개만 있고 `line_height=0` — 명백한 "미계산 상태".
     /// 기존 `needs_line_seg_reflow` 조건과 동일.
     LinesegUncomputed,
+    /// 긴 텍스트 문단인데 lineseg 가 1개뿐 — 한컴이 textRun 단위 reflow 로 보정하는
+    /// 패턴. 명세상 각 줄마다 lineseg 가 있어야 하나 한컴 일부 버전이 문단 전체를
+    /// 1개 lineseg 로 선언한다 (Discussion #188). rhwp 는 1개 lineseg 를 신뢰해
+    /// 모든 텍스트를 한 줄에 그려 겹침이 발생.
+    ///
+    /// 휴리스틱: `text.chars().count() > threshold && text 내 '\n' 없음 && line_segs.len() == 1`
+    LinesegTextRunReflow,
 }
 
 impl fmt::Display for WarningKind {
@@ -46,6 +53,7 @@ impl fmt::Display for WarningKind {
         match self {
             LinesegArrayEmpty => write!(f, "lineseg 배열이 비어있음"),
             LinesegUncomputed => write!(f, "lineseg 가 미계산 상태 (line_height=0)"),
+            LinesegTextRunReflow => write!(f, "lineseg 가 문단당 1개 (한컴 textRun reflow 의존)"),
         }
     }
 }
