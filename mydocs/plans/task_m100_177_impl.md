@@ -338,16 +338,19 @@ fn task177_lineseg_preserved_on_roundtrip() {
 
 ---
 
-## 5. Stage 3 — Reflow on-demand + WASM API
+## 5. Stage 3 — Reflow on-demand + WASM API + rhwp-studio 모달 UI
 
 ### 5.1 설계 결정 재확인
 
-작업지시자 결정: Reflow 기본 동작 = **명백한 경우만 유지**. 즉 기존 `needs_line_seg_reflow` 조건(`line_segs.len()==1 && line_height==0`)은 **그대로 유지**.
+작업지시자 결정:
+- Reflow 기본 동작 = **명백한 경우만 유지**. 기존 `needs_line_seg_reflow` 조건(`line_segs.len()==1 && line_height==0`) 유지
+- 사용자 고지 방식 = **rhwp-studio 모달창** (2026-04-18 확정)
 
 **따라서 자동 reflow 자체는 변경 없음**. 추가 작업은:
 
 1. **사용자가 명시적으로 "전체 reflow 요청" 시** 더 넓은 범위(모든 `LinesegArrayEmpty` / `LinesegUncomputed` 경고)를 reflow
 2. **WASM API** 로 validation_report 조회 + reflow 실행
+3. **rhwp-studio 모달 UI** — 문서 로드 시 경고가 있으면 모달창으로 알리고 사용자 선택
 
 ### 5.2 `DocumentCore` 에 신규 메서드
 
@@ -434,20 +437,56 @@ impl HwpDocument {
 }
 ```
 
-### 5.4 단위 테스트 (Stage 3)
+### 5.4 rhwp-studio 모달 UI
+
+**목표**: 문서 로드 완료 직후 `getValidationWarnings()` 호출 → 경고가 있으면 **모달창**으로 고지.
+
+**위치**: `rhwp-studio/src/` — 문서 로드 파이프라인(예: `command/commands/file.ts` 의 open 완료 시점)에서 모달 트리거.
+
+**모달 내용**:
+- 제목: "HWPX 비표준 감지"
+- 본문: "이 문서는 HWPX 명세를 일부 준수하지 않는 값을 포함합니다 (경고 N건). 렌더링 품질을 위해 자동 보정을 권장합니다."
+- 경고 요약 표시 (경고 종류별 개수)
+- 버튼 (왼쪽부터):
+  - **[자동 보정] (기본 선택 · 강조)** — 사용자가 지시한 대로 이것이 Default.
+    클릭 시 `reflowLinesegs()` 호출 → 렌더 재계산 → 모달 닫기
+  - [그대로 보기] — 모달만 닫음
+  - [상세 보기] — 경고 목록 펼침 (선택 UI, 상세 항목 나열)
+
+**기본 선택**: **자동 보정**. 모달이 열리면 포커스가 [자동 보정] 버튼에 있어야 하며, Enter 키 입력 시 자동 보정이 실행된다.
+
+**비침습 원칙**: 경고가 0건이면 모달 생성 안 함.
+
+**코드 위치** (예상):
+- 신규: `rhwp-studio/src/ui/validation-modal.ts` — 모달 생성·이벤트 바인딩
+- 수정: 문서 로드 완료 훅(예: `wasm-bridge.ts` 의 `initFromBytes` 또는 `file.ts` 의 open 콜백)
+
+### 5.5 단위 테스트 (Stage 3)
+
+Rust 측 (wasm_api 및 document_core):
 
 1. `reflow_on_demand_processes_empty_linesegs` — 빈 line_segs 문단이 reflow 됨
 2. `reflow_on_demand_returns_count` — reflow 된 문단 수 정확 반환
 3. `validation_report_accessor` — `validation_report()` 가 Stage 1 의 경고 반환
 4. `needs_reflow_broadly_covers_empty_and_uncomputed` — 판정 조건 검증
+5. `get_validation_warnings_returns_json` — JSON 포맷 검증
 
-### 5.5 완료 기준
+TypeScript 측 (rhwp-studio):
+
+6. 수동 검증(E2E 또는 수동) — 실문서 로드 시 모달 표시 확인
+
+### 5.6 완료 기준
 
 - [ ] `DocumentCore::reflow_linesegs_on_demand()` 추가
-- [ ] `DocumentCore::validation_report()` 접근자 추가
+- [ ] `DocumentCore::validation_report()` 접근자 추가 (Stage 1 에서 완료)
 - [ ] WASM API `getValidationWarnings()`, `reflowLinesegs()` 추가
-- [ ] 단위 테스트 4개
+- [ ] rhwp-studio 모달 UI 신규 (`validation-modal.ts`)
+- [ ] 문서 로드 훅에서 모달 트리거
+- [ ] 기본 포커스 = [자동 보정] 버튼, Enter = 자동 보정 실행
+- [ ] 경고 0건 시 모달 미생성 (비침습)
+- [ ] Rust 단위 테스트 5개
 - [ ] 기존 `reflow_zero_height_paragraphs` 동작 유지 (변경 없음)
+- [ ] WASM 빌드 통과
 
 ---
 

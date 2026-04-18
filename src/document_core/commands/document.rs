@@ -307,6 +307,84 @@ impl DocumentCore {
         para.line_segs.len() == 1 && para.line_segs[0].line_height == 0
     }
 
+    /// 사용자 명시 요청에 의한 더 넓은 reflow 판정 (#177).
+    ///
+    /// `needs_line_seg_reflow` (명백한 미계산) + 다음 케이스 포함:
+    /// - 텍스트가 있는데 line_segs 가 비어있음 (LinesegArrayEmpty)
+    ///
+    /// 이 함수는 `reflow_linesegs_on_demand` 에서만 사용되며, 자동 파싱 경로에는 영향 없음.
+    fn needs_reflow_broadly(para: &crate::model::paragraph::Paragraph) -> bool {
+        if !para.text.is_empty() && para.line_segs.is_empty() {
+            return true;
+        }
+        Self::needs_line_seg_reflow(para)
+    }
+
+    /// 사용자 명시 요청에 의한 전체 lineseg reflow (#177).
+    ///
+    /// `validate_linesegs` 에 기록된 경고 대상 문단들 중 reflow 가능한 것을 모두 처리한다.
+    /// 기본 파싱 경로의 `reflow_zero_height_paragraphs` 와 달리 이 메서드는
+    /// 사용자가 UI에서 "자동 보정" 을 명시적으로 선택했을 때만 호출되어야 한다.
+    ///
+    /// 반환값: 실제로 reflow 된 문단 개수 (본문 + 셀 내부 합계).
+    pub fn reflow_linesegs_on_demand(&mut self) -> usize {
+        // 스타일은 재해소해도 동일 결과이므로 재계산하여 borrow 충돌 회피.
+        let styles = resolve_styles(&self.document.doc_info, self.dpi);
+        let dpi = self.dpi;
+        let mut reflowed = 0usize;
+
+        for section in &mut self.document.sections {
+            let page_def = &section.section_def.page_def;
+            let column_def = Self::find_initial_column_def(&section.paragraphs);
+            let layout = PageLayoutInfo::from_page_def(page_def, &column_def, dpi);
+            let col_width = layout
+                .column_areas
+                .first()
+                .map(|a| a.width)
+                .unwrap_or(layout.body_area.width);
+
+            for para in &mut section.paragraphs {
+                if Self::needs_reflow_broadly(para) {
+                    let para_style = styles.para_styles.get(para.para_shape_id as usize);
+                    let margin_left = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+                    let margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+                    let available_width = (col_width - margin_left - margin_right).max(1.0);
+                    reflow_line_segs(para, available_width, &styles, dpi);
+                    reflowed += 1;
+                }
+                // 표 셀 내부 문단도 동일 처리
+                for ctrl in &mut para.controls {
+                    if let Control::Table(ref mut table) = ctrl {
+                        for cell in &mut table.cells {
+                            for cell_para in &mut cell.paragraphs {
+                                if Self::needs_reflow_broadly(cell_para) {
+                                    reflow_line_segs(cell_para, col_width, &styles, dpi);
+                                    reflowed += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if reflowed > 0 {
+            // 재구성 · 페이지네이션 재실행 필요
+            self.styles = styles;
+            self.composed = self
+                .document
+                .sections
+                .iter()
+                .map(|s| compose_section(s))
+                .collect();
+            let sec_count = self.document.sections.len();
+            self.dirty_sections = vec![true; sec_count];
+            self.paginate();
+        }
+
+        reflowed
+    }
+
     /// 내장 템플릿에서 빈 문서 생성 (네이티브)
     pub fn create_blank_document_native(&mut self) -> Result<String, HwpError> {
         const BLANK_TEMPLATE: &[u8] = include_bytes!("../../../saved/blank2010.hwp");
@@ -712,5 +790,41 @@ mod validate_linesegs_tests {
         let summary = report.summary();
         assert_eq!(summary.get("lineseg 배열이 비어있음").copied(), Some(1));
         assert_eq!(summary.get("lineseg 가 미계산 상태 (line_height=0)").copied(), Some(1));
+    }
+
+    /// needs_reflow_broadly: 빈 line_segs + text → true
+    #[test]
+    fn needs_reflow_broadly_covers_empty_linesegs() {
+        let mut para = Paragraph::default();
+        para.text = "hello".to_string();
+        // line_segs 비움
+        assert!(DocumentCore::needs_reflow_broadly(&para));
+    }
+
+    /// needs_reflow_broadly: 기존 조건 (line_segs=1, line_height=0) → true
+    #[test]
+    fn needs_reflow_broadly_covers_uncomputed_lineseg() {
+        let mut para = Paragraph::default();
+        para.text = "hello".to_string();
+        para.line_segs.push(LineSeg::default());
+        assert!(DocumentCore::needs_reflow_broadly(&para));
+    }
+
+    /// needs_reflow_broadly: 정상 line_segs → false
+    #[test]
+    fn needs_reflow_broadly_skips_healthy_paragraph() {
+        let mut para = Paragraph::default();
+        para.text = "hello".to_string();
+        let mut seg = LineSeg::default();
+        seg.line_height = 1000;
+        para.line_segs.push(seg);
+        assert!(!DocumentCore::needs_reflow_broadly(&para));
+    }
+
+    /// needs_reflow_broadly: 빈 문단 (text 없음) → false
+    #[test]
+    fn needs_reflow_broadly_skips_empty_paragraph() {
+        let para = Paragraph::default();
+        assert!(!DocumentCore::needs_reflow_broadly(&para));
     }
 }
