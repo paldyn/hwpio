@@ -2,12 +2,17 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use crate::model::control::Control;
 use crate::model::document::Document;
+use crate::model::paragraph::Paragraph;
 use crate::renderer::style_resolver::{resolve_styles, ResolvedStyleSet};
 use crate::renderer::composer::{compose_section, reflow_line_segs};
 use crate::renderer::layout::LayoutEngine;
 use crate::renderer::page_layout::PageLayoutInfo;
 use crate::renderer::DEFAULT_DPI;
+use crate::document_core::validation::{
+    CellPath, ValidationReport, ValidationWarning, WarningKind,
+};
 use crate::document_core::{DocumentCore, DEFAULT_FALLBACK_FONT};
 use crate::error::HwpError;
 
@@ -18,6 +23,11 @@ impl DocumentCore {
             .map_err(|e| HwpError::InvalidFile(e.to_string()))?;
 
         let styles = resolve_styles(&document.doc_info, DEFAULT_DPI);
+
+        // 비표준 lineseg 감지 — reflow 이전 시점에 IR을 그대로 검증.
+        // 경고는 사용자에게 고지되며, 자동 reflow 는 `needs_line_seg_reflow` 조건에만 한정.
+        // 사용자 명시 reflow 는 `reflow_linesegs_on_demand()` 를 통해서만 수행 (#177).
+        let validation_report = Self::validate_linesegs(&document);
 
         // lineSegArray가 없는 문단(line_height=0)에 대해 합성 LineSeg 생성
         // HWPX에서 lineSegArray 누락 시 기본값(모든 필드 0)이 들어가므로,
@@ -65,10 +75,82 @@ impl DocumentCore {
             active_field: None,
             para_offset: Vec::new(),
             source_format,
+            validation_report,
         };
 
         doc.paginate();
         Ok(doc)
+    }
+
+    /// HWPX 비표준 lineseg 감지 (#177).
+    ///
+    /// `reflow_zero_height_paragraphs` 호출 **이전** 상태의 IR을 기준으로 검증한다.
+    /// reflow 이후에 호출하면 이미 line_height 가 채워져 감지 불가.
+    ///
+    /// 감지 규칙:
+    /// - 텍스트가 있는데 `line_segs` 가 비어있음 → `LinesegArrayEmpty`
+    /// - `line_segs.len() == 1 && line_height == 0` → `LinesegUncomputed`
+    ///
+    /// 표 셀 내부 문단도 재귀 검사한다.
+    pub(crate) fn validate_linesegs(document: &Document) -> ValidationReport {
+        let mut report = ValidationReport::new();
+        for (si, section) in document.sections.iter().enumerate() {
+            for (pi, para) in section.paragraphs.iter().enumerate() {
+                Self::check_paragraph_linesegs(para, si, pi, None, &mut report);
+
+                // 표 셀 내부 문단도 재귀 검사
+                for (ci, ctrl) in para.controls.iter().enumerate() {
+                    if let Control::Table(table) = ctrl {
+                        for cell in &table.cells {
+                            for (inner_pi, cell_para) in cell.paragraphs.iter().enumerate() {
+                                let cell_path = CellPath {
+                                    table_ctrl_idx: ci,
+                                    row: cell.row,
+                                    col: cell.col,
+                                    inner_para_idx: inner_pi,
+                                };
+                                Self::check_paragraph_linesegs(
+                                    cell_para,
+                                    si,
+                                    pi,
+                                    Some(cell_path),
+                                    &mut report,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        report
+    }
+
+    fn check_paragraph_linesegs(
+        para: &Paragraph,
+        section_idx: usize,
+        paragraph_idx: usize,
+        cell_path: Option<CellPath>,
+        report: &mut ValidationReport,
+    ) {
+        // 규칙 1: 텍스트가 있는데 lineseg 배열이 비어있음
+        if para.line_segs.is_empty() && !para.text.is_empty() {
+            report.push(ValidationWarning {
+                section_idx,
+                paragraph_idx,
+                cell_path,
+                kind: WarningKind::LinesegArrayEmpty,
+            });
+            return; // 후속 규칙 건너뜀
+        }
+        // 규칙 2: 미계산 상태 (기존 needs_line_seg_reflow 와 동일 조건)
+        if para.line_segs.len() == 1 && para.line_segs[0].line_height == 0 {
+            report.push(ValidationWarning {
+                section_idx,
+                paragraph_idx,
+                cell_path,
+                kind: WarningKind::LinesegUncomputed,
+            });
+        }
     }
 
     /// lineSegArray가 없는(line_height=0) 문단에 대해 합성 LineSeg를 생성한다.
@@ -496,5 +578,139 @@ impl DocumentCore {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod validate_linesegs_tests {
+    use super::*;
+    use crate::model::document::{Document, Section};
+    use crate::model::paragraph::{LineSeg, Paragraph};
+
+    /// 텍스트는 있는데 line_segs 가 비어있는 문단 — LinesegArrayEmpty 감지
+    #[test]
+    fn validate_detects_empty_linesegs() {
+        let mut doc = Document::default();
+        let mut section = Section::default();
+        let mut para = Paragraph::default();
+        para.text = "hello".to_string();
+        // line_segs 비워둠
+        section.paragraphs.push(para);
+        doc.sections.push(section);
+
+        let report = DocumentCore::validate_linesegs(&doc);
+        assert_eq!(report.len(), 1);
+        assert_eq!(report.warnings[0].kind, WarningKind::LinesegArrayEmpty);
+        assert_eq!(report.warnings[0].section_idx, 0);
+        assert_eq!(report.warnings[0].paragraph_idx, 0);
+        assert!(report.warnings[0].cell_path.is_none());
+    }
+
+    /// line_segs 가 1개, line_height=0 — LinesegUncomputed 감지
+    #[test]
+    fn validate_detects_uncomputed_lineseg() {
+        let mut doc = Document::default();
+        let mut section = Section::default();
+        let mut para = Paragraph::default();
+        para.text = "hello".to_string();
+        para.line_segs.push(LineSeg::default()); // line_height=0 상태
+        section.paragraphs.push(para);
+        doc.sections.push(section);
+
+        let report = DocumentCore::validate_linesegs(&doc);
+        assert_eq!(report.len(), 1);
+        assert_eq!(report.warnings[0].kind, WarningKind::LinesegUncomputed);
+    }
+
+    /// 정상 lineseg (line_height > 0) — 경고 없음
+    #[test]
+    fn validate_skips_healthy_lineseg() {
+        let mut doc = Document::default();
+        let mut section = Section::default();
+        let mut para = Paragraph::default();
+        para.text = "hello".to_string();
+        let mut seg = LineSeg::default();
+        seg.line_height = 1000;
+        para.line_segs.push(seg);
+        section.paragraphs.push(para);
+        doc.sections.push(section);
+
+        let report = DocumentCore::validate_linesegs(&doc);
+        assert!(report.is_empty(), "healthy paragraph should not warn: {:?}", report.warnings);
+    }
+
+    /// 빈 문단 (텍스트도 line_segs 도 없음) — 경고 없음 (빈 문단은 허용)
+    #[test]
+    fn validate_skips_empty_paragraph() {
+        let mut doc = Document::default();
+        let mut section = Section::default();
+        section.paragraphs.push(Paragraph::default());
+        doc.sections.push(section);
+
+        let report = DocumentCore::validate_linesegs(&doc);
+        assert!(report.is_empty());
+    }
+
+    /// 표 셀 내부 문단도 검증 — cell_path 가 기록됨
+    #[test]
+    fn validate_recurses_into_table_cells() {
+        use crate::model::table::{Cell, Table};
+
+        let mut doc = Document::default();
+        let mut section = Section::default();
+        let mut outer_para = Paragraph::default();
+
+        // 셀 내부에 문제가 있는 문단
+        let mut cell_para = Paragraph::default();
+        cell_para.text = "in-cell".to_string();
+        // line_segs 비워둠 → LinesegArrayEmpty 감지 대상
+
+        let mut cell = Cell::default();
+        cell.row = 0;
+        cell.col = 0;
+        cell.paragraphs.push(cell_para);
+
+        let mut table = Table::default();
+        table.row_count = 1;
+        table.col_count = 1;
+        table.cells.push(cell);
+
+        outer_para.controls.push(Control::Table(Box::new(table)));
+        section.paragraphs.push(outer_para);
+        doc.sections.push(section);
+
+        let report = DocumentCore::validate_linesegs(&doc);
+        assert_eq!(report.len(), 1);
+        assert_eq!(report.warnings[0].kind, WarningKind::LinesegArrayEmpty);
+        let cp = report.warnings[0].cell_path.expect("cell_path should be set");
+        assert_eq!(cp.table_ctrl_idx, 0);
+        assert_eq!(cp.row, 0);
+        assert_eq!(cp.col, 0);
+        assert_eq!(cp.inner_para_idx, 0);
+    }
+
+    /// 다중 경고 — 각각 기록됨
+    #[test]
+    fn validate_records_multiple_warnings() {
+        let mut doc = Document::default();
+        let mut section = Section::default();
+
+        let mut p1 = Paragraph::default();
+        p1.text = "a".to_string();
+        // line_segs 비움
+
+        let mut p2 = Paragraph::default();
+        p2.text = "b".to_string();
+        p2.line_segs.push(LineSeg::default()); // line_height=0
+
+        section.paragraphs.push(p1);
+        section.paragraphs.push(p2);
+        doc.sections.push(section);
+
+        let report = DocumentCore::validate_linesegs(&doc);
+        assert_eq!(report.len(), 2);
+        let summary = report.summary();
+        assert_eq!(summary.get("lineseg 배열이 비어있음").copied(), Some(1));
+        assert_eq!(summary.get("lineseg 가 미계산 상태 (line_height=0)").copied(), Some(1));
     }
 }
