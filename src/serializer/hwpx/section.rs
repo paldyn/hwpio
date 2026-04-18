@@ -4,6 +4,11 @@
 //! IR에서 가져와 동적으로 생성한다. `secPr`/`pagePr`/`grid` 등 섹션 정의는 템플릿 보존
 //! (IR에 대응 필드가 더 담길 때까지 점진적으로 동적화 예정).
 //!
+//! Stage #177 (2026-04-18): `<hp:lineseg>` 직렬화를 IR 기반으로 전환.
+//! `Paragraph.line_segs` 의 6개 필드(line_height, text_height, baseline_distance,
+//! line_spacing, column_start/segment_width, tag)를 그대로 출력하여 **원본 lineseg 값
+//! 보존**. rhwp 는 자신의 문서에서 새로 부정확한 값을 생산하지 않는다.
+//!
 //! IR 매핑 관행:
 //!   - `section.paragraphs` 여러 개 = 하드 문단 경계 (`<hp:p>` 여러 개)
 //!   - `paragraph.text` 내 `\n` = 소프트 라인브레이크 (`<hp:lineBreak/>`, 같은 문단 내)
@@ -12,9 +17,10 @@
 //!   - `paragraph.style_id` → `<hp:p styleIDRef>`
 //!   - `paragraph.column_type` → `<hp:p pageBreak/columnBreak>`
 //!   - `paragraph.char_shapes[0].char_shape_id` → 첫 `<hp:run charPrIDRef>`
+//!   - `paragraph.line_segs[i]` → 각 `<hp:lineseg>` 속성 (6개 필드 그대로 출력)
 
 use crate::model::document::{Document, Section};
-use crate::model::paragraph::{ColumnBreakType, Paragraph};
+use crate::model::paragraph::{ColumnBreakType, LineSeg, Paragraph};
 
 use super::context::SerializeContext;
 use super::utils::xml_escape;
@@ -51,8 +57,10 @@ pub fn write_section(
     let mut vert_cursor: u32 = 0;
 
     let first_para = section.paragraphs.first();
-    let first_text = first_para.map(|p| p.text.as_str()).unwrap_or("");
-    let (first_t, first_linesegs, first_advance) = render_paragraph_parts(first_text, vert_cursor);
+    let (first_t, first_linesegs, first_advance) = match first_para {
+        Some(p) => render_paragraph_parts(p, vert_cursor),
+        None => render_paragraph_parts_for_text("", vert_cursor),
+    };
     vert_cursor = first_advance;
 
     let mut out = EMPTY_SECTION_XML.replacen(TEXT_SLOT, &first_t, 1);
@@ -79,7 +87,7 @@ pub fn write_section(
     if section.paragraphs.len() > 1 {
         let mut extra = String::new();
         for (idx, p) in section.paragraphs.iter().enumerate().skip(1) {
-            let (t, linesegs, advance) = render_paragraph_parts(&p.text, vert_cursor);
+            let (t, linesegs, advance) = render_paragraph_parts(p, vert_cursor);
             vert_cursor = advance;
             let cs = first_run_char_shape_id(p);
             extra.push_str(&render_hp_p_open(p, idx as u32));
@@ -114,18 +122,39 @@ fn first_run_char_shape_id(p: &Paragraph) -> u32 {
     p.char_shapes.first().map(|r| r.char_shape_id).unwrap_or(0)
 }
 
-/// 문단 텍스트 하나를 (`<hp:t>` XML, lineseg XML, 다음 vert_cursor)로 변환.
-fn render_paragraph_parts(text: &str, vert_start: u32) -> (String, String, u32) {
+/// Paragraph 하나를 (`<hp:t>` XML, lineseg XML, 다음 vert_cursor)로 변환.
+///
+/// `<hp:lineseg>` 출력 원칙 (#177):
+/// - `para.line_segs` 가 비어있지 않으면 **IR 값 그대로 출력**
+/// - 비어있을 때만 텍스트 내 `\n` 기반으로 fallback 생성 (빈 문단·`Document::default()` 호환)
+fn render_paragraph_parts(para: &Paragraph, vert_start: u32) -> (String, String, u32) {
+    let t_xml = render_hp_t_content(&para.text);
+
+    if !para.line_segs.is_empty() {
+        // IR 기반 출력 — 원본 lineseg 값 보존 (#177)
+        let linesegs = render_lineseg_array_from_ir(&para.line_segs);
+        let vert_end = next_vert_cursor_from_ir(&para.line_segs, vert_start);
+        (t_xml, linesegs, vert_end)
+    } else {
+        // Fallback — IR에 line_segs 가 없으면 기존 생성 로직 유지
+        let (linesegs, vert_end) = render_lineseg_array_fallback(&para.text, vert_start);
+        (t_xml, linesegs, vert_end)
+    }
+}
+
+/// IR 없이 텍스트만 있을 때 `<hp:t>` 와 fallback lineseg 생성.
+/// `write_section` 이 `first_para == None` 인 경우를 위해 유지.
+fn render_paragraph_parts_for_text(text: &str, vert_start: u32) -> (String, String, u32) {
+    let t_xml = render_hp_t_content(text);
+    let (linesegs, vert_end) = render_lineseg_array_fallback(text, vert_start);
+    (t_xml, linesegs, vert_end)
+}
+
+/// `<hp:t>...</hp:t>` 본문 생성 — 탭/소프트브레이크/XML escape 포함.
+fn render_hp_t_content(text: &str) -> String {
     let mut t_xml = String::from("<hp:t>");
-    let mut linesegs = String::new();
-    push_lineseg(&mut linesegs, 0, vert_start);
-
     let mut buf = String::new();
-    let mut utf16_pos: u32 = 0;
-    let mut lines_in_para: u32 = 0;
-
     for c in text.chars() {
-        let u16_len = c.len_utf16() as u32;
         match c {
             '\t' => {
                 flush_buf(&mut t_xml, &mut buf);
@@ -133,31 +162,83 @@ fn render_paragraph_parts(text: &str, vert_start: u32) -> (String, String, u32) 
                     r#"<hp:tab width="{}" leader="0" type="1"/>"#,
                     TAB_DEFAULT_WIDTH
                 ));
-                utf16_pos += u16_len;
             }
             '\n' => {
                 flush_buf(&mut t_xml, &mut buf);
                 t_xml.push_str("<hp:lineBreak/>");
-                utf16_pos += u16_len;
-                lines_in_para += 1;
-                push_lineseg(
-                    &mut linesegs,
-                    utf16_pos,
-                    vert_start + lines_in_para * VERT_STEP,
-                );
             }
             c if (c as u32) < 0x20 => { /* 기타 제어문자 무시 */ }
-            c => {
-                buf.push(c);
-                utf16_pos += u16_len;
-            }
+            c => buf.push(c),
         }
     }
     flush_buf(&mut t_xml, &mut buf);
     t_xml.push_str("</hp:t>");
+    t_xml
+}
 
+/// IR의 `line_segs` 를 그대로 XML로 직렬화 (6개 필드 전부 IR 값 사용).
+///
+/// rhwp 는 자신의 문서에서 비표준 lineseg 를 **새로 생산하지 않는다**.
+/// 원본 한컴 파일의 lineseg 값이 파서에 의해 `Paragraph.line_segs` 에 담겼다면,
+/// 저장 시 그 값을 훼손 없이 보존한다.
+fn render_lineseg_array_from_ir(segs: &[LineSeg]) -> String {
+    let mut out = String::new();
+    for seg in segs {
+        out.push_str(&format!(
+            r#"<hp:lineseg textpos="{}" vertpos="{}" vertsize="{}" textheight="{}" baseline="{}" spacing="{}" horzpos="{}" horzsize="{}" flags="{}"/>"#,
+            seg.text_start,
+            seg.vertical_pos,
+            seg.line_height,
+            seg.text_height,
+            seg.baseline_distance,
+            seg.line_spacing,
+            seg.column_start,
+            seg.segment_width,
+            seg.tag,
+        ));
+    }
+    out
+}
+
+/// IR 기반 다음 문단의 vert_start 계산 — 마지막 lineseg 의 vpos + lh 사용.
+fn next_vert_cursor_from_ir(segs: &[LineSeg], vert_start: u32) -> u32 {
+    if let Some(last) = segs.last() {
+        // vertical_pos 는 섹션 시작 기준 절대값일 수도, 문단 기준 상대값일 수도 있음.
+        // 현재 rhwp 는 섹션 절대값이므로 그대로 + lh 로 다음 커서 산출.
+        let next = (last.vertical_pos as i64) + (last.line_height.max(0) as i64);
+        if next > vert_start as i64 { next as u32 } else { vert_start + VERT_STEP }
+    } else {
+        vert_start + VERT_STEP
+    }
+}
+
+/// Fallback — IR 에 line_segs 가 없는 경우에만 사용 (예: `Document::default()`).
+/// 과거 동작을 보존하기 위해 기존 정적값으로 lineseg 생성.
+fn render_lineseg_array_fallback(text: &str, vert_start: u32) -> (String, u32) {
+    let mut linesegs = String::new();
+    push_lineseg_static(&mut linesegs, 0, vert_start);
+    let mut utf16_pos: u32 = 0;
+    let mut lines_in_para: u32 = 0;
+    for c in text.chars() {
+        let u16_len = c.len_utf16() as u32;
+        match c {
+            '\t' | '\n' => {
+                utf16_pos += u16_len;
+                if c == '\n' {
+                    lines_in_para += 1;
+                    push_lineseg_static(
+                        &mut linesegs,
+                        utf16_pos,
+                        vert_start + lines_in_para * VERT_STEP,
+                    );
+                }
+            }
+            c if (c as u32) < 0x20 => {}
+            _ => utf16_pos += u16_len,
+        }
+    }
     let vert_end = vert_start + (lines_in_para + 1) * VERT_STEP;
-    (t_xml, linesegs, vert_end)
+    (linesegs, vert_end)
 }
 
 fn flush_buf(t_xml: &mut String, buf: &mut String) {
@@ -167,7 +248,11 @@ fn flush_buf(t_xml: &mut String, buf: &mut String) {
     }
 }
 
-fn push_lineseg(out: &mut String, textpos: u32, vertpos: u32) {
+/// Fallback 전용 static lineseg 생성기 — IR에 값이 없을 때만 사용.
+/// 주: 이 함수의 출력은 "명세 상 정확한 값" 이 아닌 정적 자리표이므로,
+/// 호출 후 문서는 `DocumentCore::from_bytes` 의 `reflow_zero_height_paragraphs`
+/// 또는 사용자의 `reflow_linesegs_on_demand` 로 재계산되어야 한다.
+fn push_lineseg_static(out: &mut String, textpos: u32, vertpos: u32) {
     out.push_str(&format!(
         r#"<hp:lineseg textpos="{}" vertpos="{}" vertsize="1000" textheight="1000" baseline="850" spacing="600" horzpos="0" horzsize="{}" flags="{}"/>"#,
         textpos, vertpos, HORZ_SIZE, LINE_FLAGS,
@@ -299,5 +384,99 @@ mod tests {
             xml.matches(r#"charPrIDRef="6""#).count() >= 1,
             "second paragraph must emit charPrIDRef=6"
         );
+    }
+
+    // ---------- #177 Stage 2: IR 기반 lineseg 출력 ----------
+
+    use crate::model::paragraph::LineSeg;
+
+    #[test]
+    fn task177_lineseg_reflects_ir_values() {
+        // IR에 담긴 lineseg 값이 XML 속성에 그대로 반영되는지 확인.
+        let mut para = Paragraph::default();
+        para.text = "hello".to_string();
+        para.line_segs.push(LineSeg {
+            text_start: 0,
+            vertical_pos: 5000,
+            line_height: 1200,
+            text_height: 1100,
+            baseline_distance: 900,
+            line_spacing: 700,
+            column_start: 100,
+            segment_width: 50000,
+            tag: 999,
+        });
+        let (doc, section) = make_doc_with_paragraph(para);
+        let ctx = SerializeContext::collect_from_document(&doc);
+        let xml = String::from_utf8(write_section(&section, &doc, 0, &ctx).unwrap()).unwrap();
+        assert!(xml.contains(r#"<hp:lineseg textpos="0" vertpos="5000" vertsize="1200" textheight="1100" baseline="900" spacing="700" horzpos="100" horzsize="50000" flags="999"/>"#),
+            "lineseg must reflect IR values exactly, got XML: {}",
+            &xml[xml.find("<hp:lineseg").unwrap_or(0)..(xml.find("<hp:lineseg").unwrap_or(0) + 200).min(xml.len())]);
+    }
+
+    #[test]
+    fn task177_multiple_linesegs_preserved_in_order() {
+        let mut para = Paragraph::default();
+        para.text = "three\nlines\nhere".to_string();
+        for (i, (tp, vp, lh)) in [(0u32, 0i32, 1000), (6, 1500, 1200), (12, 3100, 1100)].iter().enumerate() {
+            let _ = i;
+            para.line_segs.push(LineSeg {
+                text_start: *tp,
+                vertical_pos: *vp,
+                line_height: *lh,
+                text_height: *lh,
+                baseline_distance: 850,
+                line_spacing: 600,
+                column_start: 0,
+                segment_width: 42520,
+                tag: 393216,
+            });
+        }
+        let (doc, section) = make_doc_with_paragraph(para);
+        let ctx = SerializeContext::collect_from_document(&doc);
+        let xml = String::from_utf8(write_section(&section, &doc, 0, &ctx).unwrap()).unwrap();
+        // 3개 lineseg 모두 출력되고 각각의 vertsize 값이 IR 값과 일치
+        assert_eq!(xml.matches("<hp:lineseg ").count(), 3);
+        assert!(xml.contains(r#"textpos="0" vertpos="0" vertsize="1000""#));
+        assert!(xml.contains(r#"textpos="6" vertpos="1500" vertsize="1200""#));
+        assert!(xml.contains(r#"textpos="12" vertpos="3100" vertsize="1100""#));
+    }
+
+    #[test]
+    fn task177_fallback_used_when_ir_empty() {
+        // IR 의 line_segs 가 비어있으면 fallback 경로로 정적 값 출력.
+        let mut para = Paragraph::default();
+        para.text = "a\nb".to_string(); // 소프트브레이크 1개 → fallback 은 lineseg 2개 생성
+        let (doc, section) = make_doc_with_paragraph(para);
+        let ctx = SerializeContext::collect_from_document(&doc);
+        let xml = String::from_utf8(write_section(&section, &doc, 0, &ctx).unwrap()).unwrap();
+        // 정적 fallback: vertsize=1000, textheight=1000, baseline=850, spacing=600
+        assert!(xml.contains(r#"vertsize="1000""#));
+        assert!(xml.contains(r#"baseline="850""#));
+    }
+
+    #[test]
+    fn task177_ir_lineseg_takes_precedence_over_text() {
+        // text 의 \n 개수가 2개(lineseg 3개 기대)이지만 IR의 line_segs 는 1개만 있음.
+        // IR 기반 출력이 우선 — 1개만 출력돼야 함.
+        let mut para = Paragraph::default();
+        para.text = "a\nb\nc".to_string(); // 3줄
+        para.line_segs.push(LineSeg {
+            text_start: 0,
+            vertical_pos: 0,
+            line_height: 2000, // IR 값
+            text_height: 2000,
+            baseline_distance: 1700,
+            line_spacing: 300,
+            column_start: 0,
+            segment_width: 40000,
+            tag: 0,
+        });
+        let (doc, section) = make_doc_with_paragraph(para);
+        let ctx = SerializeContext::collect_from_document(&doc);
+        let xml = String::from_utf8(write_section(&section, &doc, 0, &ctx).unwrap()).unwrap();
+        // IR 에 1개만 있으므로 lineseg 도 1개만 출력 (rhwp 는 원본 보존)
+        assert_eq!(xml.matches("<hp:lineseg ").count(), 1);
+        assert!(xml.contains(r#"vertsize="2000""#), "IR value 2000 must be used, not fallback 1000");
     }
 }
