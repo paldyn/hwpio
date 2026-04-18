@@ -323,6 +323,7 @@ export function onClick(this: any, e: MouseEvent): void {
                 ref: { sec: ref.sec, ppi: ref.ppi, ci: ref.ci, type: ref.type },
                 origWidth: props.width,
                 origHeight: props.height,
+                rotationAngle: (props.rotationAngle ?? 0) as number,
                 startClientX: e.clientX,
                 startClientY: e.clientY,
                 pageIndex: picBbox.pageIndex,
