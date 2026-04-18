@@ -1,30 +1,47 @@
 //! HWPX(ZIP+XML) 직렬화 모듈 — `parser::hwpx`의 역방향.
 //!
-//! ## 단계
-//! - Stage 1 (현재): 한컴2020 호환 빈 HWPX 생성 (11개 필수 파일)
-//! - Stage 2: 본문 문단·텍스트·lineSegArray IR 직렬화
+//! ## 단계 (#182)
+//! - Stage 0 (완료): 기반 공사 — SerializeContext, IrDiff 하네스, canonical_defaults
+//! - Stage 1: header.xml IR 기반 동적 생성
+//! - Stage 2: section.xml 동적화 + charPrIDRef 매핑
 //! - Stage 3: 표(Table)
 //! - Stage 4: 그림(Picture) + BinData
-//! - Stage 5: 라운드트립 테스트 + CLI
+//! - Stage 5: 도형·필드 + 대형 실문서 스모크
 
+pub mod canonical_defaults;
 pub mod content;
+pub mod context;
+pub mod field;
+pub mod fixtures;
 pub mod header;
+pub mod picture;
+pub mod roundtrip;
 pub mod section;
+pub mod shape;
 pub mod static_assets;
+pub mod table;
 pub mod utils;
 pub mod writer;
+
+use std::collections::HashSet;
 
 use crate::model::document::Document;
 
 use super::SerializeError;
+use content::BinDataEntry as ContentBinDataEntry;
+use context::SerializeContext;
 use writer::HwpxZipWriter;
 
 /// Document IR을 HWPX(ZIP+XML) 바이트로 직렬화한다.
 ///
-/// Stage 1: 한컴2020이 요구하는 11개 필수 파일을 모두 생성한다. 빈 Document의 경우
-/// 보일러플레이트와 최소 골격(1개 섹션, 1개 문단)만 포함된다.
+/// Stage 0 이후: 빈 문서 특수 분기를 제거하고 **항상 동적 경로**를 탄다.
+/// `SerializeContext`가 1-pass 스캔으로 ID 풀을 구성하고, 각 writer가 동일 컨텍스트를
+/// 참조한다. 직렬화 종료 시 `assert_all_refs_resolved()`가 미등록 참조를 단언한다.
 pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
     use static_assets::*;
+
+    // 1-pass: ID 풀 구성
+    let ctx = SerializeContext::collect_from_document(doc);
 
     let mut z = HwpxZipWriter::new();
 
@@ -34,8 +51,8 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
     // 2. version.xml
     z.write_deflated("version.xml", VERSION_XML.as_bytes())?;
 
-    // 3. Contents/header.xml
-    let header_xml = header::write_header(doc)?;
+    // 3. Contents/header.xml — Stage 1 동적 생성 (IR 기반)
+    let header_xml = header::write_header(doc, &ctx)?;
     z.write_deflated("Contents/header.xml", &header_xml)?;
 
     // 4. Contents/section{N}.xml — 실제 섹션만큼, 없으면 0개
@@ -43,7 +60,7 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
         .map(|i| format!("Contents/section{}.xml", i))
         .collect();
     for (i, sec) in doc.sections.iter().enumerate() {
-        let xml = section::write_section(sec, doc, i)?;
+        let xml = section::write_section(sec, doc, i, &ctx)?;
         z.write_deflated(&section_hrefs[i], &xml)?;
     }
 
@@ -57,21 +74,73 @@ pub fn serialize_hwpx(doc: &Document) -> Result<Vec<u8>, SerializeError> {
     // 7. META-INF/container.rdf
     z.write_deflated("META-INF/container.rdf", META_INF_CONTAINER_RDF.as_bytes())?;
 
-    // 8. Contents/content.hpf — 정확히 1섹션 + BinData 없는 빈 문서일 때는 레퍼런스 템플릿
-    if doc.sections.len() == 1 && doc.bin_data_content.is_empty() {
-        z.write_deflated("Contents/content.hpf", EMPTY_CONTENT_HPF.as_bytes())?;
-    } else {
-        let content_hpf = content::write_content_hpf(&section_hrefs, &[])?;
-        z.write_deflated("Contents/content.hpf", &content_hpf)?;
+    // 8. BinData ZIP 엔트리 (Stage 4)
+    //    `ctx.bin_data_map` 의 엔트리 순서대로 실제 바이너리를 ZIP에 추가.
+    //    3-way 단언(binaryItemIDRef ↔ manifest ↔ ZIP entry) 의 1차 출력 지점.
+    let bin_entries = ctx.bin_data_entries();
+    let mut zip_bin_entries: HashSet<String> = HashSet::new();
+    for entry in &bin_entries {
+        let data = doc
+            .bin_data_content
+            .iter()
+            .find(|b| b.id == entry.bin_data_id)
+            .ok_or_else(|| {
+                SerializeError::XmlError(format!(
+                    "BinDataContent 누락: bin_data_id={}",
+                    entry.bin_data_id
+                ))
+            })?;
+        z.write_deflated(&entry.href, &data.data)?;
+        zip_bin_entries.insert(entry.href.clone());
     }
 
-    // 9. META-INF/container.xml
+    // 9. Contents/content.hpf — 항상 동적 경로 + BinData 매니페스트 엔트리
+    let content_bin_entries: Vec<ContentBinDataEntry> = bin_entries
+        .iter()
+        .map(|e| ContentBinDataEntry {
+            id: e.manifest_id.clone(),
+            href: e.href.clone(),
+            media_type: e.media_type.clone(),
+        })
+        .collect();
+    let content_hpf = content::write_content_hpf(&section_hrefs, &content_bin_entries)?;
+    z.write_deflated("Contents/content.hpf", &content_hpf)?;
+
+    // 10. META-INF/container.xml
     z.write_deflated("META-INF/container.xml", META_INF_CONTAINER_XML.as_bytes())?;
 
-    // 10. META-INF/manifest.xml
+    // 11. META-INF/manifest.xml
     z.write_deflated("META-INF/manifest.xml", META_INF_MANIFEST_XML.as_bytes())?;
 
+    // 참조 정합성 단언 (Stage 1+)
+    ctx.assert_all_refs_resolved()?;
+
+    // 3-way BinData 단언 (Stage 4):
+    //   - ctx.bin_data_map 의 manifest_id/href 집합
+    //   - content.hpf opf:item (위에서 content_bin_entries 로 생성됨, 집합 동일)
+    //   - ZIP entry (위에서 zip_bin_entries 로 기록됨)
+    // 세 집합이 동일해야 한컴이 바인딩 오류 없이 그림을 표시함.
+    assert_bin_data_3way(&bin_entries, &zip_bin_entries)?;
+
     z.finish()
+}
+
+/// 3-way BinData 동기화 단언: `ctx.bin_data_entries()`, content.hpf manifest,
+/// ZIP entry 의 href 집합이 모두 일치하는지 확인.
+fn assert_bin_data_3way(
+    bin_entries: &[context::BinDataEntry],
+    zip_entries: &HashSet<String>,
+) -> Result<(), SerializeError> {
+    let ctx_hrefs: HashSet<String> = bin_entries.iter().map(|e| e.href.clone()).collect();
+    if ctx_hrefs != *zip_entries {
+        let missing_zip: Vec<_> = ctx_hrefs.difference(zip_entries).cloned().collect();
+        let orphan_zip: Vec<_> = zip_entries.difference(&ctx_hrefs).cloned().collect();
+        return Err(SerializeError::XmlError(format!(
+            "3-way BinData 불일치: ctx(href) vs zip_entries — ctx에만 있음: {:?}, zip에만 있음: {:?}",
+            missing_zip, orphan_zip
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
