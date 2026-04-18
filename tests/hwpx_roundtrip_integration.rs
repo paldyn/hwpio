@@ -103,3 +103,66 @@ fn stage5_large_real_doc_2025_q2_smoke() {
     let _ = roundtrip_ir_diff(bytes).expect("2025 2분기 large doc roundtrip must not crash");
 }
 
+// ---------- #177 Stage 2: Serializer 원본 lineseg 보존 -----------------------
+// rhwp 가 한컴 HWPX 의 `<hp:lineseg>` 값을 저장 시 훼손 없이 보존하는지 확인.
+// 원본 lineseg 값이 재파싱 IR 과 일치해야 함.
+
+#[test]
+fn task177_lineseg_preserved_on_roundtrip_ref_text() {
+    use rhwp::parser::hwpx::parse_hwpx;
+    use rhwp::serializer::hwpx::serialize_hwpx;
+
+    let bytes = include_bytes!("../samples/hwpx/ref/ref_text.hwpx");
+    let doc1 = parse_hwpx(bytes).expect("parse ref_text");
+    let out = serialize_hwpx(&doc1).expect("serialize");
+    let doc2 = parse_hwpx(&out).expect("reparse");
+
+    assert_eq!(doc1.sections.len(), doc2.sections.len());
+    for (si, (s1, s2)) in doc1.sections.iter().zip(doc2.sections.iter()).enumerate() {
+        assert_eq!(s1.paragraphs.len(), s2.paragraphs.len(), "section {} paragraph count", si);
+        for (pi, (p1, p2)) in s1.paragraphs.iter().zip(s2.paragraphs.iter()).enumerate() {
+            assert_eq!(
+                p1.line_segs.len(),
+                p2.line_segs.len(),
+                "section {} paragraph {} line_segs count",
+                si, pi,
+            );
+            for (li, (l1, l2)) in p1.line_segs.iter().zip(p2.line_segs.iter()).enumerate() {
+                assert_eq!(l1.text_start, l2.text_start,
+                    "sec {} para {} lineseg {} text_start", si, pi, li);
+                assert_eq!(l1.vertical_pos, l2.vertical_pos,
+                    "sec {} para {} lineseg {} vertical_pos", si, pi, li);
+                assert_eq!(l1.line_height, l2.line_height,
+                    "sec {} para {} lineseg {} line_height", si, pi, li);
+                assert_eq!(l1.text_height, l2.text_height,
+                    "sec {} para {} lineseg {} text_height", si, pi, li);
+                assert_eq!(l1.baseline_distance, l2.baseline_distance,
+                    "sec {} para {} lineseg {} baseline_distance", si, pi, li);
+                assert_eq!(l1.line_spacing, l2.line_spacing,
+                    "sec {} para {} lineseg {} line_spacing", si, pi, li);
+            }
+        }
+    }
+}
+
+#[test]
+fn task177_lineseg_preserved_on_roundtrip_ref_mixed() {
+    use rhwp::parser::hwpx::parse_hwpx;
+    use rhwp::serializer::hwpx::serialize_hwpx;
+
+    let bytes = include_bytes!("../samples/hwpx/ref/ref_mixed.hwpx");
+    let doc1 = parse_hwpx(bytes).expect("parse ref_mixed");
+    let out = serialize_hwpx(&doc1).expect("serialize");
+    let doc2 = parse_hwpx(&out).expect("reparse");
+
+    // 첫 섹션 첫 문단의 line_segs 만이라도 완전 일치 확인
+    let p1 = &doc1.sections[0].paragraphs[0];
+    let p2 = &doc2.sections[0].paragraphs[0];
+    assert_eq!(p1.line_segs.len(), p2.line_segs.len());
+    for (a, b) in p1.line_segs.iter().zip(p2.line_segs.iter()) {
+        assert_eq!(a.line_height, b.line_height,
+            "line_height 보존 실패: IR {} vs reparsed {}", a.line_height, b.line_height);
+        assert_eq!(a.vertical_pos, b.vertical_pos);
+    }
+}
+
