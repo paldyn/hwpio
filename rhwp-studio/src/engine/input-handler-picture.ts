@@ -297,15 +297,20 @@ function calcResizedBboxRotated(
   const h0 = state.bbox.h;
   const cx0 = state.bbox.x + w0 / 2;
   const cy0 = state.bbox.y + h0 / 2;
-  const MIN = MIN_SIZE_HWP / PX_TO_HWP;
   const dir: string = state.dir;
 
-  let newW = w0;
-  let newH = h0;
-  if (dir.includes('e')) newW = Math.max(w0 + localDx, MIN);
-  if (dir.includes('w')) newW = Math.max(w0 - localDx, MIN);
-  if (dir.includes('s')) newH = Math.max(h0 + localDy, MIN);
-  if (dir.includes('n')) newH = Math.max(h0 - localDy, MIN);
+  // 크기 제한 없이 마우스 이동 반영 (반대편으로 넘어가면 음수 발생 가능)
+  let valW = w0;
+  let valH = h0;
+  if (dir.includes('e')) valW = w0 + localDx;
+  if (dir.includes('w')) valW = w0 - localDx;
+  if (dir.includes('s')) valH = h0 + localDy;
+  if (dir.includes('n')) valH = h0 - localDy;
+
+  // 최종 출력용 크기는 절대값 사용 (최소 크기는 아주 작게만 제한)
+  const MIN = 1; 
+  const newW = Math.max(Math.abs(valW), MIN);
+  const newH = Math.max(Math.abs(valH), MIN);
 
   // pivot: 드래그하지 않는 반대쪽 로컬 좌표 (원본 크기 기준)
   const pivotLocalX = dir.includes('e') ? -w0 / 2 : (dir.includes('w') ? w0 / 2 : 0);
@@ -315,9 +320,9 @@ function calcResizedBboxRotated(
   const pivotPageX = cx0 + pivotLocalX * cosA - pivotLocalY * sinA;
   const pivotPageY = cy0 + pivotLocalX * sinA + pivotLocalY * cosA;
 
-  // 새 크기에서 pivot의 로컬 좌표
-  const newPivotLocalX = dir.includes('e') ? -newW / 2 : (dir.includes('w') ? newW / 2 : 0);
-  const newPivotLocalY = dir.includes('s') ? -newH / 2 : (dir.includes('n') ? newH / 2 : 0);
+  // 새 크기에서 pivot의 로컬 좌표 (valW/valH가 음수면 pivot 방향이 반전됨)
+  const newPivotLocalX = dir.includes('e') ? -valW / 2 : (dir.includes('w') ? valW / 2 : 0);
+  const newPivotLocalY = dir.includes('s') ? -valH / 2 : (dir.includes('n') ? valH / 2 : 0);
 
   // pivot 고정 조건으로 새 중심 계산
   const newCx = pivotPageX - (newPivotLocalX * cosA - newPivotLocalY * sinA);
@@ -468,16 +473,34 @@ export function calcResizedBbox(this: any, e: MouseEvent, zoom: number): { x: nu
   const s = this.pictureResizeState!;
   const dx = (e.clientX - s.startClientX) / zoom; // page px
   const dy = (e.clientY - s.startClientY) / zoom;
-  const MIN = MIN_SIZE_HWP / PX_TO_HWP; // ≈1mm in page px
-  const isMulti = s.multiRefs && s.multiRefs.length > 0;
+  const MIN = 1;
 
   let { x, y, w, h } = s.bbox;
   const dir = s.dir;
 
-  if (dir.includes('e')) { w = Math.max(w + dx, MIN); }
-  if (dir.includes('w')) { w = Math.max(w - dx, MIN); x = s.bbox.x + s.bbox.w - w; }
-  if (dir.includes('s')) { h = Math.max(h + dy, MIN); }
-  if (dir.includes('n')) { h = Math.max(h - dy, MIN); y = s.bbox.y + s.bbox.h - h; }
+  // 가로 크기 및 위치 계산 (Flip 허용)
+  if (dir.includes('e')) {
+    const valW = s.bbox.w + dx;
+    w = Math.max(Math.abs(valW), MIN);
+    if (valW < 0) x = s.bbox.x + valW; // 반대편으로 넘어가면 시작점 이동
+  } else if (dir.includes('w')) {
+    const valW = s.bbox.w - dx;
+    w = Math.max(Math.abs(valW), MIN);
+    if (valW >= 0) x = s.bbox.x + dx;
+    else x = s.bbox.x + s.bbox.w; // 반대편으로 넘어가면 오른쪽 끝이 시작점
+  }
+
+  // 세로 크기 및 위치 계산 (Flip 허용)
+  if (dir.includes('s')) {
+    const valH = s.bbox.h + dy;
+    h = Math.max(Math.abs(valH), MIN);
+    if (valH < 0) y = s.bbox.y + valH;
+  } else if (dir.includes('n')) {
+    const valH = s.bbox.h - dy;
+    h = Math.max(Math.abs(valH), MIN);
+    if (valH >= 0) y = s.bbox.y + dy;
+    else y = s.bbox.y + s.bbox.h;
+  }
 
   return { x, y, width: w, height: h };
 }
