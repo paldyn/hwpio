@@ -287,13 +287,17 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
 
 /// HWPTAG_SHAPE_COMPONENT_OLE 레코드 파싱
 ///
-/// 레코드 구조 (pyhwp / hwplib 참조, HWP 5.0):
-/// - u32 extent_x
-/// - u32 extent_y
-/// - u8  flags
-/// - u16 drawing_aspect
-/// - u32 bin_data_id
-/// - 이후 바이트는 라운드트립 보존용으로 `raw_tag_data`에 저장
+/// 1.hwp 실측 바이트 레이아웃 (30바이트):
+/// ```
+/// 01 00 00 00   u32 property/type (1)
+/// 20 1C 00 00   u32 extent_x (HWPUNIT)
+/// 20 1C 00 00   u32 extent_y
+/// 01 00 00 00   u32 bin_data_id  ← DocInfo BinData 목록의 storage_id
+/// 00 00 00 00   u32 reserved/flags
+/// 00 00 00 00   u32 reserved
+/// 00 00 00 00   u32 reserved
+/// 00 00         u16 reserved/aspect
+/// ```
 pub(crate) fn parse_ole_shape(common: CommonObjAttr, drawing: DrawingObjAttr, tag_data: &[u8]) -> OleShape {
     let mut ole = OleShape::default();
     ole.common = common;
@@ -301,18 +305,13 @@ pub(crate) fn parse_ole_shape(common: CommonObjAttr, drawing: DrawingObjAttr, ta
     ole.raw_tag_data = tag_data.to_vec();
 
     let mut r = ByteReader::new(tag_data);
+    let _property = r.read_u32().unwrap_or(0);
     ole.extent_x = r.read_i32().unwrap_or(0);
     ole.extent_y = r.read_i32().unwrap_or(0);
-    ole.flags = r.read_u8().unwrap_or(0);
-    let aspect_val = r.read_u16().unwrap_or(0);
-    ole.drawing_aspect = match aspect_val {
-        0 => OleDrawingAspect::Content,
-        1 => OleDrawingAspect::Icon,
-        2 => OleDrawingAspect::Thumbnail,
-        4 => OleDrawingAspect::DocPrint,
-        _ => OleDrawingAspect::Content,
-    };
     ole.bin_data_id = r.read_u32().unwrap_or(0);
+    // 뒤에 flags/aspect 필드가 있을 수 있으나 스펙 불확실 — 기본값 유지
+    ole.flags = 0;
+    ole.drawing_aspect = OleDrawingAspect::Content;
     ole
 }
 
@@ -999,42 +998,38 @@ mod task195_tests {
 
     #[test]
     fn test_parse_ole_shape_minimal() {
-        // extent_x=1000, extent_y=2000, flags=0x01, aspect=1(Icon), bin_data_id=5
+        // 1.hwp 레이아웃 실측 기반: property(4) + extent_x(4) + extent_y(4) + bin_data_id(4)
         let mut data = Vec::new();
-        data.extend_from_slice(&1000i32.to_le_bytes());
-        data.extend_from_slice(&2000i32.to_le_bytes());
-        data.push(0x01);
-        data.extend_from_slice(&1u16.to_le_bytes());
-        data.extend_from_slice(&5u32.to_le_bytes());
+        data.extend_from_slice(&1u32.to_le_bytes());       // property
+        data.extend_from_slice(&1000i32.to_le_bytes());    // extent_x
+        data.extend_from_slice(&2000i32.to_le_bytes());    // extent_y
+        data.extend_from_slice(&5u32.to_le_bytes());       // bin_data_id
+        data.extend_from_slice(&[0u8; 14]);                // padding
 
         let ole = parse_ole_shape(CommonObjAttr::default(), DrawingObjAttr::default(), &data);
         assert_eq!(ole.extent_x, 1000);
         assert_eq!(ole.extent_y, 2000);
-        assert_eq!(ole.flags, 0x01);
-        assert_eq!(ole.drawing_aspect, OleDrawingAspect::Icon);
         assert_eq!(ole.bin_data_id, 5);
         assert_eq!(ole.raw_tag_data.len(), data.len());
     }
 
     #[test]
-    fn test_parse_ole_shape_content_aspect() {
+    fn test_parse_ole_shape_bin_id_42() {
         let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes());
         data.extend_from_slice(&0i32.to_le_bytes());
         data.extend_from_slice(&0i32.to_le_bytes());
-        data.push(0);
-        data.extend_from_slice(&0u16.to_le_bytes()); // aspect=0
         data.extend_from_slice(&42u32.to_le_bytes());
         let ole = parse_ole_shape(CommonObjAttr::default(), DrawingObjAttr::default(), &data);
-        assert_eq!(ole.drawing_aspect, OleDrawingAspect::Content);
         assert_eq!(ole.bin_data_id, 42);
     }
 
     #[test]
     fn test_parse_ole_shape_truncated_graceful() {
         // 4바이트만 — 나머지 필드는 기본값으로 채워져야 함
-        let data = [0x10, 0x00, 0x00, 0x00]; // extent_x=16만
+        let data = [0x10, 0x00, 0x00, 0x00]; // property=16
         let ole = parse_ole_shape(CommonObjAttr::default(), DrawingObjAttr::default(), &data);
-        assert_eq!(ole.extent_x, 16);
+        assert_eq!(ole.extent_x, 0);
         assert_eq!(ole.extent_y, 0);
         assert_eq!(ole.bin_data_id, 0);
         assert_eq!(ole.raw_tag_data.len(), 4);

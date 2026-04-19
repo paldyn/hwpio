@@ -109,6 +109,7 @@ impl RenderNode {
             RenderNodeType::FormObject(_) => ("Form", String::new()),
             RenderNodeType::FootnoteMarker(_) => ("FnMarker", String::new()),
             RenderNodeType::Placeholder(_) => ("Placeholder", String::new()),
+            RenderNodeType::RawSvg(_) => ("RawSvg", String::new()),
         };
         buf.push_str(&format!("\"type\":\"{}\",\"bbox\":{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}}",
             type_str, self.bbox.x, self.bbox.y, self.bbox.width, self.bbox.height));
@@ -195,6 +196,15 @@ pub enum RenderNodeType {
     FootnoteMarker(FootnoteMarkerNode),
     /// 차트/OLE placeholder (배경 rect + 중앙 텍스트 라벨) — Task #195
     Placeholder(PlaceholderNode),
+    /// 이미 생성된 SVG 조각을 그대로 출력 (OOXML 차트 등) — Task #195 단계 8
+    RawSvg(RawSvgNode),
+}
+
+/// 미리 렌더된 SVG 조각 (Task #195 단계 8)
+#[derive(Debug, Clone)]
+pub struct RawSvgNode {
+    /// 삽입할 SVG 조각 (유효한 `<g>...</g>` 또는 개별 요소)
+    pub svg: String,
 }
 
 /// 차트/OLE placeholder 렌더 노드 (Task #195)

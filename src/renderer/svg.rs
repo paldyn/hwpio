@@ -334,6 +334,10 @@ impl SvgRenderer {
             RenderNodeType::FormObject(form) => {
                 self.render_form_object(form, &node.bbox);
             }
+            RenderNodeType::RawSvg(r) => {
+                // Task #195 단계 8: OOXML 차트 SVG 조각 그대로 삽입
+                self.output.push_str(&r.svg);
+            }
             RenderNodeType::Placeholder(ph) => {
                 // Task #195: 차트/OLE placeholder (점선 테두리 + 중앙 라벨)
                 let cx = node.bbox.x + node.bbox.width / 2.0;
