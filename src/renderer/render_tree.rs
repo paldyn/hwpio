@@ -108,6 +108,7 @@ impl RenderNode {
             RenderNodeType::Group(_) => ("Group", String::new()),
             RenderNodeType::FormObject(_) => ("Form", String::new()),
             RenderNodeType::FootnoteMarker(_) => ("FnMarker", String::new()),
+            RenderNodeType::Placeholder(_) => ("Placeholder", String::new()),
         };
         buf.push_str(&format!("\"type\":\"{}\",\"bbox\":{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}}",
             type_str, self.bbox.x, self.bbox.y, self.bbox.width, self.bbox.height));
@@ -192,6 +193,19 @@ pub enum RenderNodeType {
     FormObject(FormObjectNode),
     /// 각주/미주 마커 (인라인 위첨자)
     FootnoteMarker(FootnoteMarkerNode),
+    /// 차트/OLE placeholder (배경 rect + 중앙 텍스트 라벨) — Task #195
+    Placeholder(PlaceholderNode),
+}
+
+/// 차트/OLE placeholder 렌더 노드 (Task #195)
+#[derive(Debug, Clone)]
+pub struct PlaceholderNode {
+    /// 배경 색상 (ARGB)
+    pub fill_color: u32,
+    /// 테두리 색상 (ARGB)
+    pub stroke_color: u32,
+    /// 표시할 라벨(중앙 정렬)
+    pub label: String,
 }
 
 /// 각주/미주 마커 렌더 노드

@@ -966,51 +966,30 @@ impl LayoutEngine {
                 parent.children.push(img_node);
             }
             ShapeObject::Chart(chart) => {
-                // Task #195 단계 4: 차트 placeholder (연한 파란 배경 + 점선 테두리)
-                let (mut style, gradient) = drawing_to_shape_style(&chart.drawing);
-                if style.fill_color.is_none() && gradient.is_none() {
-                    style.fill_color = Some(0xFFE8F0FE); // 연한 파란
-                }
-                if style.stroke_color.is_none() || style.stroke_width <= 0.0 {
-                    style.stroke_color = Some(0xFF4A90E2);
-                    style.stroke_width = 1.0;
-                    style.stroke_dash = crate::renderer::StrokeDash::Dash;
-                }
+                // Task #195: 차트 placeholder (점선 테두리 + "차트" 라벨)
+                let _chart = chart;
                 let node_id = tree.next_id();
                 let node = RenderNode::new(
                     node_id,
-                    RenderNodeType::Rectangle(RectangleNode {
-                        section_index: Some(section_index),
-                        para_index: Some(para_index),
-                        control_index: Some(control_index),
-                        transform,
-                        ..RectangleNode::new(0.0, style, gradient)
+                    RenderNodeType::Placeholder(crate::renderer::render_tree::PlaceholderNode {
+                        fill_color: 0xFFE8F0FE,
+                        stroke_color: 0xFF4A90E2,
+                        label: "차트 (Chart)".to_string(),
                     }),
                     BoundingBox::new(render_x, render_y, render_w, render_h),
                 );
                 parent.children.push(node);
             }
             ShapeObject::Ole(ole) => {
-                // Task #195 단계 4: OLE placeholder (연한 회색 배경 + 점선 테두리)
-                let (mut style, gradient) = drawing_to_shape_style(&ole.drawing);
-                if style.fill_color.is_none() && gradient.is_none() {
-                    style.fill_color = Some(0xFFF0F0F0); // 연한 회색
-                }
-                if style.stroke_color.is_none() || style.stroke_width <= 0.0 {
-                    style.stroke_color = Some(0xFF909090);
-                    style.stroke_width = 1.0;
-                    style.stroke_dash = crate::renderer::StrokeDash::Dash;
-                }
-                let _bin_id = ole.bin_data_id; // 단계 4 이후: BinData 프리뷰 추출
+                // Task #195: OLE placeholder (점선 테두리 + "OLE" 라벨)
+                let label = format!("OLE 개체 (BinData #{})", ole.bin_data_id);
                 let node_id = tree.next_id();
                 let node = RenderNode::new(
                     node_id,
-                    RenderNodeType::Rectangle(RectangleNode {
-                        section_index: Some(section_index),
-                        para_index: Some(para_index),
-                        control_index: Some(control_index),
-                        transform,
-                        ..RectangleNode::new(0.0, style, gradient)
+                    RenderNodeType::Placeholder(crate::renderer::render_tree::PlaceholderNode {
+                        fill_color: 0xFFF0F0F0,
+                        stroke_color: 0xFF707070,
+                        label,
                     }),
                     BoundingBox::new(render_x, render_y, render_w, render_h),
                 );
