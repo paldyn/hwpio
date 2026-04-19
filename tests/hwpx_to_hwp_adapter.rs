@@ -273,3 +273,93 @@ fn stage2_page_count_after_adapter_hwpx_h_01() {
         after
     );
 }
+
+// ============================================================
+// Stage 4 — lineseg lh/vpos 사전계산 + SectionDef 컨트롤 삽입 검증
+// ============================================================
+
+#[test]
+fn stage4_section_def_control_inserted() {
+    let bytes = load_sample("hwpx-h-01.hwpx");
+    let core = DocumentCore::from_bytes(&bytes).expect("HWPX 로드 실패");
+
+    // 어댑터 적용 전: 첫 문단에 SectionDef 컨트롤이 없어야 함 (HWPX 출처 특성)
+    let first_para_orig = &core.document().sections[0].paragraphs[0];
+    assert!(
+        !first_para_orig.controls.iter().any(|c| matches!(c, Control::SectionDef(_))),
+        "HWPX 출처 첫 문단에 SectionDef 가 이미 있다면 가정 위반"
+    );
+
+    let mut doc = core.document().clone();
+    let report = convert_hwpx_to_hwp_ir(&mut doc);
+    assert!(report.section_def_controls_inserted > 0, "SectionDef 삽입이 발생해야 함");
+
+    // 어댑터 적용 후: 모든 섹션의 첫 문단에 SectionDef 가 있어야 함
+    for (s_idx, section) in doc.sections.iter().enumerate() {
+        let first_para = &section.paragraphs[0];
+        assert!(
+            first_para.controls.iter().any(|c| matches!(c, Control::SectionDef(_))),
+            "섹션 {} 의 첫 문단에 SectionDef 컨트롤 없음",
+            s_idx
+        );
+    }
+}
+
+#[test]
+fn stage4_section_def_idempotent() {
+    let bytes = load_sample("hwpx-h-01.hwpx");
+    let core = DocumentCore::from_bytes(&bytes).expect("HWPX 로드 실패");
+    let mut doc = core.document().clone();
+
+    let r1 = convert_hwpx_to_hwp_ir(&mut doc);
+    let r2 = convert_hwpx_to_hwp_ir(&mut doc);
+    assert!(r1.section_def_controls_inserted > 0);
+    assert_eq!(r2.section_def_controls_inserted, 0, "2차 호출 시 삽입 0 (idempotent)");
+}
+
+#[test]
+fn stage4_page_def_preserved_after_roundtrip() {
+    // 어댑터 적용 후 직렬화 → 재로드 시 PageDef (width, height, margins) 가 보존돼야 함.
+    let bytes = load_sample("hwpx-h-01.hwpx");
+    let core = DocumentCore::from_bytes(&bytes).expect("HWPX 로드 실패");
+    let orig_pd = core.document().sections[0].section_def.page_def.clone();
+
+    let mut doc = core.document().clone();
+    convert_hwpx_to_hwp_ir(&mut doc);
+    let hwp_bytes = rhwp::serializer::serialize_hwp(&doc).expect("직렬화 실패");
+    let reloaded = DocumentCore::from_bytes(&hwp_bytes).expect("재로드 실패");
+    let reload_pd = &reloaded.document().sections[0].section_def.page_def;
+
+    assert_eq!(orig_pd.width, reload_pd.width, "width 보존");
+    assert_eq!(orig_pd.height, reload_pd.height, "height 보존");
+    assert_eq!(orig_pd.margin_left, reload_pd.margin_left, "margin_left 보존");
+    assert_eq!(orig_pd.margin_right, reload_pd.margin_right, "margin_right 보존");
+    assert_eq!(orig_pd.margin_top, reload_pd.margin_top, "margin_top 보존");
+    assert_eq!(orig_pd.margin_bottom, reload_pd.margin_bottom, "margin_bottom 보존");
+}
+
+/// Stage 4 핵심 게이트: 어댑터 적용 → 직렬화 → 재로드 시 페이지 수가 원본과 일치.
+fn assert_page_count_recovered(name: &str, bytes: &[u8]) {
+    let (orig, after) = page_count_with_adapter(bytes);
+    eprintln!("[#178 Stage 4] {}: orig={}, after_adapter={}", name, orig, after);
+    assert_eq!(
+        after, orig,
+        "{}: 어댑터 적용 후 페이지 수 {} != 원본 {}",
+        name, after, orig
+    );
+}
+
+#[test]
+fn stage4_page_count_recovered_hwpx_h_01() {
+    assert_page_count_recovered("hwpx-h-01", &load_sample("hwpx-h-01.hwpx"));
+}
+
+#[test]
+fn stage4_page_count_recovered_hwpx_h_02() {
+    assert_page_count_recovered("hwpx-h-02", &load_sample("hwpx-h-02.hwpx"));
+}
+
+#[test]
+fn stage4_page_count_recovered_hwpx_h_03() {
+    assert_page_count_recovered("hwpx-h-03", &load_sample("hwpx-h-03.hwpx"));
+}

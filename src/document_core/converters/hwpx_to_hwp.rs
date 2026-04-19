@@ -17,7 +17,7 @@
 //! Stage 1 (현재): 진입점만 노출. 영역별 매핑은 Stage 2~ 에서 추가.
 
 use crate::model::control::Control;
-use crate::model::document::Document;
+use crate::model::document::{Document, Section};
 use crate::model::paragraph::Paragraph;
 use crate::model::table::{Cell, Table};
 use crate::parser::FileFormat;
@@ -37,10 +37,8 @@ pub struct AdapterReport {
     pub tables_attr_packed: u32,
     /// `cell.list_attr bit 16` 보강 횟수 (Stage 3)
     pub cells_list_attr_bit16_set: u32,
-    /// 문단 break_type 보정 횟수 (Stage 4)
-    pub paragraphs_break_type_set: u32,
-    /// lineseg vpos 사전계산 적용 문단 수 (Stage 4)
-    pub paragraphs_vpos_precomputed: u32,
+    /// `Control::SectionDef` 컨트롤 삽입 횟수 (Stage 4 — 섹션 개수)
+    pub section_def_controls_inserted: u32,
 }
 
 impl AdapterReport {
@@ -59,8 +57,7 @@ impl AdapterReport {
             && (self.tables_ctrl_data_synthesized
                 + self.tables_attr_packed
                 + self.cells_list_attr_bit16_set
-                + self.paragraphs_break_type_set
-                + self.paragraphs_vpos_precomputed)
+                + self.section_def_controls_inserted)
                 > 0
     }
 }
@@ -69,10 +66,30 @@ impl AdapterReport {
 ///
 /// HWP 출처에는 no-op (idempotent + 보호).
 ///
-/// Stage 2: 표 `raw_ctrl_data` 합성 + `attr` 재구성. 기타 영역은 후속 Stage.
+/// ## 실행 영역
+///
+/// - **SectionDef 컨트롤 삽입** (Stage 4) — `Section.section_def` 를 첫 문단의 `controls`
+///   시작 위치에 `Control::SectionDef` 로 삽입. HWPX 파서가 만들지 않으므로 PAGE_DEF 누락
+///   → 재로드 시 페이지 크기 0 이 되는 결손 보강.
+/// - **표 raw_ctrl_data + attr 합성** (Stage 2)
+/// - **셀 list_attr bit 16 합성** (Stage 3)
+///
+/// ## lineseg vpos 가 본 어댑터에 없는 이유
+///
+/// HWPX 로드 시점에 `DocumentCore::from_bytes` 가 `reflow_zero_height_paragraphs`
+/// (`document_core/commands/document.rs:208-318`) 를 호출하여 IR 의 `line_segs[].vertical_pos`
+/// 를 in-place 로 갱신한다. 이 갱신은 메모리상 IR 에 영구 반영되므로, 어댑터 시점에는 이미
+/// 정확한 vpos 가 채워져 있어 추가 사전계산이 불필요. 직렬화 → 재로드 시에도 vpos 가 그대로
+/// 보존된다 (정수 필드 라운드트립).
 pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     let mut report = AdapterReport::new();
 
+    // Stage 4: SectionDef 컨트롤 삽입 (HWPX 파서가 만들지 않으므로 직렬화기가 PAGE_DEF 출력 못 함)
+    for section in &mut doc.sections {
+        insert_section_def_control(section, &mut report);
+    }
+
+    // Stage 2/3: 표 ctrl_data + 셀 list_attr (raw_ctrl_data 합성)
     for section in &mut doc.sections {
         for para in &mut section.paragraphs {
             adapt_paragraph(para, &mut report);
@@ -80,6 +97,45 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     }
 
     report
+}
+
+/// 섹션의 `section_def` 를 첫 문단의 `controls` 시작 위치에 `Control::SectionDef` 로 삽입한다.
+///
+/// ## 배경
+///
+/// HWPX 파서는 `<hp:secPr>` 정보를 `Section.section_def` 필드로 채우지만,
+/// `Control::SectionDef` 컨트롤을 첫 문단의 `controls` 에 삽입하지는 않는다.
+/// HWP 직렬화기 (`serializer/control.rs:40 + 171-241`) 는 `paragraph.controls` 를
+/// 순회하면서 `Control::SectionDef` 를 만나야 PAGE_DEF / FOOTNOTE_SHAPE / PAGE_BORDER_FILL
+/// 레코드를 출력한다. 이 컨트롤이 없으면 직렬화 결과의 PAGE_DEF 가 누락되어 재로드 시
+/// `page_def.width = 0` 등 페이지 크기 손상으로 페이지 폭주 발생.
+///
+/// ## 동작
+///
+/// 1. 섹션의 첫 문단에 `Control::SectionDef` 가 이미 있으면 no-op (idempotent)
+/// 2. 없으면 `Control::SectionDef(Box::new(section.section_def.clone()))` 를 첫 문단의
+///    `controls[0]` 위치에 삽입
+///
+/// ## 한컴 영향
+///
+/// 한컴은 `<secd>` CTRL_HEADER 와 PAGE_DEF 를 정상 인식. HWP 출처에서는 이미 컨트롤이
+/// 있으므로 idempotent 가드에 막혀 변경 없음.
+fn insert_section_def_control(section: &mut Section, report: &mut AdapterReport) {
+    if section.paragraphs.is_empty() {
+        return;
+    }
+    let first_para = &mut section.paragraphs[0];
+    let already_has_section_def = first_para
+        .controls
+        .iter()
+        .any(|c| matches!(c, Control::SectionDef(_)));
+    if already_has_section_def {
+        return;
+    }
+    first_para
+        .controls
+        .insert(0, Control::SectionDef(Box::new(section.section_def.clone())));
+    report.section_def_controls_inserted += 1;
 }
 
 fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
