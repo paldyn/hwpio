@@ -1234,8 +1234,8 @@ fn dump_controls(args: &[String]) {
                                                     p.common.horz_rel_to, p.common.horizontal_offset);
                                             }
                                             Control::Shape(s) => {
-                                                println!("{}    ctrl[{}] 도형: tac={}, wrap={:?}",
-                                                    indent, ci, s.common().treat_as_char, s.common().text_wrap);
+                                                println!("{}    ctrl[{}] {}: tac={}, wrap={:?}",
+                                                    indent, ci, s.shape_name(), s.common().treat_as_char, s.common().text_wrap);
                                             }
                                             _ => {}
                                         }

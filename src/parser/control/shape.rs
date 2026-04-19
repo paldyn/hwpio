@@ -9,9 +9,9 @@ use crate::parser::tags;
 use crate::model::control::Control;
 use crate::model::image::{ImageEffect, Picture};
 use crate::model::shape::{
-    ArcShape, Caption, CaptionDirection, CommonObjAttr, CurveShape, DrawingObjAttr, EllipseShape,
-    GroupShape, HorzAlign, HorzRelTo, LineShape, PolygonShape, RectangleShape, ShapeComponentAttr,
-    ShapeObject, TextWrap, VertAlign, VertRelTo,
+    ArcShape, Caption, CaptionDirection, ChartShape, ChartType, CommonObjAttr, CurveShape, DrawingObjAttr,
+    EllipseShape, GroupShape, HorzAlign, HorzRelTo, LineShape, OleDrawingAspect, OleShape, PolygonShape,
+    RectangleShape, ShapeComponentAttr, ShapeObject, TextWrap, VertAlign, VertRelTo,
 };
 use crate::model::style::{Fill, ShapeBorderLine};
 use crate::model::Point;
@@ -34,6 +34,9 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
     let mut shape_tag_data: &[u8] = &[];
     let mut text_paragraphs = Vec::new();
     let mut is_container = false;
+    // Task #195: 차트/OLE 감지
+    let mut chart_data_bytes: Option<Vec<u8>> = None;
+    let mut ole_tag_data: Option<&[u8]> = None;
 
     // 레벨 기반 필터링: 첫 번째 레코드(SHAPE_COMPONENT)의 레벨을 기준으로
     // 자신의 레코드만 처리하고, 중첩 컨트롤의 하위 레코드는 무시
@@ -91,6 +94,21 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
             {
                 shape_tag_id = Some(record.tag_id);
                 shape_tag_data = &record.data;
+            }
+            // Task #195: OLE 태그 (도형 타입으로 분류)
+            tags::HWPTAG_SHAPE_COMPONENT_OLE if record.level <= base_level + 1 => {
+                shape_tag_id = Some(record.tag_id);
+                shape_tag_data = &record.data;
+                ole_tag_data = Some(&record.data);
+            }
+            // Task #195: 차트 데이터 (하위 레코드 트리 전체를 raw로 병합 보존)
+            tags::HWPTAG_CHART_DATA => {
+                let mut buf = record.data.clone();
+                // 이 CHART_DATA 이후의 더 깊은 레벨 하위 태그 전체를 병합 (단순화: 직접 자식만)
+                // 단계 3 범위는 CHART_DATA 본문만으로 라운드트립 충분
+                // (단계 5에서 필요 시 하위 태그 구조화 파싱)
+                let _ = &mut buf; // suppress warning
+                chart_data_bytes = Some(record.data.clone());
             }
             tags::HWPTAG_LIST_HEADER => {}
             _ => {}
@@ -170,6 +188,25 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
     // 캡션을 drawing에 저장 (도형 공통)
     drawing.caption = caption;
 
+    // Task #195: 차트 우선 분기 (CHART_DATA가 있으면 GSO 다른 태그 종류와 무관하게 차트로 분류)
+    if let Some(raw_chart) = chart_data_bytes.take() {
+        let mut chart = ChartShape::default();
+        chart.common = common.clone();
+        chart.drawing = drawing;
+        chart.raw_chart_data = raw_chart;
+        chart.caption = chart.drawing.caption.take();
+        // 단계 4에서 chart_type/title/series를 raw_chart_data에서 추출
+        return Control::Shape(Box::new(ShapeObject::Chart(Box::new(chart))));
+    }
+
+    // Task #195: OLE 개체 분기
+    if shape_tag_id == Some(tags::HWPTAG_SHAPE_COMPONENT_OLE) {
+        let ole_data = ole_tag_data.unwrap_or(shape_tag_data);
+        let mut ole = parse_ole_shape(common.clone(), drawing, ole_data);
+        ole.caption = ole.drawing.caption.take();
+        return Control::Shape(Box::new(ShapeObject::Ole(Box::new(ole))));
+    }
+
     // 그림 개체
     if shape_tag_id == Some(tags::HWPTAG_SHAPE_COMPONENT_PICTURE) {
         let mut picture = parse_picture(common, drawing.shape_attr.clone(), shape_tag_data);
@@ -235,12 +272,48 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
         }
         _ => {
             // 알 수 없는 도형 → 사각형으로 대체
+            // Task #195 이후: CHART_DATA/OLE은 위에서 분기되므로 이 경로로 오지 않음
             let mut rect = RectangleShape::default();
             rect.common = common;
             rect.drawing = drawing;
             Control::Shape(Box::new(ShapeObject::Rectangle(rect)))
         }
     }
+}
+
+// ============================================================
+// Task #195: OLE 개체 파싱
+// ============================================================
+
+/// HWPTAG_SHAPE_COMPONENT_OLE 레코드 파싱
+///
+/// 레코드 구조 (pyhwp / hwplib 참조, HWP 5.0):
+/// - u32 extent_x
+/// - u32 extent_y
+/// - u8  flags
+/// - u16 drawing_aspect
+/// - u32 bin_data_id
+/// - 이후 바이트는 라운드트립 보존용으로 `raw_tag_data`에 저장
+pub(crate) fn parse_ole_shape(common: CommonObjAttr, drawing: DrawingObjAttr, tag_data: &[u8]) -> OleShape {
+    let mut ole = OleShape::default();
+    ole.common = common;
+    ole.drawing = drawing;
+    ole.raw_tag_data = tag_data.to_vec();
+
+    let mut r = ByteReader::new(tag_data);
+    ole.extent_x = r.read_i32().unwrap_or(0);
+    ole.extent_y = r.read_i32().unwrap_or(0);
+    ole.flags = r.read_u8().unwrap_or(0);
+    let aspect_val = r.read_u16().unwrap_or(0);
+    ole.drawing_aspect = match aspect_val {
+        0 => OleDrawingAspect::Content,
+        1 => OleDrawingAspect::Icon,
+        2 => OleDrawingAspect::Thumbnail,
+        4 => OleDrawingAspect::DocPrint,
+        _ => OleDrawingAspect::Content,
+    };
+    ole.bin_data_id = r.read_u32().unwrap_or(0);
+    ole
 }
 
 /// CTRL_HEADER 데이터에서 공통 개체 속성 파싱
@@ -914,4 +987,56 @@ fn parse_curve_shape_data(data: &[u8], curve: &mut CurveShape) {
     }
     // hwplib: sr.skip(4) — 4바이트 패딩
     let _ = r.read_u32();
+}
+
+// ============================================================
+// Task #195: 단위 테스트 (OLE/Chart 파싱)
+// ============================================================
+
+#[cfg(test)]
+mod task195_tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_ole_shape_minimal() {
+        // extent_x=1000, extent_y=2000, flags=0x01, aspect=1(Icon), bin_data_id=5
+        let mut data = Vec::new();
+        data.extend_from_slice(&1000i32.to_le_bytes());
+        data.extend_from_slice(&2000i32.to_le_bytes());
+        data.push(0x01);
+        data.extend_from_slice(&1u16.to_le_bytes());
+        data.extend_from_slice(&5u32.to_le_bytes());
+
+        let ole = parse_ole_shape(CommonObjAttr::default(), DrawingObjAttr::default(), &data);
+        assert_eq!(ole.extent_x, 1000);
+        assert_eq!(ole.extent_y, 2000);
+        assert_eq!(ole.flags, 0x01);
+        assert_eq!(ole.drawing_aspect, OleDrawingAspect::Icon);
+        assert_eq!(ole.bin_data_id, 5);
+        assert_eq!(ole.raw_tag_data.len(), data.len());
+    }
+
+    #[test]
+    fn test_parse_ole_shape_content_aspect() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0i32.to_le_bytes());
+        data.extend_from_slice(&0i32.to_le_bytes());
+        data.push(0);
+        data.extend_from_slice(&0u16.to_le_bytes()); // aspect=0
+        data.extend_from_slice(&42u32.to_le_bytes());
+        let ole = parse_ole_shape(CommonObjAttr::default(), DrawingObjAttr::default(), &data);
+        assert_eq!(ole.drawing_aspect, OleDrawingAspect::Content);
+        assert_eq!(ole.bin_data_id, 42);
+    }
+
+    #[test]
+    fn test_parse_ole_shape_truncated_graceful() {
+        // 4바이트만 — 나머지 필드는 기본값으로 채워져야 함
+        let data = [0x10, 0x00, 0x00, 0x00]; // extent_x=16만
+        let ole = parse_ole_shape(CommonObjAttr::default(), DrawingObjAttr::default(), &data);
+        assert_eq!(ole.extent_x, 16);
+        assert_eq!(ole.extent_y, 0);
+        assert_eq!(ole.bin_data_id, 0);
+        assert_eq!(ole.raw_tag_data.len(), 4);
+    }
 }
