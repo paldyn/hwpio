@@ -208,6 +208,24 @@ Foundation  Typeset   Collab    Complete
 | **1.0 → 2.0** | Open community participation on AI typesetting pipeline | Lower the barrier to contribution |
 | **2.0 → 3.0** | Community-driven features toward public asset | Reach parity with Hancom |
 
+## Recent Changes (v0.7.3 / extension v0.2.0, 2026-04-19)
+
+**rhwp-studio (library 0.7.3)**
+- HWPX-source documents: save disabled with user notification ([#196](https://github.com/edwardkim/rhwp/issues/196)) — prevents data loss until HWPX→HWP full converter ([#197](https://github.com/edwardkim/rhwp/issues/197)) lands
+- HWPX→HWP IR mapping adapter assets preserved ([#178](https://github.com/edwardkim/rhwp/issues/178)) — rhwp self-roundtrip 100% recovered, Hancom compatibility deferred to #197
+
+**rhwp-chrome / Edge extension (v0.2.0)**
+- Restored "remember last save location" for general file downloads when extension is active ([#198](https://github.com/edwardkim/rhwp/issues/198))
+- Options page CSP fix ([#166](https://github.com/edwardkim/rhwp/issues/166))
+- HWP files: `Ctrl+S` overwrites the same file directly (external contribution by [@ahnbu](https://github.com/ahnbu) — PR [#189](https://github.com/edwardkim/rhwp/pull/189))
+- Block empty viewer tab on DEXT5-style download handlers
+
+### Coming Soon
+
+- HWPX direct save support ([#197](https://github.com/edwardkim/rhwp/issues/197)) — full HWPX→HWP converter
+- "What's New" notification on extension update
+- Additional download handler patterns (user-reported)
+
 ## Project Structure
 
 ```
