@@ -16,8 +16,13 @@
 //!
 //! Stage 1 (현재): 진입점만 노출. 영역별 매핑은 Stage 2~ 에서 추가.
 
+use crate::model::control::Control;
 use crate::model::document::Document;
+use crate::model::paragraph::Paragraph;
+use crate::model::table::Table;
 use crate::parser::FileFormat;
+
+use super::common_obj_attr_writer::serialize_common_obj_attr;
 
 /// 어댑터 실행 보고서.
 ///
@@ -64,15 +69,57 @@ impl AdapterReport {
 ///
 /// HWP 출처에는 no-op (idempotent + 보호).
 ///
-/// Stage 1: 진입점만 노출 (영역별 매핑 미구현, source_format 분기만 동작).
+/// Stage 2: 표 `raw_ctrl_data` 합성 + `attr` 재구성. 기타 영역은 후속 Stage.
 pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
-    let report = AdapterReport::new();
+    let mut report = AdapterReport::new();
 
-    // source_format 검사: Document 자체에는 source_format 이 없으므로
-    // 호출자(DocumentCore) 가 책임진다. 현재 단계는 받은 doc 을 그대로 처리.
-    // Stage 5 통합 진입점에서 DocumentCore 측 분기와 결합.
-    let _ = doc; // Stage 1 은 변경 없음
+    for section in &mut doc.sections {
+        for para in &mut section.paragraphs {
+            adapt_paragraph(para, &mut report);
+        }
+    }
+
     report
+}
+
+fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
+    for ctrl in &mut para.controls {
+        if let Control::Table(table) = ctrl {
+            adapt_table(table, report);
+        }
+    }
+}
+
+fn adapt_table(table: &mut Table, report: &mut AdapterReport) {
+    // 1. raw_ctrl_data 합성 (HWPX 출처는 비어있음)
+    if table.raw_ctrl_data.is_empty() {
+        table.raw_ctrl_data = serialize_common_obj_attr(&table.common);
+        report.tables_ctrl_data_synthesized += 1;
+    }
+
+    // 2. attr 동기화: serializer/control.rs:349 가 raw_ctrl_data 를 그대로 쓰므로
+    //    raw_ctrl_data 안의 attr 비트가 진실. table.attr 자체는 직렬화기 경로에서
+    //    raw_ctrl_data 가 비어있을 때만 사용되므로 추가 작업 불필요.
+    //    다만 IR 의 일관성을 위해 (다른 코드가 table.attr 을 읽을 가능성) 동기화.
+    if table.attr == 0 && !table.raw_ctrl_data.is_empty() && table.raw_ctrl_data.len() >= 4 {
+        let attr = u32::from_le_bytes([
+            table.raw_ctrl_data[0],
+            table.raw_ctrl_data[1],
+            table.raw_ctrl_data[2],
+            table.raw_ctrl_data[3],
+        ]);
+        if attr != 0 {
+            table.attr = attr;
+            report.tables_attr_packed += 1;
+        }
+    }
+
+    // 셀 내부 문단 재귀 (중첩 표 대응)
+    for cell in &mut table.cells {
+        for cpara in &mut cell.paragraphs {
+            adapt_paragraph(cpara, report);
+        }
+    }
 }
 
 /// `source_format` 검사 후 어댑터를 호출하는 보조 함수.
@@ -90,7 +137,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn stage1_entry_point_returns_default_report() {
+    fn empty_doc_no_change() {
         let mut doc = Document::default();
         let report = convert_hwpx_to_hwp_ir(&mut doc);
         assert!(!report.changed_anything());
@@ -98,19 +145,19 @@ mod tests {
     }
 
     #[test]
-    fn stage1_hwp_source_no_op() {
+    fn hwp_source_no_op_via_filter() {
         let mut doc = Document::default();
         let report = convert_if_hwpx_source(&mut doc, FileFormat::Hwp);
         assert_eq!(report.skipped_reason.as_deref(), Some("source_format != Hwpx"));
     }
 
     #[test]
-    fn stage1_hwpx_source_runs_adapter() {
+    fn idempotent_when_called_twice() {
         let mut doc = Document::default();
-        let report = convert_if_hwpx_source(&mut doc, FileFormat::Hwpx);
-        // Stage 1 본체는 no-op 이므로 changed_anything() = false 이지만
-        // skipped_reason 도 None (어댑터가 실행되긴 했음).
-        assert!(report.skipped_reason.is_none());
-        assert!(!report.changed_anything());
+        let r1 = convert_hwpx_to_hwp_ir(&mut doc);
+        let r2 = convert_hwpx_to_hwp_ir(&mut doc);
+        // 두 번째 호출은 변경 없음 (이미 정규화됨).
+        assert_eq!(r2.tables_ctrl_data_synthesized, 0);
+        assert_eq!(r1, r2);
     }
 }
