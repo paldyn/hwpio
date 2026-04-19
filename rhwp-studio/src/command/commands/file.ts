@@ -58,7 +58,8 @@ export const fileCommands: CommandDef[] = [
     label: '저장',
     icon: 'icon-save',
     shortcutLabel: 'Ctrl+S',
-    canExecute: (ctx) => ctx.hasDocument,
+    // #196: HWPX 출처는 저장 비활성화 (베타 단계, #197 완전 변환기 완료 시까지)
+    canExecute: (ctx) => ctx.hasDocument && ctx.sourceFormat !== 'hwpx',
     async execute(services) {
       try {
         const saveName = services.wasm.fileName;
