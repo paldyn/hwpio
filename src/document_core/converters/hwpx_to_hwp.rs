@@ -19,7 +19,7 @@
 use crate::model::control::Control;
 use crate::model::document::Document;
 use crate::model::paragraph::Paragraph;
-use crate::model::table::Table;
+use crate::model::table::{Cell, Table};
 use crate::parser::FileFormat;
 
 use super::common_obj_attr_writer::serialize_common_obj_attr;
@@ -114,11 +114,44 @@ fn adapt_table(table: &mut Table, report: &mut AdapterReport) {
         }
     }
 
-    // 셀 내부 문단 재귀 (중첩 표 대응)
+    // 셀별 보강 + 내부 문단 재귀 (중첩 표 대응)
     for cell in &mut table.cells {
+        adapt_cell_list_attr(cell, report);
         for cpara in &mut cell.paragraphs {
             adapt_paragraph(cpara, report);
         }
+    }
+}
+
+/// 셀 `apply_inner_margin` → `list_attr bit 16` 합성 (Stage 3, 보수적).
+///
+/// ## 배경
+///
+/// `serializer/control.rs:429` 가 작성하는 LIST_HEADER 의 `list_attr`:
+/// ```text
+/// list_attr = (text_direction << 16) | (v_align << 21)
+/// ```
+///
+/// HWPX 출처 셀에서 `apply_inner_margin = true` 인 경우, 직렬화 시 `list_attr bit 16` 이
+/// 0 으로 떨어져 한컴이 셀 안 여백을 표 기본값으로 대체하는 손실 발생.
+///
+/// ## 합성 방식
+///
+/// `cell.text_direction == 0` (가로 = 99% 케이스) AND `apply_inner_margin == true` 일 때만
+/// `text_direction |= 0x01` 합성. 이는 출력 LIST_HEADER 의 bit 16 = 1 을 만들어
+/// 한컴이 `apply_inner_margin` 으로 인식하도록 함. 가로/세로 비트 자체에 영향이 있을 수 있으나,
+/// `apply_inner_margin` 의미가 한컴에서 더 우선 (parser/control.rs:371 동일 로직).
+///
+/// 세로 셀 (`text_direction == 1`) 은 이미 bit 16 = 1 이므로 추가 합성 불필요.
+///
+/// ## 한계
+///
+/// 현재 디버그 샘플 3건 (hwpx-h-0[123].hwpx) 에는 `apply_inner_margin = true` 인 셀이 0건이므로,
+/// 본 함수는 단위 테스트로만 동작 검증 (효과 측정은 후속 샘플에서).
+fn adapt_cell_list_attr(cell: &mut Cell, report: &mut AdapterReport) {
+    if cell.apply_inner_margin && cell.text_direction == 0 {
+        cell.text_direction = 1; // bit 0 OR (출력 bit 16 = 1)
+        report.cells_list_attr_bit16_set += 1;
     }
 }
 
@@ -159,5 +192,77 @@ mod tests {
         // 두 번째 호출은 변경 없음 (이미 정규화됨).
         assert_eq!(r2.tables_ctrl_data_synthesized, 0);
         assert_eq!(r1, r2);
+    }
+
+    // ============================================================
+    // Stage 3 — cell.list_attr bit 16 보강 단위 테스트
+    // ============================================================
+
+    fn make_cell_with_inner_margin(apply: bool, text_dir: u8) -> Cell {
+        let mut cell = Cell::default();
+        cell.apply_inner_margin = apply;
+        cell.text_direction = text_dir;
+        cell
+    }
+
+    #[test]
+    fn stage3_horizontal_cell_with_inner_margin_gets_bit16() {
+        let mut cell = make_cell_with_inner_margin(true, 0);
+        let mut report = AdapterReport::new();
+        adapt_cell_list_attr(&mut cell, &mut report);
+        assert_eq!(cell.text_direction, 1, "가로 셀에 bit 16 이 OR 되어야 함");
+        assert_eq!(report.cells_list_attr_bit16_set, 1);
+    }
+
+    #[test]
+    fn stage3_vertical_cell_already_has_bit16_no_change() {
+        let mut cell = make_cell_with_inner_margin(true, 1);
+        let mut report = AdapterReport::new();
+        adapt_cell_list_attr(&mut cell, &mut report);
+        // 세로 셀 (text_direction=1) 은 이미 bit 16 = 1 이므로 변경 불필요
+        assert_eq!(cell.text_direction, 1);
+        assert_eq!(report.cells_list_attr_bit16_set, 0);
+    }
+
+    #[test]
+    fn stage3_no_inner_margin_no_change() {
+        let mut cell = make_cell_with_inner_margin(false, 0);
+        let mut report = AdapterReport::new();
+        adapt_cell_list_attr(&mut cell, &mut report);
+        assert_eq!(cell.text_direction, 0);
+        assert_eq!(report.cells_list_attr_bit16_set, 0);
+    }
+
+    #[test]
+    fn stage3_list_attr_byte_layout_has_bit16_after_adapter() {
+        // serializer/control.rs:429 의 list_attr 합성식과 동일:
+        //   list_attr = (text_direction << 16) | (v_align << 21)
+        // 어댑터가 text_direction=1 으로 만든 후 출력 list_attr 의 bit 16 이 1 인지 확인.
+        let mut cell = make_cell_with_inner_margin(true, 0);
+        let mut report = AdapterReport::new();
+        adapt_cell_list_attr(&mut cell, &mut report);
+
+        let v_align_code: u32 = 0; // VerticalAlign::Top
+        let list_attr: u32 = ((cell.text_direction as u32) << 16) | (v_align_code << 21);
+        assert_eq!(list_attr & (1 << 16), 1 << 16, "list_attr 의 bit 16 = 1");
+
+        // 한컴 파서 해석 (parser/control.rs:371) 와 일치:
+        let recovered_apply_inner_margin = (list_attr >> 16) & 0x01 != 0;
+        assert!(recovered_apply_inner_margin, "재파싱 시 apply_inner_margin 회복");
+    }
+
+    #[test]
+    fn stage3_idempotent_does_not_double_or() {
+        let mut cell = make_cell_with_inner_margin(true, 0);
+        let mut r1 = AdapterReport::new();
+        adapt_cell_list_attr(&mut cell, &mut r1);
+        // 1차 호출 후 text_direction=1, apply_inner_margin=true
+        assert_eq!(cell.text_direction, 1);
+
+        let mut r2 = AdapterReport::new();
+        adapt_cell_list_attr(&mut cell, &mut r2);
+        // 2차 호출은 text_direction == 1 이므로 변경 없음 (가드에 막힘)
+        assert_eq!(cell.text_direction, 1);
+        assert_eq!(r2.cells_list_attr_bit16_set, 0);
     }
 }
