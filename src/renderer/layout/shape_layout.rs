@@ -965,6 +965,40 @@ impl LayoutEngine {
                 );
                 parent.children.push(img_node);
             }
+            ShapeObject::Chart(chart) => {
+                // Task #195 단계 2: placeholder Rectangle로 렌더 (단계 4에서 실제 차트 SVG)
+                let (style, gradient) = drawing_to_shape_style(&chart.drawing);
+                let node_id = tree.next_id();
+                let node = RenderNode::new(
+                    node_id,
+                    RenderNodeType::Rectangle(RectangleNode {
+                        section_index: Some(section_index),
+                        para_index: Some(para_index),
+                        control_index: Some(control_index),
+                        transform,
+                        ..RectangleNode::new(0.0, style, gradient)
+                    }),
+                    BoundingBox::new(render_x, render_y, render_w, render_h),
+                );
+                parent.children.push(node);
+            }
+            ShapeObject::Ole(ole) => {
+                // Task #195 단계 2: placeholder Rectangle로 렌더 (단계 4에서 프리뷰 렌더)
+                let (style, gradient) = drawing_to_shape_style(&ole.drawing);
+                let node_id = tree.next_id();
+                let node = RenderNode::new(
+                    node_id,
+                    RenderNodeType::Rectangle(RectangleNode {
+                        section_index: Some(section_index),
+                        para_index: Some(para_index),
+                        control_index: Some(control_index),
+                        transform,
+                        ..RectangleNode::new(0.0, style, gradient)
+                    }),
+                    BoundingBox::new(render_x, render_y, render_w, render_h),
+                );
+                parent.children.push(node);
+            }
         }
     }
 
