@@ -34,7 +34,8 @@
 ### 저장
 
 - **Ctrl+S** 또는 파일 메뉴 → 저장
-- HWP 형식으로 저장
+- **HWP 파일**: 같은 파일에 직접 덮어쓰기 (저장 다이얼로그 없음, v0.2.0 부터)
+- **HWPX 파일**: 직접 저장은 현재 베타 단계로 비활성화 (다음 업데이트에서 지원 예정 — [#197](https://github.com/edwardkim/rhwp/issues/197))
 
 ## 웹사이트 개발자
 
@@ -62,6 +63,30 @@ npm run build
 1. `chrome://extensions` (또는 `edge://extensions`)
 2. 개발자 모드 활성화
 3. "압축 해제된 확장 프로그램을 로드합니다" → `rhwp-chrome/dist/` 선택
+
+## 변경 이력
+
+### v0.2.0 (2026-04-19)
+
+**버그 수정**
+- 일반 파일 다운로드 시 마지막 저장 위치가 기억되지 않던 문제 수정 ([#198](https://github.com/edwardkim/rhwp/issues/198))
+- 옵션 페이지의 스크립트가 동작하지 않던 CSP 문제 수정 ([#166](https://github.com/edwardkim/rhwp/issues/166))
+- 일부 관공서 사이트 (DEXT5 류) 다운로드 시 빈 뷰어 탭이 뜨던 문제 차단
+
+**기능 개선**
+- HWP 파일을 `Ctrl+S` 로 저장 시 같은 파일에 직접 덮어쓰기 — 저장 다이얼로그가 매번 뜨지 않음 (외부 기여 by [@ahnbu](https://github.com/ahnbu) — PR [#189](https://github.com/edwardkim/rhwp/pull/189))
+- HWPX 파일 열람 시 베타 안내 표시 + 저장 비활성화 (데이터 손상 방지)
+- 제품 정보 다이얼로그의 버전 표시 정상화
+
+### v0.1.1 (이전)
+
+- 초기 공개 베타
+
+## 향후 예정
+
+- **HWPX 직접 저장 지원** ([#197](https://github.com/edwardkim/rhwp/issues/197)) — HWPX → HWP 완전 변환기 구현
+- **What's New 알림** — 업데이트 시 변경사항을 사용자에게 자동 안내
+- **추가 다운로드 핸들러 패턴 지원** — 사용자 보고 기반으로 인터셉터 정확도 향상
 
 ## 라이선스
 
