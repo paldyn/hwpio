@@ -30,6 +30,25 @@ const RT_CREATE_PEN: u32               = 0x00000026;
 const RT_CREATE_BRUSH_INDIRECT: u32    = 0x00000027;
 const RT_DELETE_OBJECT: u32            = 0x00000028;
 const RT_EXT_CREATE_FONT_INDIRECT_W: u32 = 0x00000052;
+// 드로잉 (단계 12)
+const RT_MOVE_TO_EX: u32   = 0x0000001B;
+const RT_ELLIPSE: u32      = 0x0000002A;
+const RT_RECTANGLE: u32    = 0x0000002B;
+const RT_ROUND_RECT: u32   = 0x0000002C;
+const RT_ARC: u32          = 0x0000002D;
+const RT_CHORD: u32        = 0x0000002E;
+const RT_PIE: u32          = 0x0000002F;
+const RT_LINE_TO: u32      = 0x00000036;
+const RT_POLYBEZIER16: u32 = 0x00000055;
+const RT_POLYLINE16: u32   = 0x00000056;
+const RT_POLYGON16: u32    = 0x00000057;
+// 패스 (단계 12)
+const RT_BEGIN_PATH: u32         = 0x0000003B;
+const RT_END_PATH: u32           = 0x0000003C;
+const RT_CLOSE_FIGURE: u32       = 0x0000003D;
+const RT_FILL_PATH: u32          = 0x0000003E;
+const RT_STROKE_AND_FILL_PATH: u32 = 0x0000003F;
+const RT_STROKE_PATH: u32        = 0x00000040;
 
 /// EMF 바이트를 레코드 시퀀스로 파싱.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Record>, Error> {
@@ -70,7 +89,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Record>, Error> {
 }
 
 fn dispatch(record_type: u32, c: &mut Cursor<'_>, payload_len: usize) -> Result<Record, Error> {
-    use records::{object, state};
+    use records::{drawing, object, path, state};
 
     let rec = match record_type {
         RT_EOF => Record::Eof,
@@ -112,6 +131,39 @@ fn dispatch(record_type: u32, c: &mut Cursor<'_>, payload_len: usize) -> Result<
         RT_SET_TEXT_ALIGN => Record::SetTextAlign(state::parse_u32_single(c)?),
         RT_SET_TEXT_COLOR => Record::SetTextColor(state::parse_u32_single(c)?),
         RT_SET_BK_COLOR   => Record::SetBkColor(state::parse_u32_single(c)?),
+
+        // 드로잉
+        RT_MOVE_TO_EX => Record::MoveToEx(drawing::parse_point(c)?),
+        RT_LINE_TO    => Record::LineTo(drawing::parse_point(c)?),
+        RT_RECTANGLE  => Record::Rectangle(drawing::parse_rect(c)?),
+        RT_ELLIPSE    => Record::Ellipse(drawing::parse_rect(c)?),
+        RT_ROUND_RECT => {
+            let (rect, corner_w, corner_h) = drawing::parse_round_rect(c)?;
+            Record::RoundRect { rect, corner_w, corner_h }
+        }
+        RT_ARC   => { let (r, s, e) = drawing::parse_arc_like(c)?; Record::Arc   { rect: r, start: s, end: e } }
+        RT_CHORD => { let (r, s, e) = drawing::parse_arc_like(c)?; Record::Chord { rect: r, start: s, end: e } }
+        RT_PIE   => { let (r, s, e) = drawing::parse_arc_like(c)?; Record::Pie   { rect: r, start: s, end: e } }
+        RT_POLYLINE16   => {
+            let (bounds, points) = drawing::parse_points16(c)?;
+            Record::Polyline16 { bounds, points }
+        }
+        RT_POLYGON16 => {
+            let (bounds, points) = drawing::parse_points16(c)?;
+            Record::Polygon16 { bounds, points }
+        }
+        RT_POLYBEZIER16 => {
+            let (bounds, points) = drawing::parse_points16(c)?;
+            Record::PolyBezier16 { bounds, points }
+        }
+
+        // 패스
+        RT_BEGIN_PATH            => Record::BeginPath,
+        RT_END_PATH              => Record::EndPath,
+        RT_CLOSE_FIGURE          => Record::CloseFigure,
+        RT_FILL_PATH             => Record::FillPath(path::parse_path_bounds(c)?),
+        RT_STROKE_PATH           => Record::StrokePath(path::parse_path_bounds(c)?),
+        RT_STROKE_AND_FILL_PATH  => Record::StrokeAndFillPath(path::parse_path_bounds(c)?),
 
         _ => Record::Unknown {
             record_type,

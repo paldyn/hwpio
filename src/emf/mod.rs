@@ -62,9 +62,22 @@ impl core::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 /// EMF 바이트 스트림을 레코드 시퀀스로 파싱한다.
-///
-/// 단계 10 현재는 EMR_HEADER만 구조체로 파싱하고, 나머지 레코드는 `Record::Unknown`으로
-/// 보존한다(type + payload). 후속 단계에서 RecordType 분기를 확장한다.
 pub fn parse_emf(bytes: &[u8]) -> Result<Vec<Record>, Error> {
     parser::parse(bytes)
+}
+
+/// EMF 바이트를 파싱 후 SVG fragment 문자열로 변환한다.
+///
+/// `render_rect = (x, y, w, h)` (pt 단위)는 SVG 상 배치 영역을 지정한다. Player는
+/// EMF Bounds → render_rect 매핑 행렬을 자동 계산하여 `<g transform="...">`으로 감싼다.
+///
+/// 반환값은 viewBox/xmlns가 없는 **fragment**로, rhwp 렌더 트리의 RawSvg로 삽입된다.
+pub fn convert_to_svg(
+    bytes: &[u8],
+    render_rect: (f32, f32, f32, f32),
+) -> Result<String, Error> {
+    let records = parse_emf(bytes)?;
+    let mut player = converter::Player::new(render_rect);
+    player.play(&records)?;
+    Ok(player.svg.into_string())
 }

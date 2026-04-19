@@ -361,6 +361,182 @@ fn object_table_insert_get_remove() {
     assert!(table.is_empty());
 }
 
+// ───── 단계 12: 드로잉 레코드 + SVG 컨버터 ─────
+
+#[test]
+fn parses_rectangle_and_ellipse() {
+    let mut b = header_prefix();
+    // EMR_RECTANGLE (0x2B): RectL(16B)
+    let mut p = Vec::new();
+    for v in [10i32, 20, 110, 120] { p.extend_from_slice(&v.to_le_bytes()); }
+    push_record(&mut b, 0x2B, &p);
+    // EMR_ELLIPSE (0x2A): RectL
+    let mut p2 = Vec::new();
+    for v in [0i32, 0, 50, 30] { p2.extend_from_slice(&v.to_le_bytes()); }
+    push_record(&mut b, 0x2A, &p2);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::Rectangle(r) => {
+            assert_eq!((r.left, r.top, r.right, r.bottom), (10, 20, 110, 120));
+        }
+        other => panic!("expected Rectangle, got {other:?}"),
+    }
+    assert!(matches!(recs[2], Record::Ellipse(_)));
+}
+
+#[test]
+fn parses_polyline16_with_points() {
+    let mut b = header_prefix();
+    // EMR_POLYLINE16 (0x56): RectL(16) + count(4) + POINTS[3] (4B each) = 32B
+    let mut p = Vec::new();
+    for v in [0i32, 0, 100, 100] { p.extend_from_slice(&v.to_le_bytes()); }
+    p.extend_from_slice(&3u32.to_le_bytes());
+    for (x, y) in [(0i16, 0i16), (50, 50), (100, 0)] {
+        p.extend_from_slice(&x.to_le_bytes());
+        p.extend_from_slice(&y.to_le_bytes());
+    }
+    push_record(&mut b, 0x56, &p);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::Polyline16 { points, .. } => {
+            assert_eq!(points, &vec![(0, 0), (50, 50), (100, 0)]);
+        }
+        other => panic!("expected Polyline16, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_path_begin_end_fill() {
+    let mut b = header_prefix();
+    push_record(&mut b, 0x3B, &[]);                      // BeginPath
+    push_record(&mut b, 0x3C, &[]);                      // EndPath
+    // FillPath: RectL
+    let mut p = Vec::new();
+    for v in [0i32, 0, 10, 10] { p.extend_from_slice(&v.to_le_bytes()); }
+    push_record(&mut b, 0x3E, &p);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    assert!(matches!(recs[1], Record::BeginPath));
+    assert!(matches!(recs[2], Record::EndPath));
+    assert!(matches!(recs[3], Record::FillPath(_)));
+}
+
+#[test]
+fn convert_to_svg_emits_rect_with_stroke_and_fill() {
+    // 헤더 + CreatePen(검정 2px) + CreateBrush(빨강) + SelectObject(pen) + SelectObject(brush) + Rectangle + EOF
+    let mut b = header_prefix();
+
+    // pen handle=1, style=0, width=2, color=#000000
+    let mut p = Vec::new();
+    p.extend_from_slice(&1u32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p.extend_from_slice(&2i32.to_le_bytes());
+    p.extend_from_slice(&0i32.to_le_bytes());
+    p.extend_from_slice(&0x00000000u32.to_le_bytes());
+    push_record(&mut b, 0x26, &p);
+
+    // brush handle=2, style=0 solid, color=#0000FF(RGB red in COLORREF is 0x000000FF)
+    let mut p = Vec::new();
+    p.extend_from_slice(&2u32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p.extend_from_slice(&0x000000FFu32.to_le_bytes());    // R=255 → rgb(255,0,0)
+    p.extend_from_slice(&0u32.to_le_bytes());
+    push_record(&mut b, 0x27, &p);
+
+    push_record(&mut b, 0x25, &1u32.to_le_bytes());       // SelectObject pen
+    push_record(&mut b, 0x25, &2u32.to_le_bytes());       // SelectObject brush
+
+    // Rectangle (10,20)-(110,120)
+    let mut p = Vec::new();
+    for v in [10i32, 20, 110, 120] { p.extend_from_slice(&v.to_le_bytes()); }
+    push_record(&mut b, 0x2B, &p);
+    push_eof(&mut b);
+
+    let svg = convert_to_svg(&b, (0.0, 0.0, 1000.0, 500.0)).expect("convert");
+    assert!(svg.starts_with("<g transform=\"matrix("), "svg must start with group transform: {svg}");
+    assert!(svg.contains("<rect "));
+    assert!(svg.contains("fill=\"rgb(255,0,0)\""));
+    assert!(svg.contains("stroke=\"rgb(0,0,0)\""));
+    assert!(svg.contains("width=\"100\""));        // 110-10
+    assert!(svg.contains("height=\"100\""));       // 120-20
+    assert!(svg.ends_with("</g>"));
+}
+
+#[test]
+fn convert_to_svg_polyline_and_ellipse() {
+    let mut b = header_prefix();
+
+    // pen handle=1, style=0, width=1, color=#000000
+    let mut p = Vec::new();
+    p.extend_from_slice(&1u32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p.extend_from_slice(&1i32.to_le_bytes());
+    p.extend_from_slice(&0i32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    push_record(&mut b, 0x26, &p);
+    push_record(&mut b, 0x25, &1u32.to_le_bytes());
+
+    // Polyline16: 3점
+    let mut p = Vec::new();
+    for v in [0i32, 0, 100, 100] { p.extend_from_slice(&v.to_le_bytes()); }
+    p.extend_from_slice(&3u32.to_le_bytes());
+    for (x, y) in [(0i16, 0i16), (50, 50), (100, 0)] {
+        p.extend_from_slice(&x.to_le_bytes());
+        p.extend_from_slice(&y.to_le_bytes());
+    }
+    push_record(&mut b, 0x56, &p);
+
+    // Ellipse 0,0-40,40
+    let mut p = Vec::new();
+    for v in [0i32, 0, 40, 40] { p.extend_from_slice(&v.to_le_bytes()); }
+    push_record(&mut b, 0x2A, &p);
+    push_eof(&mut b);
+
+    let svg = convert_to_svg(&b, (0.0, 0.0, 100.0, 50.0)).expect("convert");
+    assert!(svg.contains("<polyline points=\"0,0 50,50 100,0\""), "polyline missing: {svg}");
+    assert!(svg.contains("<ellipse cx=\"20\" cy=\"20\" rx=\"20\" ry=\"20\""), "ellipse missing: {svg}");
+}
+
+#[test]
+fn convert_to_svg_polygon_closes_shape() {
+    let mut b = header_prefix();
+    let mut p = Vec::new();
+    p.extend_from_slice(&1u32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p.extend_from_slice(&1i32.to_le_bytes());
+    p.extend_from_slice(&0i32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    push_record(&mut b, 0x26, &p);
+    push_record(&mut b, 0x25, &1u32.to_le_bytes());
+    // Polygon16
+    let mut p = Vec::new();
+    for v in [0i32, 0, 10, 10] { p.extend_from_slice(&v.to_le_bytes()); }
+    p.extend_from_slice(&3u32.to_le_bytes());
+    for (x, y) in [(0i16, 0i16), (10, 0), (5, 10)] {
+        p.extend_from_slice(&x.to_le_bytes());
+        p.extend_from_slice(&y.to_le_bytes());
+    }
+    push_record(&mut b, 0x57, &p);
+    push_eof(&mut b);
+
+    let svg = convert_to_svg(&b, (0.0, 0.0, 10.0, 10.0)).expect("convert");
+    assert!(svg.contains("<polygon points=\"0,0 10,0 5,10\""), "polygon missing: {svg}");
+}
+
+#[test]
+fn colorref_conversion_low_byte_is_red() {
+    use super::converter::colorref_to_rgb;
+    // COLORREF 0x00BBGGRR → R=lowest byte
+    assert_eq!(colorref_to_rgb(0x000000FF), "rgb(255,0,0)");
+    assert_eq!(colorref_to_rgb(0x0000FF00), "rgb(0,255,0)");
+    assert_eq!(colorref_to_rgb(0x00FF0000), "rgb(0,0,255)");
+}
+
 #[test]
 fn preserves_unknown_records_as_payload() {
     // Header + Unknown(type=0x00000054 = ExtTextOutW, 단계 13에서 분기) + EOF

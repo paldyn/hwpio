@@ -1,10 +1,12 @@
 //! EMF 레코드 enum + 개별 파서 모듈.
 
+pub mod drawing;
 pub mod header;
 pub mod object;
+pub mod path;
 pub mod state;
 
-use super::objects::{Header, LogBrush, LogFontW, LogPen, PointL, SizeL, XForm};
+use super::objects::{Header, LogBrush, LogFontW, LogPen, PointL, RectL, SizeL, XForm};
 
 /// 파싱된 EMF 레코드.
 #[derive(Debug, Clone)]
@@ -38,6 +40,27 @@ pub enum Record {
     SetTextAlign(u32),
     SetTextColor(u32),
     SetBkColor(u32),
+
+    // 드로잉 (단계 12)
+    MoveToEx(PointL),
+    LineTo(PointL),
+    Rectangle(RectL),
+    RoundRect { rect: RectL, corner_w: i32, corner_h: i32 },
+    Ellipse(RectL),
+    Arc   { rect: RectL, start: PointL, end: PointL },
+    Chord { rect: RectL, start: PointL, end: PointL },
+    Pie   { rect: RectL, start: PointL, end: PointL },
+    Polyline16   { bounds: RectL, points: Vec<(i16, i16)> },
+    Polygon16    { bounds: RectL, points: Vec<(i16, i16)> },
+    PolyBezier16 { bounds: RectL, points: Vec<(i16, i16)> },
+
+    // 패스 (단계 12)
+    BeginPath,
+    EndPath,
+    CloseFigure,
+    FillPath(RectL),
+    StrokePath(RectL),
+    StrokeAndFillPath(RectL),
 
     /// 미분기 레코드. `payload`는 type/size 8B를 제외한 나머지.
     Unknown { record_type: u32, payload: Vec<u8> },
