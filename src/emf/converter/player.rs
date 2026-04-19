@@ -6,10 +6,12 @@ use std::fmt::Write;
 
 use crate::emf::Error;
 use crate::emf::parser::objects::{Header, LogBrush, LogPen, PointL, RectL};
-use crate::emf::parser::records::Record;
+use crate::emf::parser::records::{ExtTextOut, Record, StretchDIBits};
 
 use super::device_context::{DcStack, GraphicsObject, ObjectTable};
-use super::svg::{colorref_to_rgb, SvgBuilder};
+use super::svg::{colorref_to_rgb, escape_xml, SvgBuilder};
+
+use base64::Engine;
 
 pub struct Player {
     pub dc_stack:    DcStack,
@@ -143,8 +145,48 @@ impl Player {
                 self.emit_path(self.fill_spec(), Some(self.stroke_spec()));
             }
 
+            // 텍스트
+            Record::ExtTextOutW(t) => self.emit_text(t),
+
+            // 비트맵
+            Record::StretchDIBits(bmp) => self.emit_bitmap(bmp),
+
             Record::Unknown { .. } => {}
         }
+    }
+
+    fn emit_text(&mut self, t: &ExtTextOut) {
+        if t.text.is_empty() { return; }
+        let dc = self.dc_stack.current();
+        let color = colorref_to_rgb(dc.text_color);
+        // 폰트
+        let (family, size, weight, italic) = if let Some(f) = &dc.font {
+            let fam = if f.face_name.is_empty() { "sans-serif".to_string() } else { f.face_name.clone() };
+            // LogFontW.height: 음수=cell height, 양수=character height. |height|를 px로 사용.
+            let size = f.height.unsigned_abs().max(1) as f32;
+            let weight = if f.weight >= 700 { "bold" } else { "normal" };
+            let italic = if f.italic != 0 { "italic" } else { "normal" };
+            (fam, size, weight, italic)
+        } else {
+            ("sans-serif".to_string(), 12.0, "normal", "normal")
+        };
+        let node = format!(
+            "<text x=\"{}\" y=\"{}\" font-family=\"{}\" font-size=\"{:.2}\" font-weight=\"{}\" font-style=\"{}\" fill=\"{}\">{}</text>",
+            t.reference.x, t.reference.y,
+            escape_xml(&family), size, weight, italic, color,
+            escape_xml(&t.text),
+        );
+        self.svg.push(&node);
+    }
+
+    fn emit_bitmap(&mut self, bmp: &StretchDIBits) {
+        // DIB(BMI+bits) → BMP 파일 포맷으로 래핑 → base64 data URL.
+        let data_url = dib_to_bmp_data_url(&bmp.bmi, &bmp.bits);
+        let node = format!(
+            "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"{data_url}\"/>",
+            bmp.x_dest, bmp.y_dest, bmp.cx_dest, bmp.cy_dest,
+        );
+        self.svg.push(&node);
     }
 
     fn select_object(&mut self, handle: u32) {
@@ -318,4 +360,25 @@ enum ArcKind { Arc, Chord, Pie }
 pub struct StrokeSpec {
     pub color: Option<String>,
     pub width: f32,
+}
+
+/// DIB(BITMAPINFO + bits)를 BMP 파일 포맷으로 래핑하여 base64 data URL로 반환.
+///
+/// BMP 파일 헤더(14B): `"BM"` + file_size(u32) + reserved(u32)=0 + data_offset(u32)
+fn dib_to_bmp_data_url(bmi: &[u8], bits: &[u8]) -> String {
+    let bmi_size  = bmi.len() as u32;
+    let bits_size = bits.len() as u32;
+    let file_size = 14 + bmi_size + bits_size;
+    let data_offset = 14 + bmi_size;
+
+    let mut bmp = Vec::with_capacity(file_size as usize);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&0u32.to_le_bytes());
+    bmp.extend_from_slice(&data_offset.to_le_bytes());
+    bmp.extend_from_slice(bmi);
+    bmp.extend_from_slice(bits);
+
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bmp);
+    format!("data:image/bmp;base64,{b64}")
 }

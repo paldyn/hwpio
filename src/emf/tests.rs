@@ -537,6 +537,193 @@ fn colorref_conversion_low_byte_is_red() {
     assert_eq!(colorref_to_rgb(0x00FF0000), "rgb(0,0,255)");
 }
 
+// ───── 단계 13: 텍스트·비트맵 레코드 ─────
+
+/// EMR_EXTTEXTOUTW 페이로드 빌더. 텍스트만 담고 offDx는 0.
+fn build_ext_text_out_w_payload(text: &str, ref_x: i32, ref_y: i32) -> Vec<u8> {
+    let utf16: Vec<u16> = text.encode_utf16().collect();
+    let n_chars = utf16.len() as u32;
+    // 고정부 68B (payload 기준) + 문자열. offString은 record 기준이므로 68 + 8 = 76.
+    let off_string: u32 = 76;
+    let mut p = Vec::new();
+    // Bounds RECTL (16)
+    for v in [0i32, 0, 100, 20] { p.extend_from_slice(&v.to_le_bytes()); }
+    // iGraphicsMode, exScale, eyScale
+    p.extend_from_slice(&1u32.to_le_bytes());
+    p.extend_from_slice(&1.0f32.to_le_bytes());
+    p.extend_from_slice(&1.0f32.to_le_bytes());
+    // Reference PointL
+    p.extend_from_slice(&ref_x.to_le_bytes());
+    p.extend_from_slice(&ref_y.to_le_bytes());
+    // Chars, offString, Options
+    p.extend_from_slice(&n_chars.to_le_bytes());
+    p.extend_from_slice(&off_string.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    // Rectangle RECTL (16)
+    for v in [0i32, 0, 100, 20] { p.extend_from_slice(&v.to_le_bytes()); }
+    // offDx
+    p.extend_from_slice(&0u32.to_le_bytes());
+    assert_eq!(p.len(), 68);
+    // OutputString
+    for w in &utf16 {
+        p.extend_from_slice(&w.to_le_bytes());
+    }
+    // 4 정렬 패딩
+    while p.len() % 4 != 0 { p.push(0); }
+    p
+}
+
+#[test]
+fn parses_ext_text_out_w_ascii() {
+    let mut b = header_prefix();
+    let payload = build_ext_text_out_w_payload("Hello", 10, 20);
+    push_record(&mut b, 0x54, &payload);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::ExtTextOutW(t) => {
+            assert_eq!(t.text, "Hello");
+            assert_eq!(t.reference.x, 10);
+            assert_eq!(t.reference.y, 20);
+        }
+        other => panic!("expected ExtTextOutW, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_ext_text_out_w_korean() {
+    let mut b = header_prefix();
+    let payload = build_ext_text_out_w_payload("가나다", 5, 15);
+    push_record(&mut b, 0x54, &payload);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::ExtTextOutW(t) => assert_eq!(t.text, "가나다"),
+        other => panic!("expected ExtTextOutW, got {other:?}"),
+    }
+}
+
+#[test]
+fn convert_to_svg_text_uses_font_face_name() {
+    // CreateFont(Arial, height=12, weight=700) + SelectObject + SetTextColor(빨강) + ExtTextOutW
+    let mut b = header_prefix();
+
+    // ExtCreateFontIndirectW: handle=1, LogFontW
+    let mut font_payload = Vec::new();
+    font_payload.extend_from_slice(&1u32.to_le_bytes());   // handle
+    font_payload.extend_from_slice(&(-12i32).to_le_bytes());
+    font_payload.extend_from_slice(&0i32.to_le_bytes());
+    font_payload.extend_from_slice(&0i32.to_le_bytes());
+    font_payload.extend_from_slice(&0i32.to_le_bytes());
+    font_payload.extend_from_slice(&700i32.to_le_bytes()); // bold
+    font_payload.extend_from_slice(&[0u8; 8]);
+    let face: Vec<u16> = "Arial".encode_utf16().collect();
+    for w in &face { font_payload.extend_from_slice(&w.to_le_bytes()); }
+    for _ in face.len()..32 { font_payload.extend_from_slice(&0u16.to_le_bytes()); }
+    assert_eq!(font_payload.len(), 96);
+    push_record(&mut b, 0x52, &font_payload);
+
+    // SelectObject handle=1
+    push_record(&mut b, 0x25, &1u32.to_le_bytes());
+    // SetTextColor 빨강
+    push_record(&mut b, 0x18, &0x000000FFu32.to_le_bytes());
+    // ExtTextOutW "Hi"
+    let payload = build_ext_text_out_w_payload("Hi", 5, 20);
+    push_record(&mut b, 0x54, &payload);
+    push_eof(&mut b);
+
+    let svg = convert_to_svg(&b, (0.0, 0.0, 100.0, 50.0)).expect("convert");
+    assert!(svg.contains("<text "), "no text element: {svg}");
+    assert!(svg.contains("font-family=\"Arial\""), "no Arial: {svg}");
+    assert!(svg.contains("font-weight=\"bold\""), "no bold: {svg}");
+    assert!(svg.contains("fill=\"rgb(255,0,0)\""), "no red fill: {svg}");
+    assert!(svg.contains(">Hi</text>"), "no Hi text: {svg}");
+}
+
+#[test]
+fn parses_stretch_di_bits_and_emits_image() {
+    // 최소 DIB: BITMAPINFOHEADER(40B) + bits(4B).
+    let mut bmi = Vec::new();
+    bmi.extend_from_slice(&40u32.to_le_bytes());            // biSize
+    bmi.extend_from_slice(&2i32.to_le_bytes());             // biWidth
+    bmi.extend_from_slice(&2i32.to_le_bytes());             // biHeight
+    bmi.extend_from_slice(&1u16.to_le_bytes());             // biPlanes
+    bmi.extend_from_slice(&32u16.to_le_bytes());            // biBitCount
+    bmi.extend_from_slice(&0u32.to_le_bytes());             // biCompression
+    bmi.extend_from_slice(&16u32.to_le_bytes());            // biSizeImage
+    bmi.extend_from_slice(&0i32.to_le_bytes());             // biXPelsPerMeter
+    bmi.extend_from_slice(&0i32.to_le_bytes());             // biYPelsPerMeter
+    bmi.extend_from_slice(&0u32.to_le_bytes());             // biClrUsed
+    bmi.extend_from_slice(&0u32.to_le_bytes());             // biClrImportant
+    assert_eq!(bmi.len(), 40);
+    let bits: Vec<u8> = (0..16).collect();
+
+    // STRETCHDIBITS 페이로드 (72B 고정 + BMI + bits)
+    let off_bmi = 72u32 + 8;                                 // record 기준
+    let off_bits = off_bmi + bmi.len() as u32;
+    let mut p = Vec::new();
+    // Bounds
+    for v in [0i32, 0, 2, 2] { p.extend_from_slice(&v.to_le_bytes()); }
+    // xDest, yDest
+    p.extend_from_slice(&10i32.to_le_bytes());
+    p.extend_from_slice(&20i32.to_le_bytes());
+    // xSrc, ySrc, cxSrc, cySrc
+    for _ in 0..4 { p.extend_from_slice(&0i32.to_le_bytes()); }
+    // offBmi, cbBmi
+    p.extend_from_slice(&off_bmi.to_le_bytes());
+    p.extend_from_slice(&(bmi.len() as u32).to_le_bytes());
+    // offBits, cbBits
+    p.extend_from_slice(&off_bits.to_le_bytes());
+    p.extend_from_slice(&(bits.len() as u32).to_le_bytes());
+    // UsageSrc, RasterOp
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p.extend_from_slice(&0x00CC0020u32.to_le_bytes());  // SRCCOPY
+    // cxDest, cyDest
+    p.extend_from_slice(&40i32.to_le_bytes());
+    p.extend_from_slice(&50i32.to_le_bytes());
+    assert_eq!(p.len(), 72);
+    p.extend_from_slice(&bmi);
+    p.extend_from_slice(&bits);
+    while p.len() % 4 != 0 { p.push(0); }
+
+    let mut b = header_prefix();
+    push_record(&mut b, 0x51, &p);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::StretchDIBits(s) => {
+            assert_eq!(s.x_dest, 10);
+            assert_eq!(s.y_dest, 20);
+            assert_eq!(s.cx_dest, 40);
+            assert_eq!(s.cy_dest, 50);
+            assert_eq!(s.bmi.len(), 40);
+            assert_eq!(s.bits.len(), 16);
+        }
+        other => panic!("expected StretchDIBits, got {other:?}"),
+    }
+
+    // SVG 출력 검증
+    let svg = convert_to_svg(&b, (0.0, 0.0, 100.0, 100.0)).expect("convert");
+    assert!(svg.contains("<image "));
+    assert!(svg.contains("x=\"10\" y=\"20\" width=\"40\" height=\"50\""));
+    assert!(svg.contains("href=\"data:image/bmp;base64,"));
+}
+
+#[test]
+fn text_xml_special_chars_are_escaped() {
+    let mut b = header_prefix();
+    let payload = build_ext_text_out_w_payload("a<b&c", 0, 0);
+    push_record(&mut b, 0x54, &payload);
+    push_eof(&mut b);
+
+    let svg = convert_to_svg(&b, (0.0, 0.0, 10.0, 10.0)).expect("convert");
+    assert!(svg.contains("&lt;b&amp;c"), "xml not escaped: {svg}");
+    assert!(!svg.contains(">a<b&c<"), "raw chars present: {svg}");
+}
+
 #[test]
 fn preserves_unknown_records_as_payload() {
     // Header + Unknown(type=0x00000054 = ExtTextOutW, 단계 13에서 분기) + EOF
@@ -544,7 +731,7 @@ fn preserves_unknown_records_as_payload() {
     // Insert unknown BEFORE eof. fixture_minimal_header_eof는 88 + 20 = 108 바이트.
     // EOF 구간(마지막 20바이트)을 잘라내고, Unknown(16B) + EOF(20B) 재조립.
     let eof = b.split_off(88);
-    b.extend_from_slice(&0x00000054u32.to_le_bytes());    // Type=ExtTextOutW
+    b.extend_from_slice(&0x00000070u32.to_le_bytes());    // Type=0x70 (미정의, 1차 범위 외)
     b.extend_from_slice(&16u32.to_le_bytes());            // Size=16
     b.extend_from_slice(&0xDEADBEEFu32.to_le_bytes());    // 페이로드
     b.extend_from_slice(&0xCAFEBABEu32.to_le_bytes());
@@ -554,7 +741,7 @@ fn preserves_unknown_records_as_payload() {
     assert_eq!(records.len(), 3);
     match &records[1] {
         Record::Unknown { record_type, payload } => {
-            assert_eq!(*record_type, 0x00000054);
+            assert_eq!(*record_type, 0x00000070);
             assert_eq!(payload.len(), 8);
         }
         other => panic!("expected Unknown, got {other:?}"),

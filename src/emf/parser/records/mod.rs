@@ -1,12 +1,16 @@
 //! EMF 레코드 enum + 개별 파서 모듈.
 
+pub mod bitmap;
 pub mod drawing;
 pub mod header;
 pub mod object;
 pub mod path;
 pub mod state;
+pub mod text;
 
 use super::objects::{Header, LogBrush, LogFontW, LogPen, PointL, RectL, SizeL, XForm};
+pub use bitmap::StretchDIBits;
+pub use text::ExtTextOut;
 
 /// 파싱된 EMF 레코드.
 #[derive(Debug, Clone)]
@@ -61,6 +65,12 @@ pub enum Record {
     FillPath(RectL),
     StrokePath(RectL),
     StrokeAndFillPath(RectL),
+
+    // 텍스트 (단계 13)
+    ExtTextOutW(ExtTextOut),
+
+    // 비트맵 (단계 13)
+    StretchDIBits(StretchDIBits),
 
     /// 미분기 레코드. `payload`는 type/size 8B를 제외한 나머지.
     Unknown { record_type: u32, payload: Vec<u8> },

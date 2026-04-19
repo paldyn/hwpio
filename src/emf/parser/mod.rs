@@ -49,6 +49,9 @@ const RT_CLOSE_FIGURE: u32       = 0x0000003D;
 const RT_FILL_PATH: u32          = 0x0000003E;
 const RT_STROKE_AND_FILL_PATH: u32 = 0x0000003F;
 const RT_STROKE_PATH: u32        = 0x00000040;
+// 텍스트/비트맵 (단계 13)
+const RT_EXT_TEXT_OUT_W: u32     = 0x00000054;
+const RT_STRETCH_DI_BITS: u32    = 0x00000051;
 
 /// EMF 바이트를 레코드 시퀀스로 파싱.
 pub fn parse(bytes: &[u8]) -> Result<Vec<Record>, Error> {
@@ -89,7 +92,7 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<Record>, Error> {
 }
 
 fn dispatch(record_type: u32, c: &mut Cursor<'_>, payload_len: usize) -> Result<Record, Error> {
-    use records::{drawing, object, path, state};
+    use records::{bitmap, drawing, object, path, state, text};
 
     let rec = match record_type {
         RT_EOF => Record::Eof,
@@ -165,6 +168,18 @@ fn dispatch(record_type: u32, c: &mut Cursor<'_>, payload_len: usize) -> Result<
         RT_STROKE_PATH           => Record::StrokePath(path::parse_path_bounds(c)?),
         RT_STROKE_AND_FILL_PATH  => Record::StrokeAndFillPath(path::parse_path_bounds(c)?),
 
+        // 텍스트
+        RT_EXT_TEXT_OUT_W => {
+            let payload = c.full_buf();
+            Record::ExtTextOutW(text::parse(payload)?)
+        }
+
+        // 비트맵
+        RT_STRETCH_DI_BITS => {
+            let payload = c.full_buf();
+            Record::StretchDIBits(bitmap::parse(payload)?)
+        }
+
         _ => Record::Unknown {
             record_type,
             payload: c.take(payload_len)?.to_vec(),
@@ -223,6 +238,10 @@ impl<'a> Cursor<'a> {
         let b = self.take(2)?;
         Ok(u16::from_le_bytes([b[0], b[1]]))
     }
+
+    /// 커서의 원본 버퍼(페이로드 전체).
+    #[must_use]
+    pub fn full_buf(&self) -> &'a [u8] { self.buf }
 
     pub fn peek_record_header(&self) -> Result<RecordHeader, Error> {
         let b = self.peek(8)?;
