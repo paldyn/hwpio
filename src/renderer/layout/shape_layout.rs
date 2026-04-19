@@ -966,8 +966,16 @@ impl LayoutEngine {
                 parent.children.push(img_node);
             }
             ShapeObject::Chart(chart) => {
-                // Task #195 단계 2: placeholder Rectangle로 렌더 (단계 4에서 실제 차트 SVG)
-                let (style, gradient) = drawing_to_shape_style(&chart.drawing);
+                // Task #195 단계 4: 차트 placeholder (연한 파란 배경 + 점선 테두리)
+                let (mut style, gradient) = drawing_to_shape_style(&chart.drawing);
+                if style.fill_color.is_none() && gradient.is_none() {
+                    style.fill_color = Some(0xFFE8F0FE); // 연한 파란
+                }
+                if style.stroke_color.is_none() || style.stroke_width <= 0.0 {
+                    style.stroke_color = Some(0xFF4A90E2);
+                    style.stroke_width = 1.0;
+                    style.stroke_dash = crate::renderer::StrokeDash::Dash;
+                }
                 let node_id = tree.next_id();
                 let node = RenderNode::new(
                     node_id,
@@ -983,8 +991,17 @@ impl LayoutEngine {
                 parent.children.push(node);
             }
             ShapeObject::Ole(ole) => {
-                // Task #195 단계 2: placeholder Rectangle로 렌더 (단계 4에서 프리뷰 렌더)
-                let (style, gradient) = drawing_to_shape_style(&ole.drawing);
+                // Task #195 단계 4: OLE placeholder (연한 회색 배경 + 점선 테두리)
+                let (mut style, gradient) = drawing_to_shape_style(&ole.drawing);
+                if style.fill_color.is_none() && gradient.is_none() {
+                    style.fill_color = Some(0xFFF0F0F0); // 연한 회색
+                }
+                if style.stroke_color.is_none() || style.stroke_width <= 0.0 {
+                    style.stroke_color = Some(0xFF909090);
+                    style.stroke_width = 1.0;
+                    style.stroke_dash = crate::renderer::StrokeDash::Dash;
+                }
+                let _bin_id = ole.bin_data_id; // 단계 4 이후: BinData 프리뷰 추출
                 let node_id = tree.next_id();
                 let node = RenderNode::new(
                     node_id,
