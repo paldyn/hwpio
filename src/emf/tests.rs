@@ -148,6 +148,219 @@ fn parses_header_with_extensions() {
     assert_eq!(h.ext2.unwrap().micrometers_y, 6789);
 }
 
+/// 단계 11 — 객체/상태 레코드 파싱 테스트용 픽스처 빌더.
+fn header_prefix() -> Vec<u8> {
+    // 최소 88B 헤더. fixture_minimal_header_eof에서 EOF 제외.
+    let mut b = fixture_minimal_header_eof();
+    b.truncate(88);
+    b
+}
+
+fn push_record(b: &mut Vec<u8>, rt: u32, payload: &[u8]) {
+    let size = 8u32 + payload.len() as u32;
+    assert!(size % 4 == 0, "record size must be 4-aligned");
+    b.extend_from_slice(&rt.to_le_bytes());
+    b.extend_from_slice(&size.to_le_bytes());
+    b.extend_from_slice(payload);
+}
+
+fn push_eof(b: &mut Vec<u8>) {
+    push_record(b, 14, &[0u8; 12]);
+}
+
+#[test]
+fn parses_create_pen_and_select_and_delete() {
+    let mut b = header_prefix();
+
+    // EMR_CREATEPEN (0x26): handle=1, style=0(PS_SOLID), width=2, reserved=0, color=0x00FF0000
+    let mut pen_payload = Vec::new();
+    pen_payload.extend_from_slice(&1u32.to_le_bytes());       // handle
+    pen_payload.extend_from_slice(&0u32.to_le_bytes());       // style
+    pen_payload.extend_from_slice(&2i32.to_le_bytes());       // width.x
+    pen_payload.extend_from_slice(&0i32.to_le_bytes());       // width.y
+    pen_payload.extend_from_slice(&0x00FF0000u32.to_le_bytes()); // color
+    push_record(&mut b, 0x26, &pen_payload);
+
+    // EMR_SELECTOBJECT (0x25): handle=1
+    push_record(&mut b, 0x25, &1u32.to_le_bytes());
+
+    // EMR_DELETEOBJECT (0x28): handle=1
+    push_record(&mut b, 0x28, &1u32.to_le_bytes());
+
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    assert_eq!(recs.len(), 5);
+
+    match &recs[1] {
+        Record::CreatePen { handle, pen } => {
+            assert_eq!(*handle, 1);
+            assert_eq!(pen.style, 0);
+            assert_eq!(pen.width, 2);
+            assert_eq!(pen.color, 0x00FF0000);
+        }
+        other => panic!("expected CreatePen, got {other:?}"),
+    }
+    assert!(matches!(recs[2], Record::SelectObject { handle: 1 }));
+    assert!(matches!(recs[3], Record::DeleteObject { handle: 1 }));
+    assert!(matches!(recs[4], Record::Eof));
+}
+
+#[test]
+fn parses_create_brush_indirect() {
+    let mut b = header_prefix();
+    // EMR_CREATEBRUSHINDIRECT (0x27): handle=2, style=0, color=0x00112233, hatch=0
+    let mut p = Vec::new();
+    p.extend_from_slice(&2u32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    p.extend_from_slice(&0x00112233u32.to_le_bytes());
+    p.extend_from_slice(&0u32.to_le_bytes());
+    push_record(&mut b, 0x27, &p);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::CreateBrushIndirect { handle, brush } => {
+            assert_eq!(*handle, 2);
+            assert_eq!(brush.color, 0x00112233);
+        }
+        other => panic!("expected CreateBrushIndirect, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_ext_create_font_indirect_w() {
+    let mut b = header_prefix();
+    // EMR_EXTCREATEFONTINDIRECTW (0x52): handle(4) + LogFontW(92) = 96B payload.
+    let mut p = Vec::new();
+    p.extend_from_slice(&3u32.to_le_bytes());           // handle
+    p.extend_from_slice(&(-12i32).to_le_bytes());       // height
+    p.extend_from_slice(&0i32.to_le_bytes());           // width
+    p.extend_from_slice(&0i32.to_le_bytes());           // escapement
+    p.extend_from_slice(&0i32.to_le_bytes());           // orientation
+    p.extend_from_slice(&700i32.to_le_bytes());         // weight (bold)
+    p.extend_from_slice(&[1u8, 0, 0, 1, 0, 0, 0, 0]);   // italic/underline/strikeout/charset + precisions
+    // FaceName "Arial" + null padding
+    let face: Vec<u16> = "Arial".encode_utf16().collect();
+    for w in &face {
+        p.extend_from_slice(&w.to_le_bytes());
+    }
+    for _ in face.len()..32 {
+        p.extend_from_slice(&0u16.to_le_bytes());
+    }
+    assert_eq!(p.len(), 96);
+    push_record(&mut b, 0x52, &p);
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::ExtCreateFontIndirectW { handle, font } => {
+            assert_eq!(*handle, 3);
+            assert_eq!(font.weight, 700);
+            assert_eq!(font.italic, 1);
+            assert_eq!(font.face_name, "Arial");
+            assert_eq!(font.height, -12);
+        }
+        other => panic!("expected ExtCreateFontIndirectW, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_dc_stack_and_world_transform() {
+    let mut b = header_prefix();
+    push_record(&mut b, 0x21, &[]);                      // EMR_SAVEDC
+    // EMR_SETWORLDTRANSFORM (0x23): XForm(24B)
+    let mut p = Vec::new();
+    for v in [2.0_f32, 0.0, 0.0, 3.0, 10.0, 20.0] {
+        p.extend_from_slice(&v.to_le_bytes());
+    }
+    push_record(&mut b, 0x23, &p);
+    // EMR_RESTOREDC (0x22): relative=-1
+    push_record(&mut b, 0x22, &(-1i32).to_le_bytes());
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    assert!(matches!(recs[1], Record::SaveDC));
+    match &recs[2] {
+        Record::SetWorldTransform(x) => {
+            assert!((x.m11 - 2.0).abs() < 1e-6);
+            assert!((x.m22 - 3.0).abs() < 1e-6);
+            assert!((x.dx  - 10.0).abs() < 1e-6);
+            assert!((x.dy  - 20.0).abs() < 1e-6);
+        }
+        other => panic!("expected SetWorldTransform, got {other:?}"),
+    }
+    assert!(matches!(recs[3], Record::RestoreDC { relative: -1 }));
+}
+
+#[test]
+fn parses_window_viewport_and_colors() {
+    let mut b = header_prefix();
+    // EMR_SETWINDOWEXTEX (0x09): SizeL (cx=100, cy=200)
+    let mut p = Vec::new();
+    p.extend_from_slice(&100i32.to_le_bytes());
+    p.extend_from_slice(&200i32.to_le_bytes());
+    push_record(&mut b, 0x09, &p);
+    // EMR_SETVIEWPORTORGEX (0x0C): PointL (x=5, y=6)
+    let mut p = Vec::new();
+    p.extend_from_slice(&5i32.to_le_bytes());
+    p.extend_from_slice(&6i32.to_le_bytes());
+    push_record(&mut b, 0x0C, &p);
+    // EMR_SETTEXTCOLOR (0x18): 0x00ABCDEF
+    push_record(&mut b, 0x18, &0x00ABCDEFu32.to_le_bytes());
+    // EMR_SETBKMODE (0x12): 1=transparent
+    push_record(&mut b, 0x12, &1u32.to_le_bytes());
+    push_eof(&mut b);
+
+    let recs = parse_emf(&b).expect("parse");
+    match &recs[1] {
+        Record::SetWindowExtEx(s) => { assert_eq!(s.cx, 100); assert_eq!(s.cy, 200); }
+        other => panic!("expected SetWindowExtEx, got {other:?}"),
+    }
+    match &recs[2] {
+        Record::SetViewportOrgEx(p) => { assert_eq!(p.x, 5); assert_eq!(p.y, 6); }
+        other => panic!("expected SetViewportOrgEx, got {other:?}"),
+    }
+    assert!(matches!(recs[3], Record::SetTextColor(0x00ABCDEF)));
+    assert!(matches!(recs[4], Record::SetBkMode(1)));
+}
+
+#[test]
+fn dc_stack_save_restore_round_trip() {
+    use super::converter::{DcStack};
+
+    let mut dc = DcStack::new();
+    assert_eq!(dc.depth(), 0);
+    dc.current_mut().text_color = 0x111111;
+    dc.save();
+    assert_eq!(dc.depth(), 1);
+    dc.current_mut().text_color = 0x222222;
+    dc.save();
+    dc.current_mut().text_color = 0x333333;
+    // Pop 1 — returns to state after first save (text_color=0x222222)
+    assert!(dc.restore(-1));
+    assert_eq!(dc.current().text_color, 0x222222);
+    assert!(dc.restore(-1));
+    assert_eq!(dc.current().text_color, 0x111111);
+    assert!(!dc.restore(-1));   // 스택 비었으므로 실패
+}
+
+#[test]
+fn object_table_insert_get_remove() {
+    use super::converter::{GraphicsObject, ObjectTable};
+    use super::parser::objects::LogPen;
+
+    let mut table = ObjectTable::new();
+    table.insert(1, GraphicsObject::Pen(LogPen {
+        style: 0, width: 2, _reserved: 0, color: 0x00FF0000,
+    }));
+    assert!(table.get(1).is_some());
+    assert_eq!(table.len(), 1);
+    table.remove(1);
+    assert!(table.get(1).is_none());
+    assert!(table.is_empty());
+}
+
 #[test]
 fn preserves_unknown_records_as_payload() {
     // Header + Unknown(type=0x00000054 = ExtTextOutW, 단계 13에서 분기) + EOF

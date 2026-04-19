@@ -18,6 +18,7 @@
     unused_variables,
 )]
 
+pub mod converter;
 pub mod parser;
 
 #[cfg(test)]
