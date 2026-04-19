@@ -18,14 +18,17 @@ function run(cmd, cwd = __dirname) {
   execSync(cmd, { stdio: 'inherit', cwd });
 }
 
-function copy(src, dest) {
+function copy(src, dest, options = {}) {
   if (!existsSync(src)) {
     console.warn(`  SKIP (not found): ${src}`);
     return;
   }
-  cpSync(src, dest, { recursive: true });
+  cpSync(src, dest, { recursive: true, ...options });
   console.log(`  COPY: ${src} → ${dest}`);
 }
+
+/** 배포본에서 제외할 파일 패턴 (테스트 등). */
+const EXCLUDE_FROM_DIST = /\.(test|spec)\.[mc]?[jt]sx?$/i;
 
 console.log('=== rhwp-chrome 빌드 시작 ===\n');
 
@@ -58,7 +61,9 @@ copy(resolve(__dirname, 'background.js'), resolve(DIST, 'background.js'));
 copy(resolve(__dirname, 'content-script.js'), resolve(DIST, 'content-script.js'));
 copy(resolve(__dirname, 'content-script.css'), resolve(DIST, 'content-script.css'));
 copy(resolve(__dirname, 'dev-tools-inject.js'), resolve(DIST, 'dev-tools-inject.js'));
-copy(resolve(__dirname, 'sw'), resolve(DIST, 'sw'));
+copy(resolve(__dirname, 'sw'), resolve(DIST, 'sw'), {
+  filter: (src) => !EXCLUDE_FROM_DIST.test(src),
+});
 copy(resolve(__dirname, 'options.html'), resolve(DIST, 'options.html'));
 copy(resolve(__dirname, 'options.js'), resolve(DIST, 'options.js'));
 
