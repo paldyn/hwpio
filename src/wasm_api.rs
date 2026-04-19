@@ -2796,6 +2796,29 @@ impl HwpDocument {
         self.export_hwpx_native().map_err(|e| e.into())
     }
 
+    /// 어댑터 적용 + HWP 직렬화 + 자기 재로드 검증을 수행하고 결과를 JSON 으로 반환한다 (#178).
+    ///
+    /// 반환 JSON:
+    /// ```json
+    /// {
+    ///   "bytesLen": 678912,
+    ///   "pageCountBefore": 9,
+    ///   "pageCountAfter": 9,
+    ///   "recovered": true
+    /// }
+    /// ```
+    ///
+    /// 본 함수는 검증 메타데이터만 반환하며 bytes 자체는 별도 호출 (`exportHwp`) 로 받아야 한다.
+    /// 검증과 실제 사용을 분리하여 호출자가 결과에 따라 다른 동작을 취할 수 있도록 한다.
+    #[wasm_bindgen(js_name = exportHwpVerify)]
+    pub fn export_hwp_verify(&mut self) -> Result<String, JsValue> {
+        let v = self.serialize_hwp_with_verify().map_err(JsValue::from)?;
+        Ok(format!(
+            "{{\"bytesLen\":{},\"pageCountBefore\":{},\"pageCountAfter\":{},\"recovered\":{}}}",
+            v.bytes_len, v.page_count_before, v.page_count_after, v.recovered
+        ))
+    }
+
     /// 원본 파일 형식을 반환한다 ("hwp" 또는 "hwpx").
     #[wasm_bindgen(js_name = getSourceFormat)]
     pub fn get_source_format(&self) -> String {

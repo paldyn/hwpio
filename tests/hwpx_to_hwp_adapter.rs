@@ -429,6 +429,54 @@ fn stage5_all_three_samples_recover_via_unified_entry_point() {
     }
 }
 
+// ============================================================
+// Stage 6 — serialize_hwp_with_verify 명시 검증 함수
+// ============================================================
+
+#[test]
+fn stage6_verify_recovered_for_hwpx_h_01() {
+    let bytes = load_sample("hwpx-h-01.hwpx");
+    let mut core = DocumentCore::from_bytes(&bytes).expect("HWPX 로드");
+    let v = core.serialize_hwp_with_verify().expect("verify");
+    eprintln!(
+        "[#178 Stage 6] verify hwpx-h-01: before={}, after={}, recovered={}, bytes={}",
+        v.page_count_before, v.page_count_after, v.recovered, v.bytes_len
+    );
+    assert!(v.recovered, "페이지 회복 실패: before={} after={}", v.page_count_before, v.page_count_after);
+    assert_eq!(v.page_count_before, v.page_count_after);
+    assert!(v.bytes_len > 0);
+}
+
+#[test]
+fn stage6_verify_recovered_for_all_three_samples() {
+    for name in ["hwpx-h-01.hwpx", "hwpx-h-02.hwpx", "hwpx-h-03.hwpx"] {
+        let bytes = load_sample(name);
+        let mut core = DocumentCore::from_bytes(&bytes).expect("HWPX 로드");
+        let v = core.serialize_hwp_with_verify().expect("verify");
+        assert!(
+            v.recovered,
+            "{}: before={} after={}",
+            name, v.page_count_before, v.page_count_after
+        );
+    }
+}
+
+#[test]
+fn stage6_verify_for_hwp_source_also_recovered() {
+    // HWP 출처 — 어댑터는 no-op, 그래도 verify 는 동작해야 함 (recovered=true)
+    let path = "samples/hwp_table_test.hwp";
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => {
+            eprintln!("[skip] {} 없음", path);
+            return;
+        }
+    };
+    let mut core = DocumentCore::from_bytes(&bytes).expect("HWP 로드");
+    let v = core.serialize_hwp_with_verify().expect("verify");
+    assert!(v.recovered, "HWP 출처 자기 재로드 페이지 수 일치");
+}
+
 #[test]
 fn stage5_wasm_api_export_hwp_uses_adapter() {
     // wasm_api 의 export_hwp (네이티브 래퍼: export_hwp_native_wrapper 가 아니라
