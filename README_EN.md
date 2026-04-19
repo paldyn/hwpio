@@ -208,7 +208,7 @@ Foundation  Typeset   Collab    Complete
 | **1.0 → 2.0** | Open community participation on AI typesetting pipeline | Lower the barrier to contribution |
 | **2.0 → 3.0** | Community-driven features toward public asset | Reach parity with Hancom |
 
-## Recent Changes (v0.7.3 / extension v0.2.0, 2026-04-19)
+## Recent Changes (v0.7.3 / extension v0.2.1, 2026-04-19)
 
 **rhwp-studio (library 0.7.3)**
 - HWPX-source documents: save disabled with user notification ([#196](https://github.com/edwardkim/rhwp/issues/196)) — prevents data loss until HWPX→HWP full converter ([#197](https://github.com/edwardkim/rhwp/issues/197)) lands
@@ -221,7 +221,7 @@ Foundation  Typeset   Collab    Complete
 - Shape resize width/height clamp (external contribution by [@seunghan91](https://github.com/seunghan91) — PR [#163](https://github.com/edwardkim/rhwp/pull/163))
 - Mobile dropdown menu icon/label overlap fix (external contribution by [@seunghan91](https://github.com/seunghan91) — PR [#161](https://github.com/edwardkim/rhwp/pull/161))
 
-**rhwp-chrome / Edge extension (v0.2.0)**
+**rhwp-chrome / Edge extension (v0.2.1)**
 - Restored "remember last save location" for general file downloads when extension is active ([#198](https://github.com/edwardkim/rhwp/issues/198))
 - Options page CSP fix ([#166](https://github.com/edwardkim/rhwp/issues/166))
 - HWP files: `Ctrl+S` overwrites the same file directly (external contribution by [@ahnbu](https://github.com/ahnbu) — PR [#189](https://github.com/edwardkim/rhwp/pull/189))
