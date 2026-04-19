@@ -5,6 +5,7 @@
 
 use crate::model::{ColorRef, Rect};
 use crate::model::style::ImageFillMode;
+use crate::model::image::ImageEffect;
 use super::{TextStyle, ShapeStyle, LineStyle, PathCommand, GradientFillInfo};
 use super::composer::CharOverlapInfo;
 use super::layout::CellContext;
@@ -599,6 +600,8 @@ pub struct ImageNode {
     /// 렌더러에서 이미지 원본 px 크기와 비교하여 source rect 계산
     /// None이면 전체 이미지 표시
     pub crop: Option<(i32, i32, i32, i32)>,
+    /// 그림 효과 (실사/그레이스케일/흑백/패턴)
+    pub effect: ImageEffect,
 }
 
 impl ImageNode {
@@ -609,6 +612,7 @@ impl ImageNode {
             fill_mode: None, original_size: None,
             transform: ShapeTransform::default(),
             crop: None,
+            effect: ImageEffect::RealPic,
         }
     }
 }
