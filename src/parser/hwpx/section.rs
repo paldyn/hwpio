@@ -178,6 +178,33 @@ fn parse_paragraph(
                         text_parts.push("\u{0002}".to_string());
                         para.controls.push(pic);
                     }
+                    b"switch" => {
+                        // <hp:switch> — OOXML 차트 또는 OLE fallback
+                        // 구조: <hp:switch>
+                        //         <hp:case hp:required-namespace="...ooxmlchart">
+                        //           <hp:chart chartIDRef="Chart/chartN.xml" .../>
+                        //         </hp:case>
+                        //         <hp:default><hp:ole .../></hp:default>
+                        //       </hp:switch>
+                        if let Some(ctrl) = parse_switch_chart_or_ole(reader)? {
+                            text_parts.push("\u{0002}".to_string());
+                            para.controls.push(ctrl);
+                        }
+                    }
+                    b"chart" => {
+                        // <hp:chart> 직접 출현 (switch 없이) — 아직 보지 못한 변형. 안전 경로.
+                        if let Some(ctrl) = parse_hp_chart_element(ce, reader)? {
+                            text_parts.push("\u{0002}".to_string());
+                            para.controls.push(ctrl);
+                        }
+                    }
+                    b"ole" => {
+                        // <hp:ole> 직접 출현 (switch 없이)
+                        if let Some(ctrl) = parse_hp_ole_element(ce, reader)? {
+                            text_parts.push("\u{0002}".to_string());
+                            para.controls.push(ctrl);
+                        }
+                    }
                     b"secPr" => {
                         // 문단 내 섹션 정의 파싱
                         let mut sd = SectionDef::default();
@@ -2812,6 +2839,241 @@ fn parse_form_object(
     }
 
     Ok(Control::Form(Box::new(form)))
+}
+
+// ---------------- HWPX switch / chart / ole 핸들러 ----------------
+
+/// `<hp:switch>`를 열고 내부에서 OOXML 차트(hp:chart)를 우선적으로,
+/// 없으면 OLE fallback(hp:ole)을 파싱하여 Control로 반환
+fn parse_switch_chart_or_ole(reader: &mut Reader<&[u8]>) -> Result<Option<Control>, HwpxError> {
+    let mut chart_ctrl: Option<Control> = None;
+    let mut ole_ctrl: Option<Control> = None;
+    let mut buf = Vec::new();
+    let mut in_case = false;
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref ce)) | Ok(Event::Empty(ref ce)) => {
+                let cname = ce.name();
+                let local = local_name(cname.as_ref());
+                match local {
+                    b"case" => { in_case = true; }
+                    b"default" => { in_case = false; }
+                    b"chart" => {
+                        if chart_ctrl.is_none() {
+                            chart_ctrl = parse_hp_chart_element(ce, reader)?;
+                        } else {
+                            skip_element(reader, b"chart")?;
+                        }
+                    }
+                    b"ole" => {
+                        if ole_ctrl.is_none() {
+                            ole_ctrl = parse_hp_ole_element(ce, reader)?;
+                        } else {
+                            skip_element(reader, b"ole")?;
+                        }
+                    }
+                    _ => {}
+                }
+                let _ = in_case;
+            }
+            Ok(Event::End(ref ee)) => {
+                if local_name(ee.name().as_ref()) == b"switch" {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(HwpxError::XmlError(format!("switch: {}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(chart_ctrl.or(ole_ctrl))
+}
+
+/// `<hp:chart chartIDRef="Chart/chartN.xml" zOrder="..." textWrap="..." ...>` 내부를 OLE 모델로 변환
+fn parse_hp_chart_element(
+    e: &quick_xml::events::BytesStart,
+    reader: &mut Reader<&[u8]>,
+) -> Result<Option<Control>, HwpxError> {
+    use crate::model::shape::OleShape;
+
+    let mut common = CommonObjAttr::default();
+    let mut chart_num: u16 = 0;
+
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"zOrder" => common.z_order = parse_i32(&attr),
+            b"textWrap" => {
+                common.text_wrap = match attr_str(&attr).as_str() {
+                    "SQUARE" => TextWrap::Square,
+                    "TIGHT" => TextWrap::Tight,
+                    "THROUGH" => TextWrap::Through,
+                    "TOP_AND_BOTTOM" => TextWrap::TopAndBottom,
+                    "BEHIND_TEXT" => TextWrap::BehindText,
+                    "IN_FRONT_OF_TEXT" => TextWrap::InFrontOfText,
+                    _ => TextWrap::Square,
+                };
+            }
+            b"chartIDRef" => {
+                // "Chart/chart1.xml" → 1
+                let s = attr_str(&attr);
+                let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+                chart_num = digits.parse().unwrap_or(0);
+            }
+            b"instid" => common.instance_id = parse_u32(&attr),
+            _ => {}
+        }
+    }
+
+    parse_common_shape_children(reader, &mut common, b"chart")?;
+
+    if chart_num == 0 {
+        return Ok(None);
+    }
+
+    let mut ole = OleShape::default();
+    ole.common = common;
+    ole.bin_data_id = (60000u32 + chart_num as u32);
+    ole.extent_x = 7200;
+    ole.extent_y = 7200;
+    Ok(Some(Control::Shape(Box::new(ShapeObject::Ole(Box::new(ole))))))
+}
+
+/// `<hp:ole binaryItemIDRef="oleN" ...>` 내부를 OLE 모델로 변환 (fallback용)
+fn parse_hp_ole_element(
+    e: &quick_xml::events::BytesStart,
+    reader: &mut Reader<&[u8]>,
+) -> Result<Option<Control>, HwpxError> {
+    use crate::model::shape::OleShape;
+
+    let mut common = CommonObjAttr::default();
+    let mut bin_id: u32 = 0;
+
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"zOrder" => common.z_order = parse_i32(&attr),
+            b"textWrap" => {
+                common.text_wrap = match attr_str(&attr).as_str() {
+                    "SQUARE" => TextWrap::Square,
+                    "TIGHT" => TextWrap::Tight,
+                    "THROUGH" => TextWrap::Through,
+                    "TOP_AND_BOTTOM" => TextWrap::TopAndBottom,
+                    "BEHIND_TEXT" => TextWrap::BehindText,
+                    "IN_FRONT_OF_TEXT" => TextWrap::InFrontOfText,
+                    _ => TextWrap::Square,
+                };
+            }
+            b"binaryItemIDRef" => {
+                let s = attr_str(&attr);
+                let digits: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+                bin_id = digits.parse().unwrap_or(0);
+            }
+            b"instid" => common.instance_id = parse_u32(&attr),
+            _ => {}
+        }
+    }
+
+    parse_common_shape_children(reader, &mut common, b"ole")?;
+
+    let mut ole = OleShape::default();
+    ole.common = common;
+    ole.bin_data_id = bin_id;
+    ole.extent_x = 7200;
+    ole.extent_y = 7200;
+    Ok(Some(Control::Shape(Box::new(ShapeObject::Ole(Box::new(ole))))))
+}
+
+/// `<hp:sz>`, `<hp:pos>`, `<hp:outMargin>` 등 공통 자식 요소를 공통 속성에 반영한다.
+fn parse_common_shape_children(
+    reader: &mut Reader<&[u8]>,
+    common: &mut CommonObjAttr,
+    end_tag: &[u8],
+) -> Result<(), HwpxError> {
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref ce)) | Ok(Event::Empty(ref ce)) => {
+                let cname = ce.name();
+                let local = local_name(cname.as_ref());
+                match local {
+                    b"sz" => {
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"width" => common.width = parse_u32(&attr),
+                                b"height" => common.height = parse_u32(&attr),
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"pos" => {
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"vertRelTo" => {
+                                    common.vert_rel_to = match attr_str(&attr).as_str() {
+                                        "PAPER" => VertRelTo::Paper,
+                                        "PAGE" => VertRelTo::Page,
+                                        _ => VertRelTo::Para,
+                                    };
+                                }
+                                b"horzRelTo" => {
+                                    common.horz_rel_to = match attr_str(&attr).as_str() {
+                                        "PAPER" => HorzRelTo::Paper,
+                                        "PAGE" => HorzRelTo::Page,
+                                        "COLUMN" => HorzRelTo::Column,
+                                        _ => HorzRelTo::Para,
+                                    };
+                                }
+                                b"vertAlign" => {
+                                    common.vert_align = match attr_str(&attr).as_str() {
+                                        "CENTER" => VertAlign::Center,
+                                        "BOTTOM" => VertAlign::Bottom,
+                                        "INSIDE" => VertAlign::Inside,
+                                        "OUTSIDE" => VertAlign::Outside,
+                                        _ => VertAlign::Top,
+                                    };
+                                }
+                                b"horzAlign" => {
+                                    common.horz_align = match attr_str(&attr).as_str() {
+                                        "CENTER" => HorzAlign::Center,
+                                        "RIGHT" => HorzAlign::Right,
+                                        "INSIDE" => HorzAlign::Inside,
+                                        "OUTSIDE" => HorzAlign::Outside,
+                                        _ => HorzAlign::Left,
+                                    };
+                                }
+                                b"vertOffset" => common.vertical_offset = parse_u32(&attr),
+                                b"horzOffset" => common.horizontal_offset = parse_u32(&attr),
+                                b"treatAsChar" => common.treat_as_char = parse_bool(&attr),
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"outMargin" => {
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"left" => common.margin.left = parse_i32(&attr) as i16,
+                                b"right" => common.margin.right = parse_i32(&attr) as i16,
+                                b"top" => common.margin.top = parse_i32(&attr) as i16,
+                                b"bottom" => common.margin.bottom = parse_i32(&attr) as i16,
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref ee)) => {
+                if local_name(ee.name().as_ref()) == end_tag {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(HwpxError::XmlError(format!("shape_children: {}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(())
 }
 
 #[cfg(test)]
