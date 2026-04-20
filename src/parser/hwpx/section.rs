@@ -2936,7 +2936,7 @@ fn parse_hp_chart_element(
 
     let mut ole = OleShape::default();
     ole.common = common;
-    ole.bin_data_id = (60000u32 + chart_num as u32);
+    ole.bin_data_id = 60000u32 + chart_num as u32;
     ole.extent_x = 7200;
     ole.extent_y = 7200;
     Ok(Some(Control::Shape(Box::new(ShapeObject::Ole(Box::new(ole))))))

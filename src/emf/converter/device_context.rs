@@ -73,6 +73,7 @@ impl DcStack {
     /// EMR_RESTOREDC `iRelative` 규약:
     /// - 음수: 상대(−1 = 가장 최근 Save)
     /// - 양수: 절대 깊이 (1 기반)
+    ///
     /// 단계 11은 음수(상대)만 지원. pop 개수 = `|relative|`.
     pub fn restore(&mut self, relative: i32) -> bool {
         if relative == 0 { return false; }
