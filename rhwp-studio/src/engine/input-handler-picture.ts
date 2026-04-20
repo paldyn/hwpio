@@ -381,8 +381,8 @@ export function updatePictureResizeDrag(this: any, e: MouseEvent): void {
     } catch { /* ignore */ }
   }
 
-  // 그룹 단일 선택: 드래그 중 실시간 크기 반영
-  if (!state.multiRefs && state.ref.type === 'group') {
+  // 단일 선택 (그룹/shape/image 등): 드래그 중 실시간 크기/위치 반영
+  if (!state.multiRefs && state.ref.type !== 'line') {
     const newW = Math.max(Math.round(newBbox.width * PX_TO_HWP), MIN_SIZE_HWP);
     const newH = Math.max(Math.round(newBbox.height * PX_TO_HWP), MIN_SIZE_HWP);
     const newHorzOffset = Math.round(newBbox.x * PX_TO_HWP);

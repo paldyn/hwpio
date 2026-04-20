@@ -1614,6 +1614,13 @@ impl DocumentCore {
         let new_h = super::super::helpers::json_u32(props_json, "height").map(|h| h.max(MIN_SHAPE_SIZE));
         Self::apply_common_obj_attr_from_json(c, props_json);
 
+        // Polygon/Curve: original_width/height는 생성 시 값으로 유지해야 렌더러의
+        // 스케일 팩터(sx = current/original)가 올바르게 동작한다.
+        let is_polygon_or_curve = matches!(shape,
+            crate::model::shape::ShapeObject::Polygon(_) | crate::model::shape::ShapeObject::Curve(_));
+        let saved_orig_w = if is_polygon_or_curve { shape.drawing().map(|d| d.shape_attr.original_width) } else { None };
+        let saved_orig_h = if is_polygon_or_curve { shape.drawing().map(|d| d.shape_attr.original_height) } else { None };
+
         // ShapeComponentAttr 크기/회전/채우기 동기화
         if let Some(d) = shape.drawing_mut() {
             if let Some(w) = new_w {
@@ -1765,6 +1772,12 @@ impl DocumentCore {
             let h = rect.common.height as i32;
             rect.x_coords = [0, w, w, 0];
             rect.y_coords = [0, 0, h, h];
+        }
+
+        // Polygon/Curve: original_width/height 복원 (생성 시 값 유지 → 렌더러 스케일 팩터 정상화)
+        if let Some(d) = shape.drawing_mut() {
+            if let Some(w) = saved_orig_w { d.shape_attr.original_width = w; }
+            if let Some(h) = saved_orig_h { d.shape_attr.original_height = h; }
         }
 
         // Group 리사이즈: original_width 유지, current_width만 변경 (렌더러가 스케일 적용)
