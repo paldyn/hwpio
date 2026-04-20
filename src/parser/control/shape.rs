@@ -288,7 +288,7 @@ pub(crate) fn parse_gso_control(ctrl_data: &[u8], child_records: &[Record]) -> C
 /// HWPTAG_SHAPE_COMPONENT_OLE 레코드 파싱
 ///
 /// 1.hwp 실측 바이트 레이아웃 (30바이트):
-/// ```
+/// ```text
 /// 01 00 00 00   u32 property/type (1)
 /// 20 1C 00 00   u32 extent_x (HWPUNIT)
 /// 20 1C 00 00   u32 extent_y
