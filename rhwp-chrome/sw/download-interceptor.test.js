@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 
-import { shouldInterceptDownload } from './download-interceptor.js';
+import { shouldInterceptDownload } from './download-interceptor-common.js';
 
 // ─── HWP 감지 ──────────────────────────────────────────
 
