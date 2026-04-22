@@ -937,23 +937,91 @@ impl LayoutEngine {
                     let min_ews = -(space_base_w * 0.5); // 공백 폭의 50%까지만 축소 허용
                     (raw_ews.max(min_ews), 0.0)
                 } else if total_char_count > 1 {
-                    // 양쪽 정렬이지만 공백 없음 (일본어 등):
+                    // 양쪽 정렬이지만 공백 없음 (일본어/숫자 등):
                     // 단어 간격 대신 글자 간격으로 양쪽 맞춤
-                    (0.0, (available_width - total_text_width) / total_char_count as f64)
+                    // 겹침 방지: 음수 자간을 평균 글자폭의 50%로 제한
+                    let raw = (available_width - total_text_width) / total_char_count as f64;
+                    let avg_char_w = total_text_width / total_char_count as f64;
+                    let min_sp = -avg_char_w * 0.5;
+                    (0.0, raw.max(min_sp))
                 } else {
                     (0.0, 0.0)
                 }
             } else if needs_distribute && total_char_count > 1 {
-                // 배분/나눔 정렬: 모든 글자에 균등 분배 (음수 허용으로 압축 가능)
-                (0.0, (available_width - total_text_width) / total_char_count as f64)
+                // 배분/나눔 정렬: 모든 글자에 균등 분배
+                // 겹침 방지: 음수 자간을 평균 글자폭의 50%로 제한
+                let raw = (available_width - total_text_width) / total_char_count as f64;
+                let avg_char_w = total_text_width / total_char_count as f64;
+                let min_sp = -avg_char_w * 0.5;
+                (0.0, raw.max(min_sp))
             } else if total_text_width > available_width && total_char_count > 1 && !has_tabs {
                 // 비정렬(왼쪽/오른쪽/가운데) 텍스트가 오버플로우할 때 글자 간격 압축
                 // 원본 HWP line_segs가 우리 폰트 메트릭과 다를 경우
                 // 텍스트가 body_area를 넘지 않도록 균등 압축
                 // 탭이 있는 줄은 탭 정지가 절대 위치를 제어하므로 압축하지 않음
-                (0.0, (available_width - total_text_width) / total_char_count as f64)
+                // 겹침 방지: 음수 자간을 평균 글자폭의 50%로 제한
+                let raw = (available_width - total_text_width) / total_char_count as f64;
+                let avg_char_w = total_text_width / total_char_count as f64;
+                let min_sp = -avg_char_w * 0.5;
+                (0.0, raw.max(min_sp))
+            } else if cell_ctx.is_some()
+                && total_char_count > 1
+                && !has_tabs
+                && alignment != Alignment::Left
+                && total_text_width < available_width
+                && total_text_width > 0.0
+                && comp_line.runs.iter().any(|r| {
+                    let ts = resolved_to_text_style(styles, r.char_style_id, r.lang_index);
+                    ts.letter_spacing < -0.01
+                })
+                && {
+                    // 자연 폭(letter_spacing=0)이 셀 inner 폭보다 커야만 "문서가
+                    // 셀에 맞추기 위해 음수 자간으로 압축했던" 케이스로 간주. 그렇지
+                    // 않으면 음수 자간은 장식적 의도이므로 기존 동작(natural width
+                    // 그대로, 좌우 여백 유지)을 유지한다.
+                    let natural_w: f64 = comp_line.runs.iter().map(|r| {
+                        let mut ts = resolved_to_text_style(styles, r.char_style_id, r.lang_index);
+                        ts.default_tab_width = tab_width;
+                        ts.letter_spacing = 0.0;
+                        estimate_text_width(&r.text, &ts)
+                    }).sum();
+                    natural_w > available_width
+                }
+            {
+                // 표 셀 내부 underflow: HWP 편집기가 자연 폭이 셀을 넘는 텍스트를
+                // 음수 자간으로 셀 폭에 맞춰 저장했으므로, 재렌더 시 우리 폰트
+                // 메트릭으로 좁게 측정되더라도 셀 폭을 채우도록 자간을 양수로 보정.
+                //
+                // narrow glyph per-char 클램프가 개입하면 선형 분배와 실제 렌더 폭이
+                // 어긋나므로 수렴 반복으로 보정한다.
+                let mut extra = (available_width - total_text_width) / total_char_count as f64;
+                for _ in 0..3 {
+                    let mut measured = 0.0f64;
+                    for r in &comp_line.runs {
+                        let mut ts = resolved_to_text_style(styles, r.char_style_id, r.lang_index);
+                        ts.default_tab_width = tab_width;
+                        ts.extra_char_spacing = extra;
+                        measured += estimate_text_width(&r.text, &ts);
+                    }
+                    let delta = available_width - measured;
+                    if delta.abs() < 0.5 { break; }
+                    extra += delta / total_char_count as f64;
+                }
+                (0.0, extra)
             } else {
                 (0.0, 0.0)
+            };
+
+            // 셀 underflow 분기로 자간 확장된 경우 정렬 기준 폭은 확장 후 폭이어야 함
+            let effective_text_width = if extra_char_sp > 0.0
+                && cell_ctx.is_some()
+                && !needs_justify
+                && !needs_distribute
+                && total_char_count > 1
+            {
+                total_text_width + extra_char_sp * total_char_count as f64
+            } else {
+                total_text_width
             };
 
             // 비첫줄에서 번호 마커 오프셋 (첫 줄은 마커 렌더링이 x를 전진시킴)
@@ -962,13 +1030,13 @@ impl LayoutEngine {
             } else { 0.0 };
             let x_start = match alignment {
                 Alignment::Center => {
-                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - total_text_width).max(0.0) / 2.0
+                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
                 }
                 Alignment::Distribute if !needs_distribute || total_char_count <= 1 => {
-                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - total_text_width).max(0.0) / 2.0
+                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
                 }
                 Alignment::Right => {
-                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - total_text_width).max(0.0)
+                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0)
                 }
                 _ => col_area.x + effective_margin_left + inline_offset + num_x_offset, // Left, Justify, Split, Distribute(분배중)
             };
