@@ -184,6 +184,14 @@ impl TextMeasurer for EmbeddedTextMeasurer {
             } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) { font_size } else { font_size * 0.5 };
             let mut w = base_w * ratio + style.letter_spacing + style.extra_char_spacing;
             if c == ' ' { w += style.extra_word_spacing; }
+            // 음수 자간(letter_spacing + extra_char_spacing < 0) 시
+            // per-char 최소 advance = base*ratio*0.5 로 클램프하여 narrow
+            // glyph(콤마/마침표 등) 이 뒷 글자와 역진 겹침되는 것을 방지한다.
+            // 문서 CharShape 의 음수 자간 및 paragraph_layout 의 압축 모두 포함.
+            if style.letter_spacing + style.extra_char_spacing < 0.0 {
+                let min_w = base_w * ratio * 0.5;
+                w = w.max(min_w);
+            }
             w
         };
 
@@ -270,6 +278,14 @@ impl TextMeasurer for EmbeddedTextMeasurer {
             } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) { font_size } else { font_size * 0.5 };
             let mut w = base_w * ratio + style.letter_spacing + style.extra_char_spacing;
             if c == ' ' { w += style.extra_word_spacing; }
+            // 음수 자간(letter_spacing + extra_char_spacing < 0) 시 per-char 최소
+            // advance 를 base_w*ratio*0.5 로 클램프하여 narrow glyph(콤마/마침표 등)
+            // 이 뒷 글자와 역진 겹침되는 것을 방지한다. 문서 CharShape 의 음수 자간
+            // 및 paragraph_layout 의 overflow/Justify/Distribute 압축 모두 포함.
+            if style.letter_spacing + style.extra_char_spacing < 0.0 {
+                let min_w = base_w * ratio * 0.5;
+                w = w.max(min_w);
+            }
             w
         };
 
@@ -518,6 +534,12 @@ impl TextMeasurer for WasmTextMeasurer {
             };
             let mut w = char_px * ratio + style.letter_spacing + style.extra_char_spacing;
             if c == ' ' { w += style.extra_word_spacing; }
+            // 음수 자간(letter_spacing + extra_char_spacing < 0) 시
+            // per-char 최소 advance 클램프로 narrow glyph 역진 방지.
+            if style.letter_spacing + style.extra_char_spacing < 0.0 {
+                let min_w = char_px * ratio * 0.5;
+                w = w.max(min_w);
+            }
             w
         };
 
@@ -590,6 +612,12 @@ impl TextMeasurer for WasmTextMeasurer {
             };
             let mut w = char_px * ratio + style.letter_spacing + style.extra_char_spacing;
             if c == ' ' { w += style.extra_word_spacing; }
+            // 음수 자간(letter_spacing + extra_char_spacing < 0) 시
+            // per-char 최소 advance 클램프로 narrow glyph 역진 방지.
+            if style.letter_spacing + style.extra_char_spacing < 0.0 {
+                let min_w = char_px * ratio * 0.5;
+                w = w.max(min_w);
+            }
             w
         };
 
@@ -765,6 +793,12 @@ pub(crate) fn estimate_text_width_unrounded(text: &str, style: &TextStyle) -> f6
         } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) { font_size } else { font_size * 0.5 };
         let mut w = base_w * ratio + style.letter_spacing + style.extra_char_spacing;
         if c == ' ' { w += style.extra_word_spacing; }
+        // 음수 자간(letter_spacing + extra_char_spacing < 0) 시
+        // per-char 최소 advance 클램프로 narrow glyph 역진 방지.
+        if style.letter_spacing + style.extra_char_spacing < 0.0 {
+            let min_w = base_w * ratio * 0.5;
+            w = w.max(min_w);
+        }
         w
     };
 
@@ -1104,6 +1138,92 @@ mod tests {
         for (a, b) in free_fn_result.iter().zip(trait_result.iter()) {
             assert!((a - b).abs() < 0.01, "position mismatch: {} != {}", a, b);
         }
+    }
+
+    // ── 오버플로우 압축 회귀 테스트 (Task #229) ──
+
+    /// 음수 extra_char_spacing (오버플로우 압축)에서 narrow glyph(콤마)가
+    /// 뒷 글자에 역진 겹침되지 않아야 한다. compute_char_positions 결과는
+    /// 단조 비감소여야 한다.
+    #[test]
+    fn test_overflow_compression_positions_monotonic_comma() {
+        let m = EmbeddedTextMeasurer;
+        // 실제 재현 케이스: "65,063,026,600" 을 12pt 맑은 고딕으로,
+        // extra_char_spacing = -2.88 (셀 오버플로우 압축 시나리오).
+        let style = TextStyle {
+            font_family: "맑은 고딕".to_string(),
+            font_size: 12.0,
+            ratio: 1.0,
+            extra_char_spacing: -2.88,
+            ..Default::default()
+        };
+        let positions = m.compute_char_positions("65,063,026,600", &style);
+        for win in positions.windows(2) {
+            assert!(
+                win[1] >= win[0] - 1e-6,
+                "positions must be non-decreasing: {:?}",
+                positions
+            );
+        }
+    }
+
+    /// 실제 문서 재현 케이스: 압축은 CharShape 의 `letter_spacing` 을 통해 오며
+    /// `extra_char_spacing` 은 0 일 수 있다. 가드 조건은 둘의 합이어야 한다.
+    #[test]
+    fn test_charshape_negative_letter_spacing_no_reverse() {
+        let m = EmbeddedTextMeasurer;
+        let style = TextStyle {
+            font_family: "맑은 고딕".to_string(),
+            font_size: 12.0,
+            ratio: 1.0,
+            letter_spacing: -2.88,
+            extra_char_spacing: 0.0,
+            ..Default::default()
+        };
+        let positions = m.compute_char_positions("65,063,026,600", &style);
+        for win in positions.windows(2) {
+            assert!(
+                win[1] >= win[0] - 1e-6,
+                "positions must be non-decreasing: {:?}",
+                positions
+            );
+        }
+    }
+
+    /// 동일 시나리오에서 ASCII 마침표도 역진되지 않아야 한다.
+    #[test]
+    fn test_overflow_compression_positions_monotonic_period() {
+        let m = EmbeddedTextMeasurer;
+        let style = TextStyle {
+            font_family: "맑은 고딕".to_string(),
+            font_size: 12.0,
+            ratio: 1.0,
+            extra_char_spacing: -2.88,
+            ..Default::default()
+        };
+        let positions = m.compute_char_positions("526.278", &style);
+        for win in positions.windows(2) {
+            assert!(
+                win[1] >= win[0] - 1e-6,
+                "positions must be non-decreasing: {:?}",
+                positions
+            );
+        }
+    }
+
+    /// extra_char_spacing == 0 (비-압축) 경로는 클램프의 영향을 받지 않아야 한다.
+    /// 21a02ec 이후의 동작과 동일해야 함.
+    #[test]
+    fn test_non_compression_width_unchanged_by_fix() {
+        let m = EmbeddedTextMeasurer;
+        let style_a = TextStyle {
+            font_family: "맑은 고딕".to_string(),
+            font_size: 12.0,
+            ratio: 1.0,
+            ..Default::default()
+        };
+        let w = m.estimate_text_width("65,063,026,600", &style_a);
+        assert!(w > 50.0 && w < 200.0, "sanity: non-compression width reasonable, got {}", w);
     }
 
     // ── build_cluster_len 테스트 ──

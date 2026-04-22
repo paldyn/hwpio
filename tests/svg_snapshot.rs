@@ -87,6 +87,11 @@ fn form_002_page_0() {
     check_snapshot("samples/hwpx/form-002.hwpx", 0, "form-002/page-0");
 }
 
+#[test]
+fn table_text_page_0() {
+    check_snapshot("samples/hwpx/table-text.hwpx", 0, "table-text/page-0");
+}
+
 /// Determinism probe: render the same page twice in one process and assert
 /// byte-for-byte equality. If this ever fails, the snapshot tests above
 /// are unreliable regardless of golden correctness.
