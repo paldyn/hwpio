@@ -55,7 +55,7 @@ Mjolnir -- an intelligent tool that typesets fragmented AI data into refined HWP
 
 ### Brand Message
 
-> **"The only tool that turns AI-written text into HWP"**
+> **"A rare tool that turns AI-written text directly into HWP"**
 
 Used in: rhwp-studio loading screen, CLI ASCII art, MCP server tool icons.
 
@@ -78,15 +78,15 @@ Used in: rhwp-studio loading screen, CLI ASCII art, MCP server tool icons.
 |--------|----------|----------------|
 | Hancom webhwp | Web-based HWP editing (OT/server) | Server-dependent, paid cloud, non-public API, OT architecture |
 | A commercial web office | Web/mobile HWP editing (WASM) | B2B web office focused, no programmatic generation API |
-| Synapsoft | Document viewer/converter/editor server | Viewer/converter specialized, no HWP generation API, server-dependent |
+| A commercial document viewer/conversion solution | Document viewer/converter/editor server | Viewer/converter specialized, HWP generation API not confirmed, server-dependent |
 
 - **A commercial web office**: Enables HWP editing in the browser via serverless WebAssembly.
   Expanding as a B2B web office across some public/educational institutions. However, it is a product for "humans editing through a UI",
   and does not provide an API/SDK for AI Agents to programmatically generate HWP.
 
-- **Synapsoft**: Provides Document AI solutions including Synap Document Viewer (supports HWP 96~2024),
-  Synap Editor, and document conversion servers. Dominant in government document viewer market. However,
-  specializes in **viewing/conversion** and does not offer an API for programmatic HWP binary generation.
+- **A commercial document viewer solution**: Provides Document AI solutions including an HWP document viewer,
+  editor, and document conversion server. Established presence in the government document viewer market. However,
+  the product specializes in **viewing/conversion** and a programmatic HWP binary generation API is not confirmed.
   Server-based SaaS architecture.
 
 **Open Source/Others**:
@@ -219,7 +219,7 @@ Combining both projects enables a complete cycle where AI can **read -> understa
 ## Ultimate Goal: AI Agent's HWP Tool
 
 Provide tools for AI Agents to **locally and directly** create/read/modify/save HWP documents.
-While the existing HWP ecosystem (Hancom, a commercial web office, Synapsoft, etc.) all follows the "humans operate through UI" paradigm,
+While the existing HWP ecosystem (Hancom, a commercial web office, a commercial document viewer, etc.) all follows the "humans operate through UI" paradigm,
 rhwp is the first to realize the **"AI operates through code"** paradigm.
 
 ### Two Delivery Paths
@@ -669,7 +669,7 @@ Direct use of the Rust ecosystem, add dependency via `cargo add rhwp`.
 - **Claude Cowork launch** (February 2026): Explosion of public AI document generation demand
 - **Korean government/enterprise market**: Continued mandatory HWP requirements
 - **No competing products**: No local HWP generation tool for AI Agents exists
-- **hwp_semantic + rhwp**: The only ecosystem that has both HWP reading (semantic parsing) + writing (native generation)
+- **hwp_semantic + rhwp**: A rare ecosystem that covers both HWP reading (semantic parsing) and writing (native generation)
 - **Government air-gap readiness**: hwp_semantic's local embedding + rhwp's zero server dependency -> fully offline operation
 
 ### SaaSpocalypse -- SaaS Stock Crash Triggered by AI Agents (February 2026)
