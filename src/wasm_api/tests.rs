@@ -15651,3 +15651,33 @@
         eprintln!("  잘못된/빈 데이터 썸네일: None (정상)");
     }
 
+    // ---------- #177: getValidationWarnings / reflowLinesegs WASM API ----------
+
+    #[test]
+    fn test_get_validation_warnings_empty_document() {
+        // 빈 문서는 경고 없음.
+        let doc = HwpDocument::create_empty();
+        let json = doc.get_validation_warnings();
+        assert!(json.contains(r#""count":0"#), "empty doc must have count:0, got: {}", json);
+        assert!(json.contains(r#""warnings":[]"#));
+    }
+
+    #[test]
+    fn test_get_validation_warnings_json_shape() {
+        // JSON 구조 검증 — 빈 문서라도 최소 형태를 갖춰야 함.
+        let doc = HwpDocument::create_empty();
+        let json = doc.get_validation_warnings();
+        // 필수 키: count, summary, warnings
+        assert!(json.contains(r#""count":"#));
+        assert!(json.contains(r#""summary":"#));
+        assert!(json.contains(r#""warnings":"#));
+    }
+
+    #[test]
+    fn test_reflow_linesegs_empty_document_returns_zero() {
+        // 빈 문서에선 reflow 대상 없음 → 0 반환.
+        let mut doc = HwpDocument::create_empty();
+        let count = doc.reflow_linesegs();
+        assert_eq!(count, 0);
+    }
+

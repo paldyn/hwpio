@@ -804,6 +804,7 @@ impl LayoutEngine {
                 ts.tab_stops = tab_stops.clone();
                 ts.auto_tab_right = auto_tab_right;
                 ts.available_width = available_width;
+                ts.inline_tabs = composed.tab_extended.clone();
                 // 교차 run 오른쪽/가운데 탭: 이 run의 시작 위치를 역방향으로 조정
                 if let Some((tab_pos, tab_type)) = pending_right_tab_est.take() {
                     ts.line_x_offset = est_x;
@@ -1480,6 +1481,7 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            effect: pic.image_attr.effect,
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -1502,8 +1504,6 @@ impl LayoutEngine {
                         // 인라인 수식: 직접 EquationNode로 렌더링
                         if let Some(p) = para {
                             if let Some(Control::Equation(eq)) = p.controls.get(tac_ci) {
-                                let eq_h = hwpunit_to_px(eq.common.height as i32, self.dpi);
-                                let eq_y = (y + baseline - eq_h).max(y);
                                 // 수식 스크립트 → AST → 레이아웃 → SVG 조각
                                 let tokens = crate::renderer::equation::tokenizer::tokenize(&eq.script);
                                 let ast = crate::renderer::equation::parser::EqParser::new(tokens).parse();
@@ -1513,6 +1513,9 @@ impl LayoutEngine {
                                 let svg_content = crate::renderer::equation::svg_render::render_equation_svg(
                                     &layout_box, &color_str, font_size_px,
                                 );
+                                let eq_h = layout_box.height;
+                                // 수식 baseline을 텍스트 baseline에 맞춤
+                                let eq_y = (y + baseline - layout_box.baseline).max(y);
                                 let (eq_cell_idx, eq_cell_para_idx) = if let Some(ref ctx) = cell_ctx {
                                     (Some(ctx.path[0].cell_index), Some(ctx.path[0].cell_para_index))
                                 } else {
@@ -1727,6 +1730,7 @@ impl LayoutEngine {
                                         section_index: Some(section_index),
                                         para_index: Some(para_index),
                                         control_index: Some(tac_ci),
+                                        effect: pic.image_attr.effect,
                                         ..ImageNode::new(bin_data_id, image_data)
                                     }),
                                     BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -1809,6 +1813,7 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            effect: pic.image_attr.effect,
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(img_x, img_y, tac_w, pic_h),

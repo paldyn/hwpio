@@ -296,10 +296,24 @@ impl SvgRenderer {
             }
             RenderNodeType::Equation(eq) => {
                 // 수식 SVG 조각을 bbox 위치에 배치
-                self.output.push_str(&format!(
-                    "<g transform=\"translate({},{})\">\n",
-                    node.bbox.x, node.bbox.y,
-                ));
+                // HWP 저장 영역(bbox)과 레이아웃 산출 크기(layout_box)가 다를 수 있으므로
+                // bbox 너비에 맞춰 스케일링
+                let scale_x = if eq.layout_box.width > 0.0 && node.bbox.width > 0.0 {
+                    node.bbox.width / eq.layout_box.width
+                } else {
+                    1.0
+                };
+                if (scale_x - 1.0).abs() > 0.01 {
+                    self.output.push_str(&format!(
+                        "<g transform=\"translate({},{}) scale({:.4},1)\">\n",
+                        node.bbox.x, node.bbox.y, scale_x,
+                    ));
+                } else {
+                    self.output.push_str(&format!(
+                        "<g transform=\"translate({},{})\">\n",
+                        node.bbox.x, node.bbox.y,
+                    ));
+                }
                 self.output.push_str(&eq.svg_content);
                 self.output.push_str("</g>\n");
                 // 폰트 임베딩: 수식에서 사용된 글자 수집
@@ -319,6 +333,25 @@ impl SvgRenderer {
             }
             RenderNodeType::FormObject(form) => {
                 self.render_form_object(form, &node.bbox);
+            }
+            RenderNodeType::RawSvg(r) => {
+                // Task #195 단계 8: OOXML 차트 SVG 조각 그대로 삽입
+                self.output.push_str(&r.svg);
+            }
+            RenderNodeType::Placeholder(ph) => {
+                // Task #195: 차트/OLE placeholder (점선 테두리 + 중앙 라벨)
+                let cx = node.bbox.x + node.bbox.width / 2.0;
+                let cy = node.bbox.y + node.bbox.height / 2.0;
+                let font_size = (node.bbox.width.min(node.bbox.height) * 0.06).clamp(12.0, 28.0);
+                self.output.push_str(&format!(
+                    "<rect x=\"{:.2}\" y=\"{:.2}\" width=\"{:.2}\" height=\"{:.2}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1\" stroke-dasharray=\"6 3\"/>\n",
+                    node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
+                    color_to_svg(ph.fill_color), color_to_svg(ph.stroke_color),
+                ));
+                self.output.push_str(&format!(
+                    "<text x=\"{:.2}\" y=\"{:.2}\" font-family=\"sans-serif\" font-size=\"{:.1}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
+                    cx, cy, font_size, color_to_svg(ph.stroke_color), escape_xml(&ph.label),
+                ));
             }
             RenderNodeType::Body { clip_rect: Some(cr) } => {
                 let clip_id = format!("body-clip-{}", node.id);
@@ -822,6 +855,13 @@ impl SvgRenderer {
         if let Some(stroke) = style.stroke_color {
             attrs.push_str(&format!(" stroke=\"{}\" stroke-width=\"{}\"",
                 color_to_svg(stroke), style.stroke_width));
+            match style.stroke_dash {
+                StrokeDash::Dash => attrs.push_str(" stroke-dasharray=\"6 3\""),
+                StrokeDash::Dot => attrs.push_str(" stroke-dasharray=\"2 2\""),
+                StrokeDash::DashDot => attrs.push_str(" stroke-dasharray=\"6 3 2 3\""),
+                StrokeDash::DashDotDot => attrs.push_str(" stroke-dasharray=\"6 3 2 3 2 3\""),
+                _ => {}
+            }
         }
 
         if style.opacity < 1.0 {
@@ -976,6 +1016,12 @@ impl SvgRenderer {
             }
         };
 
+        // 그림 효과(그레이스케일/흑백) → SVG 필터 래핑
+        let effect_filter_id = self.ensure_image_effect_filter(img.effect);
+        if let Some(ref fid) = effect_filter_id {
+            self.output.push_str(&format!("<g filter=\"url(#{})\">\n", fid));
+        }
+
         let mime_type = detect_image_mime_type(data);
 
         // WMF → SVG 변환 (브라우저는 WMF를 렌더링할 수 없으므로 SVG로 변환)
@@ -1065,6 +1111,56 @@ impl SvgRenderer {
                 self.render_positioned_image(&render_data, &data_uri, bbox, fill_mode, img.original_size);
             }
         }
+
+        if effect_filter_id.is_some() {
+            self.output.push_str("</g>\n");
+        }
+    }
+
+    /// 그림 효과(ImageEffect)에 해당하는 SVG 필터를 defs에 보장하고 ID를 반환한다.
+    /// RealPic(기본)은 필터가 필요 없으므로 None 반환.
+    fn ensure_image_effect_filter(&mut self, effect: crate::model::image::ImageEffect) -> Option<String> {
+        use crate::model::image::ImageEffect;
+        let (id, def) = match effect {
+            ImageEffect::RealPic => return None,
+            ImageEffect::GrayScale => (
+                "rhwp-img-grayscale",
+                "<filter id=\"rhwp-img-grayscale\"><feColorMatrix type=\"matrix\" values=\"\
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0 0 0 1 0\"/></filter>\n",
+            ),
+            ImageEffect::BlackWhite => (
+                "rhwp-img-blackwhite",
+                "<filter id=\"rhwp-img-blackwhite\">\
+                    <feColorMatrix type=\"matrix\" values=\"\
+                        0.299 0.587 0.114 0 0 \
+                        0.299 0.587 0.114 0 0 \
+                        0.299 0.587 0.114 0 0 \
+                        0 0 0 1 0\"/>\
+                    <feComponentTransfer>\
+                        <feFuncR type=\"discrete\" tableValues=\"0 1\"/>\
+                        <feFuncG type=\"discrete\" tableValues=\"0 1\"/>\
+                        <feFuncB type=\"discrete\" tableValues=\"0 1\"/>\
+                    </feComponentTransfer>\
+                </filter>\n",
+            ),
+            // Pattern8x8은 SVG 필터로 표현하기 어려워 그레이스케일로 폴백
+            ImageEffect::Pattern8x8 => (
+                "rhwp-img-grayscale",
+                "<filter id=\"rhwp-img-grayscale\"><feColorMatrix type=\"matrix\" values=\"\
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0.299 0.587 0.114 0 0 \
+                    0 0 0 1 0\"/></filter>\n",
+            ),
+        };
+        let def_str = def.to_string();
+        if !self.defs.iter().any(|d| d == &def_str) {
+            self.defs.push(def_str);
+        }
+        Some(id.to_string())
     }
 
     /// 이미지를 원래 크기로 지정 위치에 배치 (배치 모드)
