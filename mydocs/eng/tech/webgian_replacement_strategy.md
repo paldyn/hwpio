@@ -27,7 +27,7 @@
 **Commercial Products -- Partial Implementation (Viewer/Conversion, Limited Editing)**:
 | Product | Developer | Notes |
 |---------|----------|-------|
-| Synapsoft Document Viewer/Editor | Synapsoft | HWP 96-2024 viewer, document conversion server, Document AI. Government viewer market presence. No programmatic HWP binary generation API. Server-based SaaS architecture |
+| Document Viewer/Editor | S Co. | HWP 96-2024 viewer, document conversion server, Document AI. Government viewer market presence. Programmatic HWP binary generation API not confirmed. Server-based SaaS architecture |
 
 **Open Source -- Only Partial Implementations Exist (No Rendering/Typesetting)**:
 | Project | Language | Read | Write | Rendering | License |
@@ -43,11 +43,11 @@
 
 **Key Conclusions**:
 - Only **Hancom and a small number of commercial web offices** have fully implemented HWP 5.0 binary "read+edit+save+rendering (typesetting)"
-- Synapsoft is strong in viewing/conversion but does not provide a programmatic HWP binary generation API
-- Open source is limited to structure parsing/text extraction; **no implementations exist for editing+re-typesetting+rendering**
+- S Co. is strong in viewing/conversion but a programmatic HWP binary generation API is not confirmed
+- Among publicly available open-source projects we have reviewed, **few cover editing + re-typesetting + rendering together**
 - This product joins the small set of full implementations
-- **WebAssembly-based client-only (no server required) HWP saving is a world first** -- Hancom depends on servers; some commercial web offices offer WASM editing but no programmatic generation API for AI agents
-- **No HWP generation tool exists for AI Agents** (commercial or open source) -- a unique position
+- **Within the scope we have reviewed, this appears to be the first publicly available WebAssembly-based client-only (no server required) HWP save implementation** -- Hancom depends on servers; some commercial web offices offer WASM editing but a programmatic generation API for AI agents is not confirmed
+- **Publicly available HWP generation tools targeting AI Agents are scarce** (commercial or open source) -- a differentiated position
 - This represents both a high technical entry barrier and a source of competitive advantage
 - For detailed vision and roadmap, see [project_vision.md](mydocs/tech/project_vision.md)
 
@@ -83,8 +83,8 @@ The fundamental reason for choosing a Rust clean-room design from the start:
 
 **Market Opportunity**:
 - Government agencies are mandated to produce reports in HWP format -> latent demand for AI report automation
-- Currently **no tool exists** for AI to directly generate HWP (even Hancom's SDK is server-dependent)
-- Rust library + WASM = the only HWP generation tool callable by AI agents
+- Currently, publicly available tools for AI to directly generate HWP are **scarce** (even Hancom's SDK is server-dependent)
+- Rust library + WASM is a **rare** combination that AI agents can call directly for HWP generation
 
 **AI Report Generation Pipeline (Currently Feasible)**:
 ```
@@ -110,7 +110,7 @@ Rendering quality was compared across major domestic commercial web viewers usin
 | **rhwp (This product)** | **Normal** | Identical result to Hancom HWP (both SVG/Canvas) |
 | Hancom Docs (Web) | Processing failed | Text box + paragraph flow not handled |
 | A commercial web office | Processing failed | Text box + paragraph flow not handled |
-| Synapsoft (Web) | Processing failed | Text box + paragraph flow not handled |
+| S Co. (Web) | Processing failed | Text box + paragraph flow not handled |
 
 Additional comparison using `KTX.hwp`, another Hancom HWP default example file.
 
@@ -122,7 +122,7 @@ Additional comparison using `KTX.hwp`, another Hancom HWP default example file.
 | **rhwp (This product)** | **95%** | |
 | A commercial web office | 90% | |
 | Naver (Web) | 80% | |
-| Synapsoft (Web) | 70% | |
+| S Co. (Web) | 70% | |
 
 **Key Implications**:
 - Even Hancom's own default example files could not be processed by all 3 major domestic commercial web viewers
@@ -139,7 +139,7 @@ Additional comparison using `KTX.hwp`, another Hancom HWP default example file.
 ## 2. Product Positioning
 
 ### 2.1 Core Value
-- **HWP Native Compatibility** -- The only native HWP parsing/rendering/editing engine besides Hancom
+- **HWP Native Compatibility** -- A rare engine that parses/renders/edits HWP binaries natively without a remote server, aside from Hancom
 - **Drop-in Replacement** -- Replace existing customer environments with minimal changes
 - **Performance Advantage** -- Overwhelmingly faster than JS-based systems with Rust + WebAssembly native engine
 - **Price Competitiveness** -- Reasonable pricing compared to monopolistic subscription fees
