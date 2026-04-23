@@ -181,7 +181,16 @@ impl TextMeasurer for EmbeddedTextMeasurer {
             }
             let base_w = if let Some(w) = measure_char_width_embedded(&style.font_family, style.bold, style.italic, c, font_size) {
                 w
-            } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) { font_size } else { font_size * 0.5 };
+            } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) {
+                font_size
+            } else if is_narrow_punctuation(c) {
+                // Task #257: 콤마·중점 등은 실제 글리프 폭이 반각보다 뚜렷이
+                // 좁음. 폴백 경로에서 font_size * 0.5 를 쓰면 PDF 대비 뒤
+                // 글자가 2~3px 우측으로 밀림. 0.3 으로 분기.
+                font_size * 0.3
+            } else {
+                font_size * 0.5
+            };
             let mut w = base_w * ratio + style.letter_spacing + style.extra_char_spacing;
             if c == ' ' { w += style.extra_word_spacing; }
             // 음수 자간(letter_spacing + extra_char_spacing < 0) 시
@@ -275,7 +284,14 @@ impl TextMeasurer for EmbeddedTextMeasurer {
             }
             let base_w = if let Some(w) = measure_char_width_embedded(&style.font_family, style.bold, style.italic, c, font_size) {
                 w
-            } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) { font_size } else { font_size * 0.5 };
+            } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) {
+                font_size
+            } else if is_narrow_punctuation(c) {
+                // Task #257: 콤마·중점 등 narrow glyph 폴백 폭 (0.5 → 0.3).
+                font_size * 0.3
+            } else {
+                font_size * 0.5
+            };
             let mut w = base_w * ratio + style.letter_spacing + style.extra_char_spacing;
             if c == ' ' { w += style.extra_word_spacing; }
             // 음수 자간(letter_spacing + extra_char_spacing < 0) 시 per-char 최소
@@ -790,7 +806,14 @@ pub(crate) fn estimate_text_width_unrounded(text: &str, style: &TextStyle) -> f6
         }
         let base_w = if let Some(w) = measure_char_width_embedded(&style.font_family, style.bold, style.italic, c, font_size) {
             w
-        } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) { font_size } else { font_size * 0.5 };
+        } else if cluster_len[i] > 1 || is_cjk_char(c) || is_fullwidth_symbol(c) {
+            font_size
+        } else if is_narrow_punctuation(c) {
+            // Task #257: 콤마·중점 등 narrow glyph 폴백 폭 (0.5 → 0.3).
+            font_size * 0.3
+        } else {
+            font_size * 0.5
+        };
         let mut w = base_w * ratio + style.letter_spacing + style.extra_char_spacing;
         if c == ' ' { w += style.extra_word_spacing; }
         // 음수 자간(letter_spacing + extra_char_spacing < 0) 시
@@ -839,6 +862,16 @@ pub(crate) fn is_cjk_char(c: char) -> bool {
     || ('\u{F900}'..='\u{FAFF}').contains(&c) // CJK Compatibility
     || ('\u{3040}'..='\u{30FF}').contains(&c) // 히라가나/카타카나
     || ('\u{FF00}'..='\u{FFEF}').contains(&c) // 전각 문자
+}
+
+/// 실제 글리프 폭이 반각(em/2)보다 뚜렷이 좁은 구두점·기호.
+/// 메트릭 DB 미등록 폰트의 폴백 폭 계산 시 `font_size * 0.5` 대신
+/// `font_size * 0.3` 을 쓰도록 분기하는 기준 (Task #257).
+fn is_narrow_punctuation(c: char) -> bool {
+    matches!(c,
+        ',' | '.' | ':' | ';' | '\'' | '"' | '`' |
+        '\u{00B7}'   // · MIDDLE DOT
+    )
 }
 
 /// 한컴이 전각으로 처리하는 기호 (메트릭 폴백 시 font_size 사용)
@@ -1250,5 +1283,99 @@ mod tests {
         let chars: Vec<char> = "A\u{1100}\u{1161}B".chars().collect();
         let cl = build_cluster_len(&chars);
         assert_eq!(cl, vec![1, 2, 0, 1]);
+    }
+
+    // ── narrow glyph advance 회귀 (Task #257) ──
+    //
+    // 단계 1 베이스라인: 메트릭 DB 미등록 폰트(HY헤드라인M)에서
+    // 콤마·중점은 현재 fallback path 로 `font_size * 0.5` advance 가 부여됨.
+    // 단계 2 에서 `is_narrow_punctuation` 헬퍼 + 분기 추가로 advance 를
+    // `font_size * 0.3` 수준으로 수정한 뒤, 아래 4건을 #[ignore] 해제하여
+    // 통과시킨다.
+
+    #[test]
+    fn test_narrow_glyph_comma_base_width() {
+        let m = EmbeddedTextMeasurer;
+        // HY헤드라인M 은 메트릭 DB 미등록 → fallback 경로
+        let style = TextStyle {
+            font_family: "HY헤드라인M".to_string(),
+            font_size: 13.333,
+            ratio: 1.0,
+            ..Default::default()
+        };
+        // positions of "A,B": A at 0, , at A-advance, B at A-advance + ,-advance
+        let positions = m.compute_char_positions("A,B", &style);
+        let comma_advance = positions[2] - positions[1];
+        assert!(
+            comma_advance <= style.font_size * 0.35,
+            "narrow comma advance should be ≤ font_size * 0.35 ({:.2}), got {:.2}",
+            style.font_size * 0.35, comma_advance
+        );
+    }
+
+    #[test]
+    fn test_narrow_glyph_middle_dot_base_width() {
+        let m = EmbeddedTextMeasurer;
+        let style = TextStyle {
+            font_family: "HY헤드라인M".to_string(),
+            font_size: 16.667,
+            ratio: 1.0,
+            ..Default::default()
+        };
+        let positions = m.compute_char_positions("가\u{00B7}나", &style);
+        let dot_advance = positions[2] - positions[1];
+        assert!(
+            dot_advance <= style.font_size * 0.35,
+            "narrow middle-dot advance should be ≤ font_size * 0.35 ({:.2}), got {:.2}",
+            style.font_size * 0.35, dot_advance
+        );
+    }
+
+    #[test]
+    fn test_narrow_glyph_period_and_colon() {
+        let m = EmbeddedTextMeasurer;
+        let style = TextStyle {
+            font_family: "HY헤드라인M".to_string(),
+            font_size: 13.333,
+            ratio: 1.0,
+            ..Default::default()
+        };
+        for (ch, text) in &[('.', "A.B"), (':', "A:B")] {
+            let positions = m.compute_char_positions(text, &style);
+            let advance = positions[2] - positions[1];
+            assert!(
+                advance <= style.font_size * 0.35,
+                "narrow '{}' advance should be ≤ font_size * 0.35 ({:.2}), got {:.2}",
+                ch, style.font_size * 0.35, advance
+            );
+        }
+    }
+
+    #[test]
+    fn test_non_narrow_char_unchanged() {
+        // 회귀 방어: 영문 'A'·한글 '가' 는 narrow 분기에 해당하지 않아야 한다.
+        let m = EmbeddedTextMeasurer;
+        let style = TextStyle {
+            font_family: "HY헤드라인M".to_string(),
+            font_size: 13.333,
+            ratio: 1.0,
+            ..Default::default()
+        };
+        // 'A' = Latin 반각 = font_size * 0.5 ≈ 6.67 유지
+        let pos_a = m.compute_char_positions("AA", &style);
+        let a_advance = pos_a[1] - pos_a[0];
+        assert!(
+            (a_advance - style.font_size * 0.5).abs() < 0.1,
+            "Latin 'A' advance should remain font_size * 0.5 ({:.2}), got {:.2}",
+            style.font_size * 0.5, a_advance
+        );
+        // '가' = CJK 전각 = font_size 유지
+        let pos_k = m.compute_char_positions("가가", &style);
+        let k_advance = pos_k[1] - pos_k[0];
+        assert!(
+            (k_advance - style.font_size).abs() < 0.1,
+            "CJK '가' advance should remain font_size ({:.2}), got {:.2}",
+            style.font_size, k_advance
+        );
     }
 }
