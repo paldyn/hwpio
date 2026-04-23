@@ -142,6 +142,18 @@ pub struct TextStyle {
     pub shade_color: ColorRef,
 }
 
+impl TextStyle {
+    /// 시각적 bold 여부.
+    ///
+    /// CharShape.bold=true 외에도 HY헤드라인M 같은 heavy display face 를
+    /// 사용할 때 true 를 반환. 해당 face 가 fallback 으로 대체될 때 발생하는
+    /// 시각 bold 소실을 보완하기 위해 SVG 출력 시 font-weight="bold" 강제에
+    /// 사용된다.
+    pub fn is_visually_bold(&self) -> bool {
+        self.bold || crate::renderer::style_resolver::is_heavy_display_face(&self.font_family)
+    }
+}
+
 impl Default for TextStyle {
     fn default() -> Self {
         Self {

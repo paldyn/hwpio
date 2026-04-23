@@ -212,7 +212,7 @@ impl SvgRenderer {
                     };
                     let mut attrs = format!("font-family=\"{}\" font-size=\"{}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\"",
                         escape_xml(&font_family), font_size, color);
-                    if run.style.bold { attrs.push_str(" font-weight=\"bold\""); }
+                    if run.style.is_visually_bold() { attrs.push_str(" font-weight=\"bold\""); }
                     if run.style.italic { attrs.push_str(" font-style=\"italic\""); }
                     for c in run.text.chars() {
                         if c == ' ' { continue; }
@@ -1343,7 +1343,7 @@ impl SvgRenderer {
             format!("{},sans-serif", style.font_family)
         };
         let mut font_attrs = format!("font-family=\"{}\" font-size=\"{:.2}\"", escape_xml(&font_family_str), inner_font_size);
-        if style.bold { font_attrs.push_str(" font-weight=\"bold\""); }
+        if style.is_visually_bold() { font_attrs.push_str(" font-weight=\"bold\""); }
         if style.italic { font_attrs.push_str(" font-style=\"italic\""); }
 
         for (i, ch) in chars.iter().enumerate() {
@@ -1417,7 +1417,7 @@ impl SvgRenderer {
             format!("{},sans-serif", style.font_family)
         };
         let mut font_attrs = format!("font-family=\"{}\" font-size=\"{:.2}\"", escape_xml(&font_family_str), inner_font_size);
-        if style.bold { font_attrs.push_str(" font-weight=\"bold\""); }
+        if style.is_visually_bold() { font_attrs.push_str(" font-weight=\"bold\""); }
         if style.italic { font_attrs.push_str(" font-style=\"italic\""); }
 
         let cx = bbox_x + box_size / 2.0;
@@ -1783,7 +1783,7 @@ impl Renderer for SvgRenderer {
             "font-family=\"{}\" font-size=\"{}\"",
             escape_xml(&font_family), font_size,
         );
-        if style.bold {
+        if style.is_visually_bold() {
             base_attrs.push_str(" font-weight=\"bold\"");
         }
         if style.italic {
