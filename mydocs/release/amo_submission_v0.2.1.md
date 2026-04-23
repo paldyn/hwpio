@@ -13,10 +13,10 @@
 - [x] gecko id: `rhwp@edwardkim.github.io`
 - [x] strict_min_version: `112.0`
 - [x] **data_collection_permissions: required ["none"]** — AMO 필수 (아래 주의 참조)
-- [x] **gecko_android.strict_min_version: "999.0"** — Firefox Android 옵트아웃 (아래 "Android 미지원 선언" 참조)
+- [x] **`gecko_android` 키 생략** — Firefox Android 옵트아웃 (아래 "Android 미지원 선언" 참조)
 - [x] 클린 재빌드 (`rm -rf dist && npm run build`)
 - [x] symlink dereference 검증 (`download-interceptor-common.js` 실체 파일)
-- [x] `web-ext lint` errors 0 / notices 0 / warnings 21 (표준 패턴 + gecko 호환 경고 1건)
+- [x] `web-ext lint` errors 0 / notices 0 / warnings 22 (WASM eval / Vite innerHTML / data_collection_permissions gecko 호환 경고 — 모두 AMO 허용 범위)
 - [x] zip 패키징
 - [ ] AMO Developer Hub 계정 준비
 - [ ] 스크린샷 1280x800 (최소 1장)
@@ -33,7 +33,7 @@
 - 결론: AMO 서버 요구사항이 우선. 키를 포함하고 lint 경고는 수용.
 - 참고: https://mzl.la/firefox-builtin-data-consent
 
-### ⚠️ Android 미지원 선언 (`gecko_android.strict_min_version: "999.0"`)
+### ⚠️ Android 미지원 선언 (`gecko_android` 키 생략)
 
 **배경**: 2026-04-23 Firefox Android 호환성 감사 결과, rhwp 의 핵심 API 2개가 Android 에서 동작 안 함이 확인됨:
 
@@ -42,9 +42,18 @@
 | `browser.downloads.onCreated/onChanged` | 다운로드 가로채기 (핵심 기능) | **Firefox Android v79 에서 제거됨** — 현재 불가 |
 | `browser.contextMenus` | 우클릭 "rhwp로 열기" | **지원 안 됨** (MDN BCD: `version_added: false`) |
 
-이 두 기능이 없으면 rhwp 는 사실상 Android 에서 쓸모가 없다 (배지 자동 감지만 남는데 링크 클릭 시 가로채기가 안 되어 의미 없음).
+이 두 기능이 없으면 rhwp 는 사실상 Android 에서 쓸모가 없다.
 
-**선제 옵트아웃 방식**: `browser_specific_settings.gecko_android.strict_min_version` 을 사실상 도달 불가능한 버전(`999.0`) 으로 설정 → AMO 가 Android 사용자에게 이 확장을 노출하지 않음 → 나쁜 사용자 경험 · 낮은 평점 예방.
+**공식 옵트아웃 방식**: `browser_specific_settings` 에서 `gecko_android` 키를 **완전히 생략**.
+
+> MDN 공식 문서 기준:
+> "To support Firefox for Android without specifying a version range, the `gecko_android` sub-key must be an empty object (`{}`). **Otherwise, the extension is only made available on desktop Firefox.**"
+
+즉, `gecko_android` 를 쓰지 않으면 자동으로 desktop Firefox 전용이 된다.
+
+**시행착오 기록 (2026-04-23)**:
+- 1차 시도: `gecko_android.strict_min_version: "999.0"` → AMO 가 "Unknown strict_min_version 999.0 for Firefox 안드로이드" 에러 (유효 버전 목록에 없음).
+- 2차 시도 (현재): `gecko_android` 키 자체 삭제 → 공식 권장 방식으로 정착.
 
 **Android 지원 재검토 시점**:
 - Mozilla 가 Firefox Android 에서 `downloads` · `contextMenus` API 를 복원할 때
