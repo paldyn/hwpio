@@ -889,3 +889,78 @@ fn test_square_bullet_with_space_preserves_layout() {
     // 가: 전각(20) + 자간(-1.6) = advance 18.4
     assert!((positions[3] - 45.2).abs() < 0.01, "positions[3] expected 45.2, got {}", positions[3]);
 }
+
+#[test]
+fn test_tac_leading_width_block_table_full_line() {
+    // Task #146 v3: block 취급 TAC 표(너비 ≥ 90% seg_width)에서
+    // composed.tac_controls 가 비어있을 때, 선행 텍스트는 line 0 전체로
+    // 간주해 모든 run 폭을 합산해야 한다. text-align.hwp 문단 0.2 시나리오.
+    use super::super::composer::{ComposedParagraph, ComposedLine, ComposedTextRun};
+    use crate::renderer::style_resolver::{ResolvedStyleSet, ResolvedCharStyle};
+
+    let line = ComposedLine {
+        runs: vec![ComposedTextRun {
+            text: "    ".to_string(),
+            char_style_id: 0, lang_index: 0,
+            ..Default::default()
+        }],
+        line_height: 400, baseline_distance: 320,
+        segment_width: 48188, column_start: 0,
+        line_spacing: 0, has_line_break: false, char_start: 0,
+    };
+    let composed = ComposedParagraph {
+        lines: vec![line],
+        para_style_id: 0,
+        inline_controls: Vec::new(),
+        numbering_text: None,
+        tac_controls: Vec::new(), // block 취급이라 비어있음
+        footnote_positions: Vec::new(),
+        tab_extended: Vec::new(),
+    };
+    let styles = ResolvedStyleSet {
+        char_styles: vec![ResolvedCharStyle {
+            font_size: 20.0, letter_spacing: -1.6,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let width = super::compute_tac_leading_width(&composed, 0, &styles);
+    // 4 spaces × (10 base - 1.6 lspc) = 33.6 (min_clamp 5.0 미작동)
+    assert!((width - 33.6).abs() < 0.5, "expected ~33.6, got {}", width);
+}
+
+#[test]
+fn test_tac_leading_width_inline_table_partial() {
+    // inline 취급 TAC 표: tac_controls 에 위치 기록. 해당 위치까지만 합산.
+    use super::super::composer::{ComposedParagraph, ComposedLine, ComposedTextRun};
+    use crate::renderer::style_resolver::{ResolvedStyleSet, ResolvedCharStyle};
+
+    let line = ComposedLine {
+        runs: vec![ComposedTextRun {
+            text: "ab가나".to_string(),
+            char_style_id: 0, lang_index: 0,
+            ..Default::default()
+        }],
+        line_height: 400, baseline_distance: 320,
+        segment_width: 48188, column_start: 0,
+        line_spacing: 0, has_line_break: false, char_start: 0,
+    };
+    let composed = ComposedParagraph {
+        lines: vec![line],
+        para_style_id: 0,
+        inline_controls: Vec::new(),
+        numbering_text: None,
+        tac_controls: vec![(2, 1000, 0)], // pos=2 (ab 뒤), control_index=0
+        footnote_positions: Vec::new(),
+        tab_extended: Vec::new(),
+    };
+    let styles = ResolvedStyleSet {
+        char_styles: vec![ResolvedCharStyle {
+            font_size: 20.0, ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let width = super::compute_tac_leading_width(&composed, 0, &styles);
+    // "ab" 2 chars, 반각 × font_size/2 = 20*0.5*2 = 20
+    assert!((width - 20.0).abs() < 0.5, "expected ~20.0, got {}", width);
+}
