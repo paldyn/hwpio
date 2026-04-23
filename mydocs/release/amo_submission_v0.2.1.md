@@ -12,14 +12,25 @@
 - [x] manifest version: `0.2.1` (Chrome/Edge 와 정합)
 - [x] gecko id: `rhwp@edwardkim.github.io`
 - [x] strict_min_version: `112.0`
+- [x] **data_collection_permissions: required ["none"]** — AMO 필수 (아래 주의 참조)
 - [x] 클린 재빌드 (`rm -rf dist && npm run build`)
 - [x] symlink dereference 검증 (`download-interceptor-common.js` 실체 파일)
-- [x] `web-ext lint` errors 0 / notices 0 / warnings 21 (표준 패턴)
+- [x] `web-ext lint` errors 0 / notices 0 / warnings 22 (표준 패턴 + gecko 호환 경고 2건 · 아래 주의 참조)
 - [x] zip 패키징
 - [ ] AMO Developer Hub 계정 준비
 - [ ] 스크린샷 1280x800 (최소 1장)
 - [ ] 프로모션 이미지 (선택)
 - [ ] PRIVACY URL 활성 확인
+
+### ⚠️ `data_collection_permissions` 와 web-ext lint 의 충돌
+
+2026-04-23 실측:
+
+- `web-ext lint` 는 이 키가 Firefox 140+ 에서만 지원된다는 이유로 **경고 2건** 을 낸다 (`KEY_FIREFOX_UNSUPPORTED_BY_MIN_VERSION` · `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`).
+- 그러나 **AMO 서버 검증은 이 키를 필수** 로 요구한다:
+  > The "/browser_specific_settings/gecko/data_collection_permissions" property is required for all new Firefox extensions, and will be required for new versions of existing extensions in the future.
+- 결론: AMO 서버 요구사항이 우선. 키를 포함하고 lint 경고 2건은 수용.
+- 참고: https://mzl.la/firefox-builtin-data-consent
 
 ## 2. 등록 메타 (사용자 노출)
 
