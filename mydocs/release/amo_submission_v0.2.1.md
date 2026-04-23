@@ -2,7 +2,7 @@
 
 **제출일 예정**: 2026-04-23
 **대상**: addons.mozilla.org (AMO)
-**확장명 (manifest id)**: `rhwp@edwardkim.github.io`
+**확장명 (manifest id)**: `rhwp-firefox@edwardkim.github.io`
 **제출 zip**: `output/amo/rhwp-firefox-0.2.1.zip` (12.4 MB · 52 파일)
 
 ---
@@ -10,7 +10,7 @@
 ## 1. 사전 준비 체크리스트
 
 - [x] manifest version: `0.2.1` (Chrome/Edge 와 정합)
-- [x] gecko id: `rhwp@edwardkim.github.io`
+- [x] gecko id: `rhwp-firefox@edwardkim.github.io` (2026-04-23: `rhwp@edwardkim.github.io` 는 타인 선점 → 플랫폼명 포함으로 변경)
 - [x] strict_min_version: `112.0`
 - [x] **data_collection_permissions: required ["none"]** — AMO 필수 (아래 주의 참조)
 - [x] **`gecko_android` 키 생략** — Firefox Android 옵트아웃 (아래 "Android 미지원 선언" 참조)
