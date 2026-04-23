@@ -213,7 +213,7 @@
 <rect x="192.73333333333335" y="297.67999999999995" width="69.08" height="19.76" fill="#cccccc"/>
 <text transform="translate(196.77333333333334,313.15999999999997) scale(0.9600,1)" font-family="맑은 고딕,&apos;Malgun Gothic&apos;,&apos;맑은 고딕&apos;,&apos;Apple SD Gothic Neo&apos;,&apos;Noto Sans KR&apos;,&apos;Pretendard&apos;,sans-serif" font-size="16" font-weight="bold" fill="#000000">제</text>
 <text transform="translate(211.17333333333335,313.15999999999997) scale(0.9600,1)" font-family="맑은 고딕,&apos;Malgun Gothic&apos;,&apos;맑은 고딕&apos;,&apos;Apple SD Gothic Neo&apos;,&apos;Noto Sans KR&apos;,&apos;Pretendard&apos;,sans-serif" font-size="16" font-weight="bold" fill="#000000">품</text>
-<text transform="translate(225.57333333333332,313.15999999999997) scale(0.9600,1)" font-family="맑은 고딕,&apos;Malgun Gothic&apos;,&apos;맑은 고딕&apos;,&apos;Apple SD Gothic Neo&apos;,&apos;Noto Sans KR&apos;,&apos;Pretendard&apos;,sans-serif" font-size="16" font-weight="bold" fill="#000000">·</text>
+<circle cx="227.1029" cy="307.5600" r="1.2800" fill="#000000"/>
 <text transform="translate(228.63253333333333,313.15999999999997) scale(0.9600,1)" font-family="맑은 고딕,&apos;Malgun Gothic&apos;,&apos;맑은 고딕&apos;,&apos;Apple SD Gothic Neo&apos;,&apos;Noto Sans KR&apos;,&apos;Pretendard&apos;,sans-serif" font-size="16" font-weight="bold" fill="#000000">기</text>
 <text transform="translate(243.03253333333333,313.15999999999997) scale(0.9600,1)" font-family="맑은 고딕,&apos;Malgun Gothic&apos;,&apos;맑은 고딕&apos;,&apos;Apple SD Gothic Neo&apos;,&apos;Noto Sans KR&apos;,&apos;Pretendard&apos;,sans-serif" font-size="16" font-weight="bold" fill="#000000">술</text>
 <text transform="translate(344.02,312.69333333333327) scale(0.9900,1)" font-family="맑은 고딕,&apos;Malgun Gothic&apos;,&apos;맑은 고딕&apos;,&apos;Apple SD Gothic Neo&apos;,&apos;Noto Sans KR&apos;,&apos;Pretendard&apos;,sans-serif" font-size="14.666666666666666" fill="#000000">고</text>
@@ -871,7 +871,7 @@
 <text x="218.02666666666664" y="975.4266666666666" font-family="함초롬바탕,&apos;Batang&apos;,&apos;바탕&apos;,&apos;AppleMyungjo&apos;,&apos;Noto Serif KR&apos;,serif" font-size="16" fill="#000000">의</text>
 <text x="241.54666666666665" y="975.4266666666666" font-family="함초롬바탕,&apos;Batang&apos;,&apos;바탕&apos;,&apos;AppleMyungjo&apos;,&apos;Noto Serif KR&apos;,serif" font-size="16" fill="#000000">수</text>
 <text x="257.06666666666666" y="975.4266666666666" font-family="함초롬바탕,&apos;Batang&apos;,&apos;바탕&apos;,&apos;AppleMyungjo&apos;,&apos;Noto Serif KR&apos;,serif" font-size="16" fill="#000000">동</text>
-<text x="273.3258666666667" y="975.4266666666666" font-family="함초롬바탕,&apos;Batang&apos;,&apos;바탕&apos;,&apos;AppleMyungjo&apos;,&apos;Noto Serif KR&apos;,serif" font-size="16" fill="#000000">·</text>
+<circle cx="275.1467" cy="969.8267" r="1.2800" fill="#000000"/>
 <text x="277.7066666666667" y="975.4266666666666" font-family="함초롬바탕,&apos;Batang&apos;,&apos;바탕&apos;,&apos;AppleMyungjo&apos;,&apos;Noto Serif KR&apos;,serif" font-size="16" fill="#000000">능</text>
 <text x="293.2266666666667" y="975.4266666666666" font-family="함초롬바탕,&apos;Batang&apos;,&apos;바탕&apos;,&apos;AppleMyungjo&apos;,&apos;Noto Serif KR&apos;,serif" font-size="16" fill="#000000">동</text>
 <text x="316.74666666666667" y="975.4266666666666" font-family="함초롬바탕,&apos;Batang&apos;,&apos;바탕&apos;,&apos;AppleMyungjo&apos;,&apos;Noto Serif KR&apos;,serif" font-size="16" fill="#000000">암</text>

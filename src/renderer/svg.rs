@@ -1794,15 +1794,16 @@ impl Renderer for SvgRenderer {
         let char_positions = compute_char_positions(text, style);
         let clusters = split_into_clusters(text);
 
-        // Task #257: narrow glyph(특히 `·` MIDDLE DOT) 시각적 중앙 배치.
+        // Task #257: `·`(U+00B7) 를 <text> 대신 <circle> 로 렌더한다.
         //
-        // advance box 안에서 글리프가 자연히 왼쪽에 붙어 그려지므로, x 를 우측
-        // shift 하여 `·` 가 앞/뒤 글리프의 시각적 가운데에 오도록 한다. 단순히
-        // (advance - glyph_w)/2 shift 하면 `·` advance box 안에서는 중앙이지만,
-        // 이전 char 의 trailing bearing(글리프 오른쪽 여백이 advance 에 포함됨)
-        // 때문에 `·` glyph 가 앞 글자 쪽에 비해 우측으로 약간 쏠려 보인다.
-        // 공식: shift = (advance - prev_trailing_bearing - glyph_w) / 2
-        //       prev_trailing_bearing 는 직전 char advance 의 ~8% 로 추정 (CJK 관례).
+        // 폰트 대체(휴먼명조→Batang 등)로 각 폰트의 `·` 글리프 LSB 와 글리프
+        // 폭이 달라, rhwp 의 metric DB 기반 advance 계산과 실제 브라우저 렌더
+        // 위치가 어긋난다. 한글 문서에서 `·` 의 시각적 의미는 "두 글자 사이의
+        // 중앙 점" 이므로 폰트 비의존 벡터 도형으로 직접 그린다.
+        //
+        //   cx = advance box 수평 중앙
+        //   cy = baseline(y) − font_size × 0.35  (CJK x-height 중앙 근사)
+        //   r  = font_size × 0.08               (PDF 관찰치 기준)
         let cluster_advance = |char_idx: usize, cluster_str: &str| -> f64 {
             let n = cluster_str.chars().count();
             let end = char_idx + n;
@@ -1812,19 +1813,9 @@ impl Renderer for SvgRenderer {
                 0.0
             }
         };
-        let compute_center_shift = |char_idx: usize, cluster_str: &str, advance: f64| -> f64 {
-            if cluster_str != "\u{00B7}" {
-                return 0.0;
-            }
-            let glyph_w_est = font_size * 0.15;
-            let prev_bearing_est = if char_idx > 0 {
-                let prev_adv = char_positions[char_idx] - char_positions[char_idx - 1];
-                prev_adv * 0.08
-            } else {
-                0.0
-            };
-            ((advance - prev_bearing_est - glyph_w_est) / 2.0).max(0.0)
-        };
+        let is_middle_dot = |cluster_str: &str| cluster_str == "\u{00B7}";
+        let dot_radius = font_size * 0.08;
+        let dot_cy_offset = -font_size * 0.35;
 
         // 그림자 렌더링 (원본 아래에 오프셋된 그림자색 텍스트)
         if style.shadow_type > 0 {
@@ -1834,8 +1825,17 @@ impl Renderer for SvgRenderer {
             let dy = style.shadow_offset_y;
             for (char_idx, cluster_str) in &clusters {
                 if cluster_str == " " || cluster_str == "\t" { continue; }
-                let shift = compute_center_shift(*char_idx, cluster_str, cluster_advance(*char_idx, cluster_str));
-                let char_x = x + char_positions[*char_idx] + dx + shift;
+                if is_middle_dot(cluster_str) {
+                    let adv = cluster_advance(*char_idx, cluster_str);
+                    let cx = x + char_positions[*char_idx] + adv / 2.0 + dx;
+                    let cy = y + dot_cy_offset + dy;
+                    self.output.push_str(&format!(
+                        "<circle cx=\"{:.4}\" cy=\"{:.4}\" r=\"{:.4}\" fill=\"{}\"/>\n",
+                        cx, cy, dot_radius, shadow_color,
+                    ));
+                    continue;
+                }
+                let char_x = x + char_positions[*char_idx] + dx;
                 let char_y = y + dy;
                 if has_ratio {
                     self.output.push_str(&format!(
@@ -1855,8 +1855,17 @@ impl Renderer for SvgRenderer {
         let common_attrs = format!("{} fill=\"{}\"", base_attrs, color);
         for (char_idx, cluster_str) in &clusters {
             if cluster_str == " " || cluster_str == "\t" { continue; }
-            let shift = compute_center_shift(*char_idx, cluster_str, cluster_advance(*char_idx, cluster_str));
-            let char_x = x + char_positions[*char_idx] + shift;
+            if is_middle_dot(cluster_str) {
+                let adv = cluster_advance(*char_idx, cluster_str);
+                let cx = x + char_positions[*char_idx] + adv / 2.0;
+                let cy = y + dot_cy_offset;
+                self.output.push_str(&format!(
+                    "<circle cx=\"{:.4}\" cy=\"{:.4}\" r=\"{:.4}\" fill=\"{}\"/>\n",
+                    cx, cy, dot_radius, color,
+                ));
+                continue;
+            }
+            let char_x = x + char_positions[*char_idx];
 
             if has_ratio {
                 self.output.push_str(&format!(
