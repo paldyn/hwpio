@@ -930,6 +930,35 @@ fn test_tac_leading_width_block_table_full_line() {
 }
 
 #[test]
+fn test_is_heavy_display_face_matches_known_heavy_faces() {
+    // Task #146 v4: HY헤드라인M 등 heavy display face 는 CharShape.bold=false
+    // 여도 본래 heavy 이므로 SVG 에서 font-weight="bold" 강제 대상이어야 한다.
+    use crate::renderer::style_resolver::is_heavy_display_face;
+    for face in ["HY헤드라인M", "HYHeadLine M", "HYHeadLine Medium",
+                  "HY견고딕", "HY견명조", "HY견명조B", "HY그래픽", "HY그래픽M"] {
+        assert!(is_heavy_display_face(face), "{} should be heavy", face);
+    }
+    // 일반 face 는 false
+    for face in ["Malgun Gothic", "맑은 고딕", "함초롬바탕", "함초롬돋움",
+                  "바탕", "돋움", "HY신명조", "HY중고딕"] {
+        assert!(!is_heavy_display_face(face), "{} should NOT be heavy", face);
+    }
+}
+
+#[test]
+fn test_is_heavy_display_face_with_family_chain() {
+    // font-family 체인에서 primary face(첫 항목) 기준 판정.
+    use crate::renderer::style_resolver::is_heavy_display_face;
+    assert!(is_heavy_display_face("HY헤드라인M,'Malgun Gothic',sans-serif"));
+    assert!(is_heavy_display_face("HY견고딕, 돋움"));
+    // 따옴표 포함
+    assert!(is_heavy_display_face("'HY헤드라인M',Malgun Gothic"));
+    assert!(is_heavy_display_face("\"HY그래픽\",바탕"));
+    // primary 가 heavy 가 아니면 false (HY헤드라인M 이 두번째여도 false)
+    assert!(!is_heavy_display_face("Malgun Gothic,HY헤드라인M"));
+}
+
+#[test]
 fn test_tac_leading_width_inline_table_partial() {
     // inline 취급 TAC 표: tac_controls 에 위치 기록. 해당 위치까지만 합산.
     use super::super::composer::{ComposedParagraph, ComposedLine, ComposedTextRun};
