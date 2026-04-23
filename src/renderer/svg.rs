@@ -1794,6 +1794,29 @@ impl Renderer for SvgRenderer {
         let char_positions = compute_char_positions(text, style);
         let clusters = split_into_clusters(text);
 
+        // Task #257: `·`(U+00B7) 를 <text> 대신 <circle> 로 렌더한다.
+        //
+        // 폰트 대체(휴먼명조→Batang 등)로 각 폰트의 `·` 글리프 LSB 와 글리프
+        // 폭이 달라, rhwp 의 metric DB 기반 advance 계산과 실제 브라우저 렌더
+        // 위치가 어긋난다. 한글 문서에서 `·` 의 시각적 의미는 "두 글자 사이의
+        // 중앙 점" 이므로 폰트 비의존 벡터 도형으로 직접 그린다.
+        //
+        //   cx = advance box 수평 중앙
+        //   cy = baseline(y) − font_size × 0.35  (CJK x-height 중앙 근사)
+        //   r  = font_size × 0.08               (PDF 관찰치 기준)
+        let cluster_advance = |char_idx: usize, cluster_str: &str| -> f64 {
+            let n = cluster_str.chars().count();
+            let end = char_idx + n;
+            if end < char_positions.len() {
+                char_positions[end] - char_positions[char_idx]
+            } else {
+                0.0
+            }
+        };
+        let is_middle_dot = |cluster_str: &str| cluster_str == "\u{00B7}";
+        let dot_radius = font_size * 0.08;
+        let dot_cy_offset = -font_size * 0.35;
+
         // 그림자 렌더링 (원본 아래에 오프셋된 그림자색 텍스트)
         if style.shadow_type > 0 {
             let shadow_color = color_to_svg(style.shadow_color);
@@ -1802,6 +1825,16 @@ impl Renderer for SvgRenderer {
             let dy = style.shadow_offset_y;
             for (char_idx, cluster_str) in &clusters {
                 if cluster_str == " " || cluster_str == "\t" { continue; }
+                if is_middle_dot(cluster_str) {
+                    let adv = cluster_advance(*char_idx, cluster_str);
+                    let cx = x + char_positions[*char_idx] + adv / 2.0 + dx;
+                    let cy = y + dot_cy_offset + dy;
+                    self.output.push_str(&format!(
+                        "<circle cx=\"{:.4}\" cy=\"{:.4}\" r=\"{:.4}\" fill=\"{}\"/>\n",
+                        cx, cy, dot_radius, shadow_color,
+                    ));
+                    continue;
+                }
                 let char_x = x + char_positions[*char_idx] + dx;
                 let char_y = y + dy;
                 if has_ratio {
@@ -1822,6 +1855,16 @@ impl Renderer for SvgRenderer {
         let common_attrs = format!("{} fill=\"{}\"", base_attrs, color);
         for (char_idx, cluster_str) in &clusters {
             if cluster_str == " " || cluster_str == "\t" { continue; }
+            if is_middle_dot(cluster_str) {
+                let adv = cluster_advance(*char_idx, cluster_str);
+                let cx = x + char_positions[*char_idx] + adv / 2.0;
+                let cy = y + dot_cy_offset;
+                self.output.push_str(&format!(
+                    "<circle cx=\"{:.4}\" cy=\"{:.4}\" r=\"{:.4}\" fill=\"{}\"/>\n",
+                    cx, cy, dot_radius, color,
+                ));
+                continue;
+            }
             let char_x = x + char_positions[*char_idx];
 
             if has_ratio {
