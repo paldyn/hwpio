@@ -852,3 +852,40 @@ fn test_numbering_state_different_numbering_id_resets() {
     let c6 = state.advance(4, 1, None);
     assert_eq!(c6[1], 2); // "2"
 }
+
+#[test]
+fn test_geometric_shapes_treated_as_fullwidth() {
+    // Task #146: Geometric Shapes (U+25A0-U+25FF) 는 HWP 문서의 섹션 머리
+    // 기호 (□ 1. / ■ 가. / ○ ㅇ 등) 로 널리 쓰이므로 전각(font_size) 폭
+    // 으로 측정되어야 한다.
+    let style = TextStyle { font_size: 20.0, ..Default::default() };
+    for c in ['□', '■', '▲', '▼', '◆', '○', '●', '◇'] {
+        let text = c.to_string();
+        let positions = compute_char_positions(&text, &style);
+        assert!(
+            (positions[1] - 20.0).abs() < 0.01,
+            "'{}' (U+{:04X}) expected full-width advance 20.0, got {}",
+            c, c as u32, positions[1]
+        );
+    }
+}
+
+#[test]
+fn test_square_bullet_with_space_preserves_layout() {
+    // Task #146 회귀 방지: "□ 가" 제목 패턴에서 □ 가 반각으로 측정되면
+    // 후속 글자 x 좌표가 em 단위만큼 좌측으로 붕괴한다.
+    // 자간 -8% 는 text-align.hwp 제목 CharShape 와 동일.
+    let style = TextStyle {
+        font_size: 20.0,
+        letter_spacing: -1.6, // -8% of 20
+        ..Default::default()
+    };
+    let positions = compute_char_positions("□ 가", &style);
+    assert_eq!(positions.len(), 4);
+    // □: 전각(20) + 자간(-1.6) = advance 18.4
+    assert!((positions[1] - 18.4).abs() < 0.01, "positions[1] expected 18.4, got {}", positions[1]);
+    // 공백: 반각(10) + 자간(-1.6) = advance 8.4 (min_clamp 5.0 미작동)
+    assert!((positions[2] - 26.8).abs() < 0.01, "positions[2] expected 26.8, got {}", positions[2]);
+    // 가: 전각(20) + 자간(-1.6) = advance 18.4
+    assert!((positions[3] - 45.2).abs() < 0.01, "positions[3] expected 45.2, got {}", positions[3]);
+}
