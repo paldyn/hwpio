@@ -1794,6 +1794,38 @@ impl Renderer for SvgRenderer {
         let char_positions = compute_char_positions(text, style);
         let clusters = split_into_clusters(text);
 
+        // Task #257: narrow glyph(특히 `·` MIDDLE DOT) 시각적 중앙 배치.
+        //
+        // advance box 안에서 글리프가 자연히 왼쪽에 붙어 그려지므로, x 를 우측
+        // shift 하여 `·` 가 앞/뒤 글리프의 시각적 가운데에 오도록 한다. 단순히
+        // (advance - glyph_w)/2 shift 하면 `·` advance box 안에서는 중앙이지만,
+        // 이전 char 의 trailing bearing(글리프 오른쪽 여백이 advance 에 포함됨)
+        // 때문에 `·` glyph 가 앞 글자 쪽에 비해 우측으로 약간 쏠려 보인다.
+        // 공식: shift = (advance - prev_trailing_bearing - glyph_w) / 2
+        //       prev_trailing_bearing 는 직전 char advance 의 ~8% 로 추정 (CJK 관례).
+        let cluster_advance = |char_idx: usize, cluster_str: &str| -> f64 {
+            let n = cluster_str.chars().count();
+            let end = char_idx + n;
+            if end < char_positions.len() {
+                char_positions[end] - char_positions[char_idx]
+            } else {
+                0.0
+            }
+        };
+        let compute_center_shift = |char_idx: usize, cluster_str: &str, advance: f64| -> f64 {
+            if cluster_str != "\u{00B7}" {
+                return 0.0;
+            }
+            let glyph_w_est = font_size * 0.15;
+            let prev_bearing_est = if char_idx > 0 {
+                let prev_adv = char_positions[char_idx] - char_positions[char_idx - 1];
+                prev_adv * 0.08
+            } else {
+                0.0
+            };
+            ((advance - prev_bearing_est - glyph_w_est) / 2.0).max(0.0)
+        };
+
         // 그림자 렌더링 (원본 아래에 오프셋된 그림자색 텍스트)
         if style.shadow_type > 0 {
             let shadow_color = color_to_svg(style.shadow_color);
@@ -1802,7 +1834,8 @@ impl Renderer for SvgRenderer {
             let dy = style.shadow_offset_y;
             for (char_idx, cluster_str) in &clusters {
                 if cluster_str == " " || cluster_str == "\t" { continue; }
-                let char_x = x + char_positions[*char_idx] + dx;
+                let shift = compute_center_shift(*char_idx, cluster_str, cluster_advance(*char_idx, cluster_str));
+                let char_x = x + char_positions[*char_idx] + dx + shift;
                 let char_y = y + dy;
                 if has_ratio {
                     self.output.push_str(&format!(
@@ -1822,7 +1855,8 @@ impl Renderer for SvgRenderer {
         let common_attrs = format!("{} fill=\"{}\"", base_attrs, color);
         for (char_idx, cluster_str) in &clusters {
             if cluster_str == " " || cluster_str == "\t" { continue; }
-            let char_x = x + char_positions[*char_idx];
+            let shift = compute_center_shift(*char_idx, cluster_str, cluster_advance(*char_idx, cluster_str));
+            let char_x = x + char_positions[*char_idx] + shift;
 
             if has_ratio {
                 self.output.push_str(&format!(
