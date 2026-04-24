@@ -416,6 +416,32 @@ impl WebCanvasRenderer {
                 let y = node.bbox.y + node.bbox.height * 0.4;
                 let _ = self.ctx.fill_text(&marker.text, node.bbox.x, y);
             }
+            RenderNodeType::Placeholder(ph) => {
+                // 차트/OLE placeholder — svg.rs 와 동등 출력 (점선 테두리 + 중앙 라벨)
+                let x = node.bbox.x;
+                let y = node.bbox.y;
+                let w = node.bbox.width;
+                let h = node.bbox.height;
+                // 배경 rect
+                self.ctx.set_fill_style_str(&color_to_css(ph.fill_color));
+                self.ctx.fill_rect(x, y, w, h);
+                // 점선 테두리 (6 3)
+                self.set_line_dash(&StrokeDash::Dash);
+                self.ctx.set_stroke_style_str(&color_to_css(ph.stroke_color));
+                self.ctx.set_line_width(1.0);
+                self.ctx.stroke_rect(x, y, w, h);
+                let _ = self.ctx.set_line_dash(&js_sys::Array::new());
+                // 중앙 라벨 (svg.rs 와 동일한 font_size 공식)
+                let font_size = (w.min(h) * 0.06).clamp(12.0, 28.0);
+                self.ctx.set_font(&format!("{:.1}px sans-serif", font_size));
+                self.ctx.set_fill_style_str(&color_to_css(ph.stroke_color));
+                self.ctx.set_text_align("center");
+                self.ctx.set_text_baseline("middle");
+                let _ = self.ctx.fill_text(&ph.label, x + w / 2.0, y + h / 2.0);
+                // 텍스트 정렬 기본값 복원 (다른 노드에 영향 주지 않도록)
+                self.ctx.set_text_align("start");
+                self.ctx.set_text_baseline("alphabetic");
+            }
             _ => {
                 // 구조 노드(Header, Footer, Column 등)는 자식만 렌더링
             }
