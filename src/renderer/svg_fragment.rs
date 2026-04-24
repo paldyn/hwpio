@@ -56,6 +56,45 @@ pub(crate) fn try_parse_single_image_data_url(svg: &str) -> Option<&str> {
     Some(href)
 }
 
+/// SVG 프리픽스 감지 — 선행 공백/XML 선언 이후 `<svg` 로 시작하는지.
+///
+/// RenderNodeType::RawSvg 래퍼 경로에서 생성된 SVG 문서 바이트의 MIME 감지에 사용.
+/// (detect_image_mime_type 확장 — Task #275)
+pub(crate) fn is_svg_prefix(data: &[u8]) -> bool {
+    // 선행 공백 스킵 (최대 64바이트까지만)
+    let mut i = 0;
+    while i < data.len().min(64) && matches!(data[i], b' ' | b'\t' | b'\n' | b'\r') {
+        i += 1;
+    }
+    if data.len().saturating_sub(i) < 4 {
+        return false;
+    }
+    // `<svg` 직접 시작
+    if data[i..].starts_with(b"<svg") {
+        return true;
+    }
+    // `<?xml ... ?>` 선언 후 `<svg`
+    if data[i..].starts_with(b"<?xml") {
+        // 첫 256바이트 내에 `<svg` 등장하면 SVG 간주
+        let search_end = data.len().min(i + 256);
+        return data[i..search_end].windows(4).any(|w| w == b"<svg");
+    }
+    false
+}
+
+/// SVG 조각을 완전한 `<svg>` 루트 문서로 래핑한다.
+///
+/// RenderNodeType::RawSvg 의 조각 (EMF/OOXML 등) 은 좌표계가 **페이지 절대좌표**
+/// 이므로, 외부 `<svg>` 의 viewBox 를 bbox 에 맞추고 width/height 도 bbox 크기로
+/// 설정하면, 나중에 canvas `drawImage(img, bbox.x, bbox.y, bbox.w, bbox.h)` 로
+/// 그릴 때 정확히 원본 좌표 위치에 렌더된다.
+pub(crate) fn wrap_svg_fragment(fragment: &str, x: f64, y: f64, w: f64, h: f64) -> String {
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" \
+         width=\"{w:.3}\" height=\"{h:.3}\" viewBox=\"{x:.3} {y:.3} {w:.3} {h:.3}\">\n{fragment}\n</svg>"
+    )
+}
+
 /// `data:MIME;base64,BASE64` 형식 data URL 을 디코드하여 (mime, bytes) 반환.
 ///
 /// 비-base64 data URL (text/plain 등 percent-encoded) 은 지원하지 않고 None 반환.
@@ -174,5 +213,66 @@ mod tests {
             decode_base64_data_url("data:image/png;base64,!!!invalid!!!"),
             None
         );
+    }
+
+    #[test]
+    fn wrap_svg_fragment_basic() {
+        let frag = r#"<g transform="matrix(1,0,0,1,0,0)"><rect x="10" y="20" width="30" height="40"/></g>"#;
+        let wrapped = wrap_svg_fragment(frag, 100.0, 200.0, 300.0, 400.0);
+        assert!(wrapped.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+        assert!(wrapped.contains("xmlns:xlink=\"http://www.w3.org/1999/xlink\""));
+        assert!(wrapped.contains("width=\"300.000\""));
+        assert!(wrapped.contains("height=\"400.000\""));
+        assert!(wrapped.contains("viewBox=\"100.000 200.000 300.000 400.000\""));
+        assert!(wrapped.contains(frag), "원본 조각이 포함되어야 함");
+        assert!(wrapped.ends_with("</svg>"));
+    }
+
+    #[test]
+    fn wrap_svg_fragment_preserves_fragment_content() {
+        // 조각 내부의 특수문자/속성 이스케이프에 손대지 않음
+        let frag = r#"<text x="5" y="5">가 &amp; 나</text>"#;
+        let wrapped = wrap_svg_fragment(frag, 0.0, 0.0, 10.0, 10.0);
+        assert!(wrapped.contains(r#"<text x="5" y="5">가 &amp; 나</text>"#));
+    }
+
+    #[test]
+    fn is_svg_prefix_direct() {
+        assert!(is_svg_prefix(b"<svg"));
+        assert!(is_svg_prefix(b"<svg xmlns=\"http://www.w3.org/2000/svg\">"));
+        assert!(is_svg_prefix(b"  \n  <svg>"));
+        assert!(is_svg_prefix(b"\t<svg width=\"10\">"));
+    }
+
+    #[test]
+    fn is_svg_prefix_xml_decl() {
+        assert!(is_svg_prefix(b"<?xml version=\"1.0\"?>\n<svg>"));
+        assert!(is_svg_prefix(
+            b"<?xml version=\"1.0\" encoding=\"utf-8\"?><!DOCTYPE svg>\n<svg>"
+        ));
+    }
+
+    #[test]
+    fn is_svg_prefix_rejects_png() {
+        assert!(!is_svg_prefix(b"\x89PNG\r\n\x1a\n"));
+        assert!(!is_svg_prefix(b"\xFF\xD8\xFF")); // JPEG
+        assert!(!is_svg_prefix(b"BM")); // BMP
+    }
+
+    #[test]
+    fn is_svg_prefix_rejects_html_etc() {
+        assert!(!is_svg_prefix(b"<html>"));
+        assert!(!is_svg_prefix(b"<!DOCTYPE html>"));
+        assert!(!is_svg_prefix(b""));
+        assert!(!is_svg_prefix(b"<?"));
+    }
+
+    #[test]
+    fn is_svg_prefix_xml_without_svg() {
+        // XML 선언은 있지만 256바이트 내에 <svg 가 없으면 거부
+        let mut data = b"<?xml version=\"1.0\"?>".to_vec();
+        data.extend_from_slice(&[b'a'; 300]);
+        data.extend_from_slice(b"<svg>");
+        assert!(!is_svg_prefix(&data), "256바이트 창 밖은 매칭하지 않음");
     }
 }

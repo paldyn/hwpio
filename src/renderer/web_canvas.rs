@@ -57,6 +57,9 @@ fn detect_image_mime_type(data: &[u8]) -> &'static str {
         "image/bmp"
     } else if data.len() >= 4 && (data.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) || data.starts_with(&[0x01, 0x00, 0x09, 0x00])) {
         "image/x-wmf"
+    } else if super::svg_fragment::is_svg_prefix(data) {
+        // Task #275: RawSvg 래퍼 경로 — <svg 또는 <?xml + <svg
+        "image/svg+xml"
     } else {
         "application/octet-stream"
     }
@@ -419,10 +422,13 @@ impl WebCanvasRenderer {
             RenderNodeType::RawSvg(raw) => {
                 // Task #275: OLE/차트 SVG 조각 렌더
                 //
-                // 현재는 `<image data:...>` 단일 요소 (네이티브 BMP/PNG/JPEG 폴백) 경로만 처리.
-                // 복합 SVG (EMF/OOXML 차트) 는 단계 3 에서 추가 예정.
-                use super::svg_fragment::{try_parse_single_image_data_url, decode_base64_data_url};
+                // A 경로: `<image data:...>` 단일 요소 (네이티브 BMP/PNG/JPEG) → data URL 직접 디코드
+                // B 경로: 복합 SVG (EMF/OOXML 차트) → <svg> 루트로 래핑 후 SVG-as-Image 로 비동기 로드
+                //
+                // 둘 다 기존 draw_image 의 IMAGE_CACHE + HtmlImageElement 비동기 패턴을 공유.
+                use super::svg_fragment::{try_parse_single_image_data_url, decode_base64_data_url, wrap_svg_fragment};
                 if let Some(data_url) = try_parse_single_image_data_url(&raw.svg) {
+                    // A 경로
                     if let Some((_mime, bytes)) = decode_base64_data_url(data_url) {
                         self.draw_image(
                             &bytes,
@@ -430,8 +436,22 @@ impl WebCanvasRenderer {
                             node.bbox.width, node.bbox.height,
                         );
                     }
+                } else {
+                    // B 경로: SVG 조각을 <svg> 루트로 래핑. viewBox 를 bbox 와 동일하게
+                    // 맞춰 조각 내부의 절대좌표가 drawImage 위치와 일치하도록 한다.
+                    let svg_doc = wrap_svg_fragment(
+                        &raw.svg,
+                        node.bbox.x, node.bbox.y,
+                        node.bbox.width, node.bbox.height,
+                    );
+                    // draw_image 가 detect_image_mime_type 으로 "image/svg+xml" 감지 →
+                    // data:image/svg+xml;base64,... 로 로드 → HtmlImageElement 캐시
+                    self.draw_image(
+                        svg_doc.as_bytes(),
+                        node.bbox.x, node.bbox.y,
+                        node.bbox.width, node.bbox.height,
+                    );
                 }
-                // else: 단계 3 대기. 현재는 암묵 skip (단계 1 이전 동작과 동일).
             }
             RenderNodeType::Placeholder(ph) => {
                 // 차트/OLE placeholder — svg.rs 와 동등 출력 (점선 테두리 + 중앙 라벨)
