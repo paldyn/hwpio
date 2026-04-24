@@ -1921,6 +1921,69 @@ impl LayoutEngine {
                 line_node.children.push(run_node);
             }
 
+            // [Task #287] 빈 runs 줄의 TAC 수식 인라인 처리
+            // 큰 디스플레이 수식이 자체 LINE_SEG 를 가질 때 comp_line.runs 가 비어있는데,
+            // run 루프가 돌지 않아 수식이 인라인 경로로 렌더되지 않고 shape_layout display
+            // 경로로 떨어져 col_area.y 에 고정되던 문제를 해결한다.
+            if comp_line.runs.is_empty() && !tac_offsets_px.is_empty() {
+                let line_start_char = comp_line.char_start;
+                let line_end_char = composed.lines.get(line_idx + 1)
+                    .map(|l| l.char_start)
+                    .unwrap_or(usize::MAX);
+                let mut inline_x = col_area.x + effective_margin_left;
+                for &(tac_pos, tac_w, tac_ci) in &tac_offsets_px {
+                    if tac_pos < line_start_char || tac_pos >= line_end_char {
+                        continue;
+                    }
+                    if let Some(p) = para {
+                        if let Some(Control::Equation(eq)) = p.controls.get(tac_ci) {
+                            let tokens = crate::renderer::equation::tokenizer::tokenize(&eq.script);
+                            let ast = crate::renderer::equation::parser::EqParser::new(tokens).parse();
+                            let font_size_px = hwpunit_to_px(eq.font_size as i32, self.dpi);
+                            let layout_box = crate::renderer::equation::layout::EqLayout::new(font_size_px).layout(&ast);
+                            let color_str = crate::renderer::equation::svg_render::eq_color_to_svg(eq.color);
+                            let svg_content = crate::renderer::equation::svg_render::render_equation_svg(
+                                &layout_box, &color_str, font_size_px,
+                            );
+                            let eq_h = layout_box.height;
+                            let eq_y = (y + baseline - layout_box.baseline).max(y);
+                            let (eq_cell_idx, eq_cell_para_idx) = if let Some(ref ctx) = cell_ctx {
+                                (Some(ctx.path[0].cell_index), Some(ctx.path[0].cell_para_index))
+                            } else {
+                                (None, None)
+                            };
+                            let eq_node = RenderNode::new(
+                                tree.next_id(),
+                                RenderNodeType::Equation(crate::renderer::render_tree::EquationNode {
+                                    svg_content,
+                                    layout_box,
+                                    color_str,
+                                    color: eq.color,
+                                    font_size: font_size_px,
+                                    section_index: Some(section_index),
+                                    para_index: if let Some(ref ctx) = cell_ctx {
+                                        Some(ctx.parent_para_index)
+                                    } else {
+                                        Some(para_index)
+                                    },
+                                    control_index: if let Some(ref ctx) = cell_ctx {
+                                        Some(ctx.path[0].control_index)
+                                    } else {
+                                        Some(tac_ci)
+                                    },
+                                    cell_index: eq_cell_idx,
+                                    cell_para_index: eq_cell_para_idx,
+                                }),
+                                BoundingBox::new(inline_x, eq_y, tac_w, eq_h),
+                            );
+                            line_node.children.push(eq_node);
+                            tree.set_inline_shape_position(section_index, para_index, tac_ci, inline_x, eq_y);
+                            inline_x += tac_w;
+                        }
+                    }
+                }
+            }
+
             // ClickHere 필드 처리: 안내문 + 조판부호 마커 ([누름틀 시작]/[누름틀 끝])
             // char_x_map을 이용하여 필드 위치에 맞는 x 좌표 계산
             if let Some(p) = para {
