@@ -983,9 +983,12 @@ impl LayoutEngine {
             
             let page_h_approx = col_area.y * 2.0 + col_area.height;
             let vert_rel_to = table.common.vert_rel_to;
+            // Task #297: Page는 본문 영역(body area) 기준, Paper는 용지 전체 기준
+            // (HWP 스펙: Page=쪽 본문, Paper=용지 전체). 바탕쪽 문맥에서는
+            // col_area = paper_area이므로 두 경로 결과가 동일하여 회귀 없음.
             let (ref_y, ref_h) = match vert_rel_to {
-                crate::model::shape::VertRelTo::Page => (0.0, page_h_approx),
-                crate::model::shape::VertRelTo::Para => (anchor_y, col_area.height - (anchor_y - col_area.y).max(0.0)), // Para
+                crate::model::shape::VertRelTo::Page => (col_area.y, col_area.height),
+                crate::model::shape::VertRelTo::Para => (anchor_y, col_area.height - (anchor_y - col_area.y).max(0.0)),
                 crate::model::shape::VertRelTo::Paper => (0.0, page_h_approx),
             };
             // Top 캡션: 표 위치를 캡션 높이만큼 아래로 이동
