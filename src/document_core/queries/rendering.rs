@@ -163,7 +163,7 @@ impl DocumentCore {
         }
         set_bit(flags, 0x0100, sd.hide_header);      // bit 8
         set_bit(flags, 0x0200, sd.hide_footer);       // bit 9
-        set_bit(flags, 0x0400, sd.hide_master_page);  // bit 10
+        set_bit(flags, 0x0004, sd.hide_master_page);  // bit 2 (HWP5 스펙, 첫쪽 바탕쪽 감춤)
         set_bit(flags, 0x0800, sd.hide_border);       // bit 11
         set_bit(flags, 0x1000, sd.hide_fill);         // bit 12
         set_bit(flags, 0x00080000, sd.hide_empty_line); // bit 19
