@@ -546,7 +546,7 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record]) -> SectionDef {
     // 숨기기 플래그 (flags에서 추출)
     sd.hide_header = sd.flags & 0x0100 != 0;
     sd.hide_footer = sd.flags & 0x0200 != 0;
-    sd.hide_master_page = sd.flags & 0x0400 != 0;
+    sd.hide_master_page = sd.flags & 0x0004 != 0; // bit 2 (HWP5 스펙, 첫쪽 바탕쪽 감춤)
     sd.hide_border = sd.flags & 0x0800 != 0;
     sd.hide_fill = sd.flags & 0x1000 != 0;
     sd.hide_empty_line = sd.flags & 0x00080000 != 0; // bit 19: 빈 줄 감추기
