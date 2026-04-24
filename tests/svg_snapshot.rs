@@ -92,6 +92,24 @@ fn table_text_page_0() {
     check_snapshot("samples/hwpx/table-text.hwpx", 0, "table-text/page-0");
 }
 
+/// Issue #157: 비-TAC wrap=위아래 표 out-of-flow 배치 — 표가 텍스트와 중첩되지 않음
+#[test]
+fn issue_157_page_1() {
+    check_snapshot("samples/hwpx/issue_157.hwpx", 1, "issue-157/page-1");
+}
+
+/// Issue #267: KTX.hwp 목차 페이지 — right tab 장제목/소제목 페이지 번호 정렬
+#[test]
+fn issue_267_ktx_toc_page() {
+    check_snapshot("samples/KTX.hwp", 1, "issue-267/ktx-toc-page");
+}
+
+/// Issue #147: aift.hwp 4페이지 — MEMO 컨트롤이 바탕쪽으로 오분류되어 렌더링되는 버그
+#[test]
+fn issue_147_aift_page3() {
+    check_snapshot("samples/aift.hwp", 3, "issue-147/aift-page3");
+}
+
 /// Determinism probe: render the same page twice in one process and assert
 /// byte-for-byte equality. If this ever fails, the snapshot tests above
 /// are unreliable regardless of golden correctness.
