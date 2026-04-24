@@ -219,8 +219,9 @@ fn estimate_op_width(text: &str, fs: f64) -> f64 {
 fn set_font(ctx: &CanvasRenderingContext2d, size: f64, italic: bool, bold: bool) {
     let style = if italic { "italic " } else { "" };
     let weight = if bold { "bold " } else { "" };
+    // svg_render.rs 의 EQ_FONT_FAMILY 와 동일 스택 유지. (Task #280)
     ctx.set_font(&format!(
-        "{}{}{:.1}px 'Latin Modern Math', 'STIX Two Math', 'Cambria Math', 'Pretendard', serif",
+        "{}{}{:.1}px 'Latin Modern Math', 'STIX Two Text', 'STIX Two Math', 'Times New Roman', 'Times', serif",
         style, weight, size,
     ));
 }
