@@ -80,8 +80,10 @@ pub(crate) fn find_next_tab_stop(
 ) -> (f64, u8, u8) {
     // 커스텀 탭 정지에서 현재 위치 뒤의 첫 번째 검색
     for ts in tab_stops {
-        // 탭 위치가 사용 가능 너비를 초과하면 available_width로 클램핑
-        let pos = if ts.position > available_width && available_width > 0.0 {
+        // type=1(오른쪽) 탭은 단 기준 절대 위치이므로 available_width 클램핑 제외.
+        // 들여쓰기(left_margin)가 있는 문단에서도 오른쪽 탭이 동일 위치에 정렬되도록 한다.
+        // type=0(왼쪽)/2(가운데) 탭은 종전대로 클램핑하여 텍스트 영역 밖으로 넘어가지 않게 한다.
+        let pos = if ts.tab_type != 1 && ts.position > available_width && available_width > 0.0 {
             available_width
         } else {
             ts.position
