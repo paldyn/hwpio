@@ -821,18 +821,34 @@ impl DocumentCore {
             };
 
             let column_def = Self::find_initial_column_def(&section.paragraphs);
-            let mut result = paginator.paginate_with_measured_opts(
-                &section.paragraphs,
-                &measured,
-                &section.section_def.page_def,
-                &column_def,
-                idx,
-                &self.styles.para_styles,
-                crate::renderer::pagination::PaginationOpts {
-                    hide_empty_line: section.section_def.hide_empty_line,
-                    respect_vpos_reset: self.respect_vpos_reset,
-                },
-            );
+            // 환경변수 RHWP_USE_TYPESET=1 시 TypesetEngine을 main pagination으로 사용 (실험)
+            let use_typeset = std::env::var("RHWP_USE_TYPESET").map(|v| v == "1").unwrap_or(false);
+            let mut result = if use_typeset {
+                use crate::renderer::typeset::TypesetEngine;
+                let typesetter = TypesetEngine::new(self.dpi);
+                typesetter.typeset_section(
+                    &section.paragraphs,
+                    composed,
+                    &self.styles,
+                    &section.section_def.page_def,
+                    &column_def,
+                    idx,
+                    &measured.tables,
+                )
+            } else {
+                paginator.paginate_with_measured_opts(
+                    &section.paragraphs,
+                    &measured,
+                    &section.section_def.page_def,
+                    &column_def,
+                    idx,
+                    &self.styles.para_styles,
+                    crate::renderer::pagination::PaginationOpts {
+                        hide_empty_line: section.section_def.hide_empty_line,
+                        respect_vpos_reset: self.respect_vpos_reset,
+                    },
+                )
+            };
 
             // TypesetEngine 병렬 검증 (Phase 1: 비-표 구역)
             #[cfg(debug_assertions)]
