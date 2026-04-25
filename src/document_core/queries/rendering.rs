@@ -821,25 +821,25 @@ impl DocumentCore {
             };
 
             let column_def = Self::find_initial_column_def(&section.paragraphs);
-            let mut result = paginator.paginate_with_measured_opts(
-                &section.paragraphs,
-                &measured,
-                &section.section_def.page_def,
-                &column_def,
-                idx,
-                &self.styles.para_styles,
-                crate::renderer::pagination::PaginationOpts {
-                    hide_empty_line: section.section_def.hide_empty_line,
-                    respect_vpos_reset: self.respect_vpos_reset,
-                },
-            );
-
-            // TypesetEngine 병렬 검증 (Phase 1: 비-표 구역)
-            #[cfg(debug_assertions)]
-            {
+            // TypesetEngine을 main pagination으로 사용. RHWP_USE_PAGINATOR=1 로 fallback 가능.
+            let use_paginator = std::env::var("RHWP_USE_PAGINATOR").map(|v| v == "1").unwrap_or(false);
+            let mut result = if use_paginator {
+                paginator.paginate_with_measured_opts(
+                    &section.paragraphs,
+                    &measured,
+                    &section.section_def.page_def,
+                    &column_def,
+                    idx,
+                    &self.styles.para_styles,
+                    crate::renderer::pagination::PaginationOpts {
+                        hide_empty_line: section.section_def.hide_empty_line,
+                        respect_vpos_reset: self.respect_vpos_reset,
+                    },
+                )
+            } else {
                 use crate::renderer::typeset::TypesetEngine;
                 let typesetter = TypesetEngine::new(self.dpi);
-                let ts_result = typesetter.typeset_section(
+                typesetter.typeset_section(
                     &section.paragraphs,
                     composed,
                     &self.styles,
@@ -847,47 +847,8 @@ impl DocumentCore {
                     &column_def,
                     idx,
                     &measured.tables,
-                );
-                if result.pages.len() != ts_result.pages.len() {
-                    eprintln!(
-                        "TYPESET_VERIFY: sec{} 페이지 수 차이 (paginator={}, typeset={})",
-                        idx, result.pages.len(), ts_result.pages.len(),
-                    );
-                    if std::env::var("TYPESET_DETAIL").is_ok() {
-                        use crate::renderer::pagination::PageItem;
-                        let describe_items = |pages: &[crate::renderer::pagination::PageContent]| -> Vec<String> {
-                            pages.iter().map(|p| {
-                                let mut descs = Vec::new();
-                                for col in &p.column_contents {
-                                    for item in &col.items {
-                                        let d = match item {
-                                            PageItem::FullParagraph { para_index, .. } => format!("F{}", para_index),
-                                            PageItem::PartialParagraph { para_index, start_line, end_line, .. } =>
-                                                format!("P{}({}-{})", para_index, start_line, end_line),
-                                            PageItem::Table { para_index, .. } => format!("T{}", para_index),
-                                            PageItem::PartialTable { para_index, start_row, end_row, .. } =>
-                                                format!("PT{}(r{}-{})", para_index, start_row, end_row),
-                                            PageItem::Shape { para_index, .. } => format!("S{}", para_index),
-                                        };
-                                        descs.push(d);
-                                    }
-                                }
-                                descs.join(",")
-                            }).collect()
-                        };
-                        let pag_descs = describe_items(&result.pages);
-                        let ts_descs = describe_items(&ts_result.pages);
-                        for i in 0..pag_descs.len().max(ts_descs.len()) {
-                            let pr = pag_descs.get(i).map(|s| s.as_str()).unwrap_or("-");
-                            let tr = ts_descs.get(i).map(|s| s.as_str()).unwrap_or("-");
-                            if pr != tr || std::env::var("TYPESET_ALL_PAGES").is_ok() {
-                                eprintln!("  page {:2}: pag=[{}]", i, pr);
-                                eprintln!("           ts =[{}]{}", tr, if pr != tr { " <<<" } else { "" });
-                            }
-                        }
-                    }
-                }
-            }
+                )
+            };
 
             self.measured_tables[idx] = measured.tables.clone();
             self.measured_sections[idx] = measured;
