@@ -767,6 +767,19 @@ impl LayoutEngine {
                                 // 분할 표 내 수식: 항상 글자처럼 인라인 배치
                                 let eq_w = hwpunit_to_px(eq.common.width as i32, self.dpi);
                                 let eq_h = hwpunit_to_px(eq.common.height as i32, self.dpi);
+
+                                // 빈 runs 셀 + TAC 수식: paragraph_layout(Task #287 경로)이
+                                // layout_composed_paragraph 안에서 이미 렌더 후
+                                // set_inline_shape_position 호출. 중복 emit 방지
+                                // (Issue #301 의 분할 표 경로 보강 — Task #318).
+                                let already_rendered_inline = tree
+                                    .get_inline_shape_position(section_index, cp_idx, ctrl_idx)
+                                    .is_some();
+                                if already_rendered_inline {
+                                    inline_x += eq_w;
+                                    continue;
+                                }
+
                                 let (eq_x, eq_y) = {
                                     let x = inline_x;
                                     inline_x += eq_w;
