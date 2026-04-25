@@ -597,6 +597,30 @@ impl LayoutEngine {
                         content_y_accum += nested_h;
                         continue;
                     } else if !has_nested_table {
+                        // 일반 문단이 offset 으로 완전히 소비됨 → content_y_accum 갱신 후 스킵.
+                        // (Task #324 후속: 이 갱신 누락으로 후속 nested-table 문단의 content_y_accum
+                        //  이 부정확하여 split_start 페이지에서 렌더 위치가 잘못 판정되던 결함 수정.)
+                        if is_in_split_row {
+                            let p_style = styles.para_styles.get(para.para_shape_id as usize);
+                            let sp_before = if cp_idx > 0 { p_style.map(|s| s.spacing_before).unwrap_or(0.0) } else { 0.0 };
+                            let sp_after = if cp_idx + 1 != split_para_count { p_style.map(|s| s.spacing_after).unwrap_or(0.0) } else { 0.0 };
+                            let lc = composed.lines.len();
+                            let is_lp = cp_idx + 1 == split_para_count;
+                            let h = if lc == 0 {
+                                sp_before + hwpunit_to_px(400, self.dpi) + sp_after
+                            } else {
+                                composed.lines.iter().enumerate().map(|(li, line)| {
+                                    let lh = hwpunit_to_px(line.line_height, self.dpi);
+                                    let ls = hwpunit_to_px(line.line_spacing, self.dpi);
+                                    let is_cell_last = is_lp && li + 1 == lc;
+                                    let mut h = if !is_cell_last { lh + ls } else { lh };
+                                    if li == 0 { h += sp_before; }
+                                    if li == lc - 1 { h += sp_after; }
+                                    h
+                                }).sum()
+                            };
+                            content_y_accum += h;
+                        }
                         continue;
                     }
                 }
