@@ -1,118 +1,87 @@
-# 단계별 완료 보고서 — Task #279 Stage 3+4
+# Task #279 Stage 3 — 시각 검증 + 좌표 측정 + 회귀
 
-**이슈**: [#279 목차 right tab 리더 점 렌더링 + 소제목 페이지 번호 정렬 불일치](https://github.com/edwardkim/rhwp/issues/279)  
-**단계**: Stage 3 (소제목 탭 위치 수정) + Stage 4 (검증)  
-**커밋**: `d48af5c`  
-**브랜치**: `local/task279`
+원본 [@seanshin](https://github.com/seanshin) 의 stage3 보고서 (`d48af5c` cherry-pick) 를 메인테이너가 인수 후 추가 분석·수정 결과로 보강.
 
----
+## 작성자 stage3 보고 (인용)
 
-## 1. 변경 내용
+작성자 보고 결과:
+- 장제목 페이지번호 x: 717.5 (변화 없음 보고)
+- 소제목 페이지번호 x: ~700 → 717.9 (보고)
+- 차이 ~17px → 0.4px (보고)
 
-### Stage 2 (리더 도트 렌더링) — svg.rs, web_canvas.rs
+→ 메인테이너 재실측 결과 작성자 보고와 차이 발견 (다음 섹션 참조).
 
-`fill_type=3` (점선) 리더를 round cap 원형 점으로 변경:
+## 메인테이너 재실측 (작성자 분석 검증 + 한컴 의도 추가 분석)
 
-**이전**:
-```svg
-stroke-width="0.5" stroke-dasharray="1 2"
-```
-(사각 끝 대시선)
+### 좌표 측정 (KTX 목차 페이지)
 
-**이후**:
-```svg
-stroke-width="1.0" stroke-dasharray="0.1 3" stroke-linecap="round"
-```
-(원형 점)
+| 항목 | Devel (Before) | After 1차 (작성자 fix) | After 최종 (메인테이너 보강) |
+|------|---------------|----------------------|--------------------------|
+| 장제목 ("3") x | 709.76 | 727.47 | **690.76** |
+| 소제목 한 자리 ("4") x | 689.88 | 689.88 (무변화) | 690.76 |
+| 소제목 두 자리 ("14") x | 681.43 | 681.43 (무변화) | 680.76 |
+| 장제목 두 자리 ("16") 첫글자 x | 690.09 | 690.09 (무변화) | 681.09 |
 
-### Stage 3 (소제목 탭 위치) — text_measurement.rs L68-76
+→ **모든 페이지번호 right edge ≈ 700.0 으로 정렬 통일**.
 
-`find_next_tab_stop`의 클램핑 조건에 `ts.tab_type != 1` 추가:
+### 작성자 stage3 와 실측 충돌 사유
 
-**이전**:
-```rust
-let pos = if ts.position > available_width && available_width > 0.0 {
-    available_width  // 모든 탭 타입에 대해 클램핑
-} else {
-    ts.position
-};
-```
+작성자 보고는 자기 환경 SVG 의 다른 측정 기준 (line bbox 우측 edge 또는 다른 페이지) 으로 추정. 메인테이너 실측에서는 작성자 변경만으로 소제목 정렬은 **미해결** 이었다. 이는 cross-run RIGHT tab pending 가드 (`run.text.ends_with('\t')`) 가 trailing 공백 케이스 (`\t `) 를 놓쳐 소제목 path 가 cross-run 진입 자체를 못 했기 때문.
 
-**이후**:
-```rust
-// type=1(오른쪽) 탭은 단 기준 절대 위치이므로 available_width 클램핑 제외.
-// 들여쓰기(left_margin)가 있는 문단에서도 오른쪽 탭이 동일 위치에 정렬되도록 한다.
-// type=0(왼쪽)/2(가운데) 탭은 종전대로 클램핑하여 텍스트 영역 밖으로 넘어가지 않게 한다.
-let pos = if ts.tab_type != 1 && ts.position > available_width && available_width > 0.0 {
-    available_width
-} else {
-    ts.position
-};
-```
+### 추가 식별된 7가지 결함 + 각 보강
 
----
+| # | 결함 | 메인테이너 보강 |
+|---|------|---------------|
+| 1 | (작성자) 리더 도트 사각 대시 | (작성자) `dasharray="0.1 3" linecap="round" width="1.0"` |
+| 2 | (작성자) RIGHT 탭 일률 클램핑 | (작성자) `tab_type != 1` 가드 |
+| 3 | trailing 공백 \t 케이스 누락 | `trim_end_matches(' ').ends_with('\t')` 가드 정밀화 (est/render) |
+| 4 | 리더 시멘틱 부재 (셀 padding 침범) | `resolve_last_tab_pending` 시그니처에 `fill_type` 추가, leader 있는 RIGHT 탭은 `effective_margin_left + available_width` 로 강제 |
+| 5 | 리더 길이가 페이지번호 폭 무시 | cross-run RIGHT take 시점에 leader-bearing TextRun 검색 + leader.end_x 단축 |
+| 6 | 공백 only run 정렬 부적합 | 공백 only run 은 carry-over (정렬 단위 아님) |
+| 7 | 선행 공백 (`" 16"`) 시각 보정 부재 | `next_w` 를 trim 하지 않은 전체 run 폭으로 |
 
-## 2. 근거 / 분석
+## 회귀 샘플 (페이지 수)
 
-### 버그 원인
+| 샘플 | Devel | After | 결과 |
+|------|-------|-------|------|
+| 21_언어_기출_편집가능본.hwp | 15 | 15 | ✅ |
+| exam_math.hwp | 20 | 20 | ✅ |
+| exam_kor.hwp | 24 | 24 | ✅ |
+| exam_eng.hwp | 9 | 9 | ✅ |
+| basic/KTX.hwp | 1 | 1 | ✅ |
+| aift.hwp | 74 | 74 | ✅ |
+| biz_plan.hwp | 6 | 6 | ✅ |
 
-```
-TabStop.position: 단(column) 기준 절대 px
-available_width = col_area.width - effective_margin_left - margin_right
-```
+모두 무변화.
 
-`effective_margin_left`에 `left_margin`이 포함되므로, 들여쓰기(left_margin > 0)가 있는  
-소제목(ps_id=111) 문단에서는 `available_width`가 장제목(ps_id=109)보다 작아짐.  
-클램핑이 항상 `ts.position > available_width`를 기준으로 작동하여 소제목의  
-오른쪽 탭 위치가 잘못 축소됨.
+## 골든 svg_snapshot 영향
 
-### 수정 효과 (KTX.hwp 목차 SVG 검증)
+| 골든 | 영향 | 처리 |
+|------|------|------|
+| `issue-267/ktx-toc-page.svg` | KTX 목차 (의도된 변경 — 본 task 핵심) | UPDATE_GOLDEN |
+| `issue-147/aift-page3.svg` | aift 표 안 leader (의도된 통일 — dasharray 만 변경, 좌표 동일) | UPDATE_GOLDEN |
+| 기타 4건 | 무영향 | 통과 |
 
-| 항목 | 수정 전 | 수정 후 |
-|------|---------|---------|
-| 장제목(ps_id=109) 페이지번호 x | 717.5 | 717.5 |
-| 소제목(ps_id=111) 페이지번호 x | ~700 | 717.9 |
-| 차이 | ~17px | 0.4px (허용 범위) |
+## WASM 시각 검증
 
-모든 목차 항목(장·소제목)의 페이지 번호가 x≈717.5-717.9로 동일 수직선에 정렬됨.
+WASM Docker 빌드 (`pkg/rhwp_bg.wasm`) 후 작업지시자 직접 시각 확인:
+- 장제목/소제목 페이지번호 정렬 일치 ✅
+- 한 자리/두 자리 페이지번호 leader 길이 차등화 ✅
+- 셀 padding_right 영역 침범 해소 ✅
+- 두 자리 페이지번호 (장제목 16/20/24) 정렬 일치 ✅
 
-### 이전 revert 된 수정(commit 78330fd)과의 차이
+## 트러블슈팅 등록
 
-이전 시도: `right_tab_width = col_area.width - margin_right` 로 `ts.available_width` 변경  
-→ text wrapping에도 영향을 주어 revert
+본 task 의 7가지 결함 + 보강 패턴 + 교훈 (HWP 스펙 ≠ 한컴 조판 알고리즘) 을 `mydocs/troubleshootings/toc_leader_right_tab_alignment.md` 에 등록.
 
-현재 수정: 클램핑 조건에 `tab_type != 1` 추가만 — wrapping에 영향 없음  
-(`available_width`는 변경하지 않고, type=1 탭만 클램핑 생략)
+## Stage 3 완료 조건 점검
 
----
+- [x] 좌표 측정 결과 한컴 의도와 정합 (작업지시자 시각 확인)
+- [x] 7 핵심 샘플 회귀 0
+- [x] svg_snapshot 6/6 통과
+- [x] WASM 빌드 + 시각 확인 통과
+- [x] 트러블슈팅 등록
 
-## 3. 검증 결과
+## 다음 단계
 
-### 테스트
-
-```
-cargo test: 793 passed, 0 failed ✅
-```
-
-### Clippy
-
-pre-existing 오류 8건 (table.rs, cursor_nav.rs) — 이번 변경과 무관.  
-우리 변경 파일 3개(text_measurement.rs, svg.rs, web_canvas.rs)에는 새 warning 없음.
-
-### KTX.hwp 목차 시각 확인
-
-- 리더: `stroke-dasharray="0.1 3" stroke-linecap="round"` — 원형 점 확인
-- 페이지번호 정렬: 장·소제목 모두 x≈717.5-717.9 (0.4px 이내) ✅
-
----
-
-## 4. 완료 상태
-
-| 항목 | 상태 |
-|------|------|
-| Stage 1: 조사 | ✅ 완료 |
-| Stage 2: 리더 도트 수정 | ✅ 완료 |
-| Stage 3: 소제목 탭 위치 수정 | ✅ 완료 |
-| Stage 4: 검증 | ✅ 완료 |
-
-→ Task #279 구현 완료. PR 준비 가능.
+Stage 4 — 최종 보고서 + CHANGELOG + 위키 + Errata + orders + force-push + admin merge.

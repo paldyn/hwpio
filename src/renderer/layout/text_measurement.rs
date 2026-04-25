@@ -333,7 +333,8 @@ impl TextMeasurer for EmbeddedTextMeasurer {
             }
             if c == '\t' {
                 // HWPX 인라인 탭: inline_tabs에서 width/type 사용
-                // NOTE: 네이티브 경로는 `tab_type = ext[2]` 전체 u16 해석 유지 (Task #296 범위 외).
+                // 네이티브 경로의 ext[2] 인코딩: (tab_type << 8) | fill_type.
+                // 상위 바이트가 tab_type (1=LEFT, 2=RIGHT, 3=CENTER, 4=DECIMAL).
                 if tab_char_idx < style.inline_tabs.len() {
                     let ext = &style.inline_tabs[tab_char_idx];
                     let tab_width_px = ext[0] as f64 * 96.0 / 7200.0;
