@@ -50,6 +50,25 @@ fn find_in_text(text: &str, query: &str, case_sensitive: bool) -> Vec<usize> {
     results
 }
 
+/// 문서 본문에서 query의 첫 번째 매치만 반환 (표/글상자 내부 제외, early-exit)
+fn search_first_body(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Option<SearchHit> {
+    let qlen = query.chars().count();
+    for (sec_idx, section) in doc.document.sections.iter().enumerate() {
+        for (para_idx, para) in section.paragraphs.iter().enumerate() {
+            if let Some(&offset) = find_in_text(&para.text, query, case_sensitive).first() {
+                return Some(SearchHit {
+                    sec: sec_idx,
+                    para: para_idx,
+                    char_offset: offset,
+                    length: qlen,
+                    cell_context: None,
+                });
+            }
+        }
+    }
+    None
+}
+
 /// 문서 전체를 순회하며 query와 일치하는 모든 위치를 반환
 fn search_all(doc: &DocumentCore, query: &str, case_sensitive: bool) -> Vec<SearchHit> {
     let mut results = vec![];
@@ -190,7 +209,8 @@ impl DocumentCore {
 
     /// 단일 치환 (검색어 기반)
     ///
-    /// 문서에서 query의 첫 번째 매치를 new_text로 교체한다.
+    /// 문서 본문에서 query의 첫 번째 매치를 new_text로 교체한다.
+    /// 표/글상자 내부는 대상에서 제외 (search_text_native와 동일 범위).
     /// 반환: JSON `{"ok":true,"sec":N,"para":N,"charOffset":N,"newLength":N}` 또는 `{"ok":false}`
     pub fn replace_one_native(
         &mut self,
@@ -202,44 +222,14 @@ impl DocumentCore {
             return Ok(r#"{"ok":false}"#.to_string());
         }
 
-        let all_hits = search_all(self, query, case_sensitive);
-        let hit = match all_hits.first() {
+        let hit = match search_first_body(self, query, case_sensitive) {
             Some(h) => h,
             None => return Ok(r#"{"ok":false}"#.to_string()),
         };
 
         let new_len = new_text.chars().count();
-        let sec_idx = hit.sec;
-
-        if let Some((parent_para, ctrl_idx, cell_idx, cell_para_idx)) = hit.cell_context {
-            let section = self.document.sections.get_mut(hit.sec)
-                .ok_or_else(|| HwpError::RenderError("구역 범위 초과".into()))?;
-            let para = section.paragraphs.get_mut(parent_para)
-                .ok_or_else(|| HwpError::RenderError("문단 범위 초과".into()))?;
-
-            let cell_para = match para.controls.get_mut(ctrl_idx) {
-                Some(Control::Table(table)) => {
-                    let cell = table.cells.get_mut(cell_idx)
-                        .ok_or_else(|| HwpError::RenderError("셀 범위 초과".into()))?;
-                    cell.paragraphs.get_mut(cell_para_idx)
-                        .ok_or_else(|| HwpError::RenderError("셀 문단 범위 초과".into()))?
-                }
-                Some(Control::Shape(shape)) => {
-                    let tb = crate::document_core::helpers::get_textbox_from_shape_mut(shape)
-                        .ok_or_else(|| HwpError::RenderError("글상자 없음".into()))?;
-                    tb.paragraphs.get_mut(cell_para_idx)
-                        .ok_or_else(|| HwpError::RenderError("글상자 문단 범위 초과".into()))?
-                }
-                _ => return Ok(r#"{"ok":false}"#.to_string()),
-            };
-            cell_para.delete_text_at(hit.char_offset, hit.length);
-            cell_para.insert_text_at(hit.char_offset, new_text);
-        } else {
-            self.delete_text_native(hit.sec, hit.para, hit.char_offset, hit.length)?;
-            self.insert_text_native(hit.sec, hit.para, hit.char_offset, new_text)?;
-        }
-
-        self.recompose_section(sec_idx);
+        self.delete_text_native(hit.sec, hit.para, hit.char_offset, hit.length)?;
+        self.insert_text_native(hit.sec, hit.para, hit.char_offset, new_text)?;
 
         Ok(format!(
             "{{\"ok\":true,\"sec\":{},\"para\":{},\"charOffset\":{},\"newLength\":{}}}",
