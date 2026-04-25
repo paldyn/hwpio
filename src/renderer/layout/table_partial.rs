@@ -586,6 +586,16 @@ impl LayoutEngine {
                             content_y_accum += nested_h;
                             continue;
                         }
+                    } else if has_nested_table && is_in_split_row && split_end_content_limit > 0.0 {
+                        // 분할 끝 행: compute_cell_line_ranges가 중첩 표를 limit 초과로
+                        // 다음 페이지로 미뤘음(=(line_count, line_count)). 이 페이지에서는 스킵.
+                        let nested_h: f64 = para.controls.iter().map(|ctrl| {
+                            if let Control::Table(t) = ctrl {
+                                self.calc_nested_table_height(t, styles)
+                            } else { 0.0 }
+                        }).sum();
+                        content_y_accum += nested_h;
+                        continue;
                     } else if !has_nested_table {
                         continue;
                     }
