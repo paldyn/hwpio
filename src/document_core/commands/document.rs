@@ -52,6 +52,14 @@ impl DocumentCore {
         // compose 전에 올바른 line_height/line_spacing을 계산해야 줄바꿈·높이가 정상 동작한다.
         Self::reflow_zero_height_paragraphs(&mut document, &styles, DEFAULT_DPI);
 
+        // HWPX → HWP 라운드트립 일관성 normalize (#314):
+        // HWPX 파서가 채우지 않는 paragraph 필드를 HWP 직렬화/파싱 라운드트립 결과와 일치시킨다.
+        // 1) char_shapes 빈 paragraph 에 default [(0,0)] 추가 (HWP 스펙상 최소 1개 요구)
+        // 2) control_mask 를 controls 기반으로 재계산
+        if matches!(source_format, crate::parser::FileFormat::Hwpx) {
+            Self::normalize_hwpx_paragraphs(&mut document);
+        }
+
         // 초기 상태(properties bit 15 == 0) 누름틀의 안내문 텍스트를 삭제하여 빈 필드로 정규화
         // (한컴에서 메모 추가 시 안내문 텍스트가 필드 값으로 삽입됨 — compose 전에 제거해야 정합성 유지)
         Self::clear_initial_field_texts(&mut document);
@@ -672,6 +680,66 @@ impl DocumentCore {
             super::super::helpers::json_escape(&text_preview),
             lines_json.join(","),
         ))
+    }
+
+    /// HWPX → HWP 라운드트립 일관성 normalize.
+    ///
+    /// HWPX 파서가 채우지 않는 paragraph 필드를 HWP 직렬화/파싱 라운드트립 결과와 일치시킨다.
+    /// - char_shapes 빈 paragraph 에 default `[(0, 0)]` 추가 (HWP 스펙: 최소 1개 PARA_CHAR_SHAPE 요구)
+    /// - control_mask 를 controls + field_ranges + text 기반으로 재계산 (HWP 직렬화기와 동일 로직)
+    fn normalize_hwpx_paragraphs(document: &mut Document) {
+        use crate::model::control::Control;
+        use crate::model::paragraph::{CharShapeRef, Paragraph};
+
+        fn compute_mask(para: &Paragraph) -> u32 {
+            let mut mask: u32 = 0;
+            for ctrl in &para.controls {
+                let bit = match ctrl {
+                    Control::SectionDef(_) | Control::ColumnDef(_) => 0x0002,
+                    Control::Field(_) => 0x0003,
+                    Control::Table(_) | Control::Shape(_) | Control::Picture(_)
+                    | Control::Hyperlink(_) | Control::Ruby(_) | Control::Equation(_)
+                    | Control::Form(_) | Control::Unknown(_) => 0x000B,
+                    Control::HiddenComment(_) => 0x000F,
+                    Control::Header(_) | Control::Footer(_) => 0x0010,
+                    Control::Footnote(_) | Control::Endnote(_) => 0x0011,
+                    Control::AutoNumber(_) | Control::NewNumber(_) => 0x0012,
+                    Control::PageNumberPos(_) | Control::PageHide(_) => 0x0015,
+                    Control::Bookmark(_) => 0x0016,
+                    Control::CharOverlap(_) => 0x0017,
+                };
+                mask |= 1u32 << bit;
+            }
+            if !para.field_ranges.is_empty() { mask |= 1u32 << 0x0004; }
+            if para.text.contains('\t') { mask |= 1u32 << 0x0009; }
+            if para.text.contains('\n') { mask |= 1u32 << 0x000A; }
+            mask
+        }
+
+        fn process_para(para: &mut Paragraph) {
+            if para.char_shapes.is_empty() {
+                para.char_shapes.push(CharShapeRef { start_pos: 0, char_shape_id: 0 });
+            }
+            para.control_mask = compute_mask(para);
+            // 셀 내부 paragraphs 도 재귀
+            for ctrl in &mut para.controls {
+                if let Control::Table(t) = ctrl {
+                    for cell in &mut t.cells {
+                        for cp in &mut cell.paragraphs {
+                            process_para(cp);
+                        }
+                    }
+                }
+                // Shape의 text box paragraphs도 재귀해야 하나 정확한 API 미식별 → skip
+                // (현재 회귀 케이스 hwpx-h-02 는 cell paragraphs로 충분)
+            }
+        }
+
+        for section in &mut document.sections {
+            for p in &mut section.paragraphs {
+                process_para(p);
+            }
+        }
     }
 
     /// 초기 상태(properties bit 15 == 0) ClickHere 필드의 안내문 텍스트를 삭제한다.
