@@ -20,7 +20,7 @@ impl Paginator {
         section_index: usize,
         para_styles: &[crate::renderer::style_resolver::ResolvedParaStyle],
     ) -> PaginationResult {
-        self.paginate_with_measured_opts(paragraphs, measured, page_def, column_def, section_index, para_styles, false)
+        self.paginate_with_measured_opts(paragraphs, measured, page_def, column_def, section_index, para_styles, PaginationOpts::default())
     }
 
     pub fn paginate_with_measured_opts(
@@ -31,8 +31,10 @@ impl Paginator {
         column_def: &ColumnDef,
         section_index: usize,
         para_styles: &[crate::renderer::style_resolver::ResolvedParaStyle],
-        hide_empty_line: bool,
+        opts: PaginationOpts,
     ) -> PaginationResult {
+        let hide_empty_line = opts.hide_empty_line;
+        let respect_vpos_reset = opts.respect_vpos_reset;
         let layout = PageLayoutInfo::from_page_def(page_def, column_def, self.dpi);
         let measurer = HeightMeasurer::new(self.dpi);
 
@@ -321,7 +323,7 @@ impl Paginator {
             if !has_table {
                 self.paginate_text_lines(
                     &mut st, para_idx, para, measured, para_height,
-                    base_available_height,
+                    base_available_height, respect_vpos_reset,
                 );
             }
 
@@ -586,8 +588,20 @@ impl Paginator {
         measured: &MeasuredSection,
         para_height: f64,
         base_available_height: f64,
+        respect_vpos_reset: bool,
     ) {
         let available_now = st.available_height();
+
+        // LINE_SEG vpos-reset 강제 분리 지점 검출 (line>0 && vertical_pos==0)
+        // 옵션 on + multicolumn이 아닌 경우에만 적용. multicolumn은 column-break 메커니즘 우선.
+        let forced_breaks: Vec<usize> = if respect_vpos_reset {
+            para.line_segs.iter().enumerate()
+                .filter(|(i, ls)| *i > 0 && ls.vertical_pos == 0)
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            Vec::new()
+        };
 
         // 다단 레이아웃에서 문단 내 단 경계 감지
         let col_breaks = if st.col_count > 1 && st.current_column == 0 && st.on_first_multicolumn_page {
@@ -598,6 +612,8 @@ impl Paginator {
 
         if col_breaks.len() > 1 {
             self.paginate_multicolumn_paragraph(st, para_idx, para, measured, para_height, &col_breaks);
+        } else if !forced_breaks.is_empty() {
+            self.paginate_with_forced_breaks(st, para_idx, para, measured, &forced_breaks, base_available_height);
         } else if {
             // 문단 적합성 검사: trailing line_spacing 제외
             let trailing_ls = para.line_segs.last()
@@ -740,6 +756,123 @@ impl Paginator {
                 para_index: para_idx,
             });
             st.current_height += para_height;
+        }
+    }
+
+    /// LINE_SEG vpos-reset에 의한 강제 분리 처리.
+    ///
+    /// HWP 파일이 LINE_SEG.vertical_pos=0 으로 표시한 단/페이지 경계를 존중하여,
+    /// 문단을 forced_breaks 위치에서 PartialParagraph로 분리하고 단/페이지를 진행한다.
+    ///
+    /// 각 세그먼트가 단일 단/페이지를 초과할 경우 자연 줄 분할로 fallback.
+    fn paginate_with_forced_breaks(
+        &self,
+        st: &mut PaginationState,
+        para_idx: usize,
+        para: &Paragraph,
+        measured: &MeasuredSection,
+        forced_breaks: &[usize],
+        base_available_height: f64,
+    ) {
+        let Some(mp) = measured.get_measured_paragraph(para_idx) else {
+            // 측정 정보 없음 → fallback FullParagraph
+            st.current_items.push(PageItem::FullParagraph { para_index: para_idx });
+            return;
+        };
+
+        let line_count = mp.line_heights.len();
+        if line_count == 0 {
+            st.current_items.push(PageItem::FullParagraph { para_index: para_idx });
+            return;
+        }
+
+        let sp_before = mp.spacing_before;
+        let sp_after = mp.spacing_after;
+
+        // 세그먼트 경계: [0, fb1, fb2, ..., line_count]
+        let mut boundaries: Vec<usize> = vec![0];
+        boundaries.extend(forced_breaks.iter().copied().filter(|&b| b > 0 && b < line_count));
+        boundaries.push(line_count);
+        boundaries.dedup();
+
+        for win_idx in 0..boundaries.len() - 1 {
+            let seg_start = boundaries[win_idx];
+            let seg_end = boundaries[win_idx + 1];
+            if seg_start >= seg_end { continue; }
+            let is_last_segment = win_idx + 2 == boundaries.len();
+
+            // 세그먼트 줄 단위 배치 (자연 분할 + forced break 결합)
+            let mut cursor_line = seg_start;
+            while cursor_line < seg_end {
+                let fn_margin = if st.current_footnote_height > 0.0 { st.footnote_safety_margin } else { 0.0 };
+                let page_avail = if cursor_line == seg_start && win_idx == 0 {
+                    (base_available_height - st.current_footnote_height - fn_margin - st.current_height - st.current_zone_y_offset).max(0.0)
+                } else {
+                    base_available_height
+                };
+
+                let sp_b = if cursor_line == 0 { sp_before } else { 0.0 };
+                let avail_for_lines = (page_avail - sp_b).max(0.0);
+
+                // 세그먼트 안에서만 줄 누적 (seg_end 초과 금지)
+                let mut cumulative = 0.0;
+                let mut end_line = cursor_line;
+                for li in cursor_line..seg_end {
+                    let content_h = mp.line_heights[li];
+                    if cumulative + content_h > avail_for_lines && li > cursor_line {
+                        break;
+                    }
+                    cumulative += mp.line_advance(li);
+                    end_line = li + 1;
+                }
+                if end_line <= cursor_line {
+                    end_line = cursor_line + 1;
+                }
+
+                let part_line_height: f64 = mp.line_advances_sum(cursor_line..end_line);
+                let part_sp_after = if end_line >= line_count { sp_after } else { 0.0 };
+                let part_height = sp_b + part_line_height + part_sp_after;
+
+                // 첫 줄도 안 들어가면 단/페이지 진행 후 재시도
+                let first_line_h = mp.line_heights.get(cursor_line).copied().unwrap_or(0.0);
+                let remaining_for_lines = (st.available_height() - st.current_height).max(0.0);
+                if (st.current_height >= st.available_height() || remaining_for_lines < first_line_h)
+                    && !st.current_items.is_empty()
+                {
+                    st.advance_column_or_new_page();
+                    continue;
+                }
+
+                // 세그먼트 전체가 한 번에 배치되었고 문단 전체이면 FullParagraph
+                if cursor_line == 0 && end_line >= line_count {
+                    st.current_items.push(PageItem::FullParagraph { para_index: para_idx });
+                } else {
+                    st.current_items.push(PageItem::PartialParagraph {
+                        para_index: para_idx,
+                        start_line: cursor_line,
+                        end_line,
+                    });
+                }
+
+                if st.page_vpos_base.is_none() {
+                    if let Some(seg) = para.line_segs.get(cursor_line) {
+                        st.page_vpos_base = Some(seg.vertical_pos);
+                    }
+                }
+                st.current_height += part_height;
+
+                cursor_line = end_line;
+
+                if cursor_line < seg_end {
+                    // 세그먼트 내부 자연 분할 → 다음 단/페이지
+                    st.advance_column_or_new_page();
+                }
+            }
+
+            // 세그먼트 종료 시점이 마지막이 아니면 강제 분리 (vpos-reset)
+            if !is_last_segment {
+                st.advance_column_or_new_page();
+            }
         }
     }
 
