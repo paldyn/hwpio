@@ -20,7 +20,7 @@ impl Paginator {
         section_index: usize,
         para_styles: &[crate::renderer::style_resolver::ResolvedParaStyle],
     ) -> PaginationResult {
-        self.paginate_with_measured_opts(paragraphs, measured, page_def, column_def, section_index, para_styles, false)
+        self.paginate_with_measured_opts(paragraphs, measured, page_def, column_def, section_index, para_styles, PaginationOpts::default())
     }
 
     pub fn paginate_with_measured_opts(
@@ -31,8 +31,10 @@ impl Paginator {
         column_def: &ColumnDef,
         section_index: usize,
         para_styles: &[crate::renderer::style_resolver::ResolvedParaStyle],
-        hide_empty_line: bool,
+        opts: PaginationOpts,
     ) -> PaginationResult {
+        let hide_empty_line = opts.hide_empty_line;
+        let _respect_vpos_reset = opts.respect_vpos_reset;  // 2단계에서 사용
         let layout = PageLayoutInfo::from_page_def(page_def, column_def, self.dpi);
         let measurer = HeightMeasurer::new(self.dpi);
 

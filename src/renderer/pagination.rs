@@ -333,6 +333,15 @@ impl PaginationResult {
     }
 }
 
+/// 페이지 분할 옵션
+#[derive(Debug, Clone, Default)]
+pub struct PaginationOpts {
+    /// 빈 줄 숨김 (SectionDef.hide_empty_line)
+    pub hide_empty_line: bool,
+    /// LINE_SEG vpos-reset (vertical_pos==0, line>0) 위치를 강제 단/페이지 경계로 처리
+    pub respect_vpos_reset: bool,
+}
+
 /// 페이지 분할 엔진
 pub struct Paginator {
     /// DPI

@@ -828,7 +828,10 @@ impl DocumentCore {
                 &column_def,
                 idx,
                 &self.styles.para_styles,
-                section.section_def.hide_empty_line,
+                crate::renderer::pagination::PaginationOpts {
+                    hide_empty_line: section.section_def.hide_empty_line,
+                    ..Default::default()
+                },
             );
 
             // TypesetEngine 병렬 검증 (Phase 1: 비-표 구역)
