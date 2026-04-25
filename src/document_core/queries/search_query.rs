@@ -188,6 +188,65 @@ impl DocumentCore {
         ))
     }
 
+    /// 단일 치환 (검색어 기반)
+    ///
+    /// 문서에서 query의 첫 번째 매치를 new_text로 교체한다.
+    /// 반환: JSON `{"ok":true,"sec":N,"para":N,"charOffset":N,"newLength":N}` 또는 `{"ok":false}`
+    pub fn replace_one_native(
+        &mut self,
+        query: &str,
+        new_text: &str,
+        case_sensitive: bool,
+    ) -> Result<String, HwpError> {
+        if query.is_empty() {
+            return Ok(r#"{"ok":false}"#.to_string());
+        }
+
+        let all_hits = search_all(self, query, case_sensitive);
+        let hit = match all_hits.first() {
+            Some(h) => h,
+            None => return Ok(r#"{"ok":false}"#.to_string()),
+        };
+
+        let new_len = new_text.chars().count();
+        let sec_idx = hit.sec;
+
+        if let Some((parent_para, ctrl_idx, cell_idx, cell_para_idx)) = hit.cell_context {
+            let section = self.document.sections.get_mut(hit.sec)
+                .ok_or_else(|| HwpError::RenderError("구역 범위 초과".into()))?;
+            let para = section.paragraphs.get_mut(parent_para)
+                .ok_or_else(|| HwpError::RenderError("문단 범위 초과".into()))?;
+
+            let cell_para = match para.controls.get_mut(ctrl_idx) {
+                Some(Control::Table(table)) => {
+                    let cell = table.cells.get_mut(cell_idx)
+                        .ok_or_else(|| HwpError::RenderError("셀 범위 초과".into()))?;
+                    cell.paragraphs.get_mut(cell_para_idx)
+                        .ok_or_else(|| HwpError::RenderError("셀 문단 범위 초과".into()))?
+                }
+                Some(Control::Shape(shape)) => {
+                    let tb = crate::document_core::helpers::get_textbox_from_shape_mut(shape)
+                        .ok_or_else(|| HwpError::RenderError("글상자 없음".into()))?;
+                    tb.paragraphs.get_mut(cell_para_idx)
+                        .ok_or_else(|| HwpError::RenderError("글상자 문단 범위 초과".into()))?
+                }
+                _ => return Ok(r#"{"ok":false}"#.to_string()),
+            };
+            cell_para.delete_text_at(hit.char_offset, hit.length);
+            cell_para.insert_text_at(hit.char_offset, new_text);
+        } else {
+            self.delete_text_native(hit.sec, hit.para, hit.char_offset, hit.length)?;
+            self.insert_text_native(hit.sec, hit.para, hit.char_offset, new_text)?;
+        }
+
+        self.recompose_section(sec_idx);
+
+        Ok(format!(
+            "{{\"ok\":true,\"sec\":{},\"para\":{},\"charOffset\":{},\"newLength\":{}}}",
+            hit.sec, hit.para, hit.char_offset, new_len
+        ))
+    }
+
     /// 전체 치환
     ///
     /// 문서 전체에서 query를 new_text로 모두 교체한다.
@@ -319,4 +378,38 @@ fn format_search_hit(hit: &SearchHit, wrapped: bool) -> String {
         "{{\"found\":true,\"wrapped\":{},\"sec\":{},\"para\":{},\"charOffset\":{},\"length\":{}{}}}",
         wrapped, hit.sec, hit.para, hit.char_offset, hit.length, cell_ctx
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_in_text_case_sensitive() {
+        assert_eq!(find_in_text("hello world", "world", true), vec![6]);
+        assert_eq!(find_in_text("hello world", "World", true), vec![]);
+    }
+
+    #[test]
+    fn find_in_text_case_insensitive() {
+        assert_eq!(find_in_text("Hello World", "hello", false), vec![0]);
+        assert_eq!(find_in_text("Hello World", "WORLD", false), vec![6]);
+    }
+
+    #[test]
+    fn find_in_text_multiple_matches() {
+        assert_eq!(find_in_text("abcabc", "abc", true), vec![0, 3]);
+    }
+
+    #[test]
+    fn find_in_text_empty_inputs() {
+        assert_eq!(find_in_text("", "abc", true), vec![]);
+        assert_eq!(find_in_text("abc", "", true), vec![]);
+    }
+
+    #[test]
+    fn find_in_text_korean() {
+        assert_eq!(find_in_text("안녕하세요 세계", "세계", true), vec![6]);
+        assert_eq!(find_in_text("가나가나", "가나", true), vec![0, 2]);
+    }
 }
