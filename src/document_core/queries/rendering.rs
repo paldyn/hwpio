@@ -828,7 +828,10 @@ impl DocumentCore {
                 &column_def,
                 idx,
                 &self.styles.para_styles,
-                section.section_def.hide_empty_line,
+                crate::renderer::pagination::PaginationOpts {
+                    hide_empty_line: section.section_def.hide_empty_line,
+                    respect_vpos_reset: self.respect_vpos_reset,
+                },
             );
 
             // TypesetEngine 병렬 검증 (Phase 1: 비-표 구역)
@@ -1328,8 +1331,13 @@ impl DocumentCore {
                     la.body_area.x, la.body_area.y, la.body_area.width, la.body_area.height));
 
                 for (col_idx, cc) in page.column_contents.iter().enumerate() {
-                    out.push_str(&format!("  단 {} (items={}{})\n",
-                        col_idx, cc.items.len(),
+                    let hwp_used_px = compute_hwp_used_height(cc, paragraphs, dpi);
+                    let diff_str = match hwp_used_px {
+                        Some(hwp) => format!(", hwp_used≈{:.1}px, diff={:+.1}px", hwp, cc.used_height - hwp),
+                        None => String::new(),
+                    };
+                    out.push_str(&format!("  단 {} (items={}, used={:.1}px{}{})\n",
+                        col_idx, cc.items.len(), cc.used_height, diff_str,
                         if cc.zone_y_offset > 0.0 { format!(", zone_y_offset={:.1}", cc.zone_y_offset) } else { String::new() }));
 
                     for item in &cc.items {
@@ -1637,6 +1645,69 @@ impl DocumentCore {
     // 클립보드 API (내부)
     // =====================================================================
 
+}
+
+/// 단이 HWP 원본 layout 에서 사용했을 높이를 LINE_SEG vpos 기준으로 추정 (px).
+///
+/// 알고리즘:
+/// 1. 단의 항목들을 순회하며 첫 vpos-reset (line>0, vertical_pos==0) 발견 지점을 찾는다.
+/// 2. reset 발견: reset 직전 줄의 vpos + line_height (HWP 가 단을 끊은 위치)
+/// 3. reset 미발견: 단의 마지막 처리 줄 (FullParagraph: 마지막, PartialParagraph: end_line-1)
+/// 4. Table/Shape 만 있는 항목은 추정 불가 (None)
+fn compute_hwp_used_height(
+    cc: &crate::renderer::pagination::ColumnContent,
+    paragraphs: &[Paragraph],
+    dpi: f64,
+) -> Option<f64> {
+    use crate::renderer::pagination::PageItem;
+    use crate::renderer::hwpunit_to_px;
+
+    // 1) 단 항목 내 첫 vpos-reset 검색
+    for item in &cc.items {
+        let (para_idx, range_start, range_end) = match item {
+            PageItem::FullParagraph { para_index } => {
+                let p = match paragraphs.get(*para_index) { Some(p) => p, None => continue };
+                (*para_index, 0usize, p.line_segs.len())
+            }
+            PageItem::PartialParagraph { para_index, start_line, end_line } => {
+                let p = match paragraphs.get(*para_index) { Some(p) => p, None => continue };
+                (*para_index, *start_line, (*end_line).min(p.line_segs.len()))
+            }
+            _ => continue,
+        };
+        let p = match paragraphs.get(para_idx) { Some(p) => p, None => continue };
+        // line>0 인 줄 중 vertical_pos==0 첫 줄 찾기
+        for i in range_start.max(1)..range_end {
+            if let Some(seg) = p.line_segs.get(i) {
+                if seg.vertical_pos == 0 {
+                    if let Some(prev) = p.line_segs.get(i.saturating_sub(1)) {
+                        let bottom_hwpu = prev.vertical_pos + prev.line_height;
+                        return Some(hwpunit_to_px(bottom_hwpu, dpi));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) reset 미발견: 단 마지막 항목의 마지막 줄
+    let last_item = cc.items.last()?;
+    let (para_idx, line_idx) = match last_item {
+        PageItem::FullParagraph { para_index } => {
+            let p = paragraphs.get(*para_index)?;
+            if p.line_segs.is_empty() { return None; }
+            (*para_index, p.line_segs.len() - 1)
+        }
+        PageItem::PartialParagraph { para_index, end_line, .. } => {
+            let p = paragraphs.get(*para_index)?;
+            if p.line_segs.is_empty() { return None; }
+            (*para_index, end_line.saturating_sub(1).min(p.line_segs.len() - 1))
+        }
+        _ => return None,
+    };
+    let p = paragraphs.get(para_idx)?;
+    let seg = p.line_segs.get(line_idx)?;
+    let bottom_hwpu = seg.vertical_pos + seg.line_height;
+    Some(hwpunit_to_px(bottom_hwpu, dpi))
 }
 
 /// LINE_SEG vertical_pos 범위를 문자열로 포맷.

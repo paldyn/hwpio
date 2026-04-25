@@ -151,6 +151,20 @@ impl HwpDocument {
         self.debug_overlay = enabled;
     }
 
+    /// LINE_SEG vpos-reset 강제 분리 적용 여부를 설정한다.
+    /// 변경 시 페이지네이션 결과가 달라지므로 모든 섹션을 재페이지네이션한다.
+    pub fn set_respect_vpos_reset(&mut self, enabled: bool) {
+        if self.respect_vpos_reset != enabled {
+            self.respect_vpos_reset = enabled;
+            // 모든 섹션 dirty 마킹 후 즉시 재페이지네이션
+            for d in self.core.dirty_sections.iter_mut() {
+                *d = true;
+            }
+            self.invalidate_page_tree_cache();
+            self.core.paginate();
+        }
+    }
+
     /// 총 페이지 수를 반환한다.
     #[wasm_bindgen(js_name = pageCount)]
     pub fn page_count(&self) -> u32 {

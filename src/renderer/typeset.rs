@@ -181,6 +181,7 @@ impl TypesetState {
             zone_layout: self.current_zone_layout.clone(),
             zone_y_offset: self.current_zone_y_offset,
             wrap_around_paras: Vec::new(),
+            used_height: self.current_height,
         };
         if let Some(page) = self.pages.last_mut() {
             page.column_contents.push(col_content);
@@ -197,6 +198,7 @@ impl TypesetState {
             zone_layout: self.current_zone_layout.clone(),
             zone_y_offset: self.current_zone_y_offset,
             wrap_around_paras: Vec::new(),
+            used_height: self.current_height,
         };
         if let Some(page) = self.pages.last_mut() {
             page.column_contents.push(col_content);
