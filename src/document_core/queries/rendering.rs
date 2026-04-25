@@ -830,7 +830,7 @@ impl DocumentCore {
                 &self.styles.para_styles,
                 crate::renderer::pagination::PaginationOpts {
                     hide_empty_line: section.section_def.hide_empty_line,
-                    ..Default::default()
+                    respect_vpos_reset: self.respect_vpos_reset,
                 },
             );
 

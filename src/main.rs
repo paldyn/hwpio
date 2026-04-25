@@ -44,6 +44,7 @@ fn print_help() {
     println!("      --show-para-marks       문단부호(↵/↓) 표시");
     println!("      --show-control-codes    조판부호 보이기 (문단부호 + 개체 마커 등)");
     println!("      --debug-overlay         디버그 오버레이 (문단/표 경계 + 인덱스 라벨)");
+    println!("      --respect-vpos-reset    LINE_SEG vpos=0 리셋을 단/페이지 강제 경계로 처리");
     println!("      --show-grid             1mm 격자 오버레이 (레이아웃 디버깅용)");
     println!("      --font-style            @font-face local() 참조 삽입 (폰트 데이터 미포함)");
     println!("      --embed-fonts           폰트 서브셋 임베딩 (사용 글자만 base64)");
@@ -56,7 +57,7 @@ fn print_help() {
     println!("  dump <파일.hwp> [--section <번호>] [--para <번호>]");
     println!("      문서 조판부호 구조 덤프 (디버깅용)");
     println!();
-    println!("  dump-pages <파일.hwp> [-p <번호>]");
+    println!("  dump-pages <파일.hwp> [-p <번호>] [--respect-vpos-reset]");
     println!("      페이지네이션 결과 덤프 (페이지별 문단/표 배치 목록)");
     println!();
     println!("  diag <파일.hwp>");
@@ -94,6 +95,7 @@ fn export_svg(args: &[String]) {
     let mut show_control_codes = false;
     let mut debug_overlay = false;
     let mut show_grid = false;
+    let mut respect_vpos_reset = false;
     let mut font_embed_mode = rhwp::renderer::svg::FontEmbedMode::None;
     let mut font_paths: Vec<std::path::PathBuf> = Vec::new();
 
@@ -134,6 +136,10 @@ fn export_svg(args: &[String]) {
             }
             "--debug-overlay" => {
                 debug_overlay = true;
+                i += 1;
+            }
+            "--respect-vpos-reset" => {
+                respect_vpos_reset = true;
                 i += 1;
             }
             "--show-grid" => {
@@ -194,6 +200,9 @@ fn export_svg(args: &[String]) {
     }
     if debug_overlay {
         doc.set_debug_overlay(true);
+    }
+    if respect_vpos_reset {
+        doc.set_respect_vpos_reset(true);
     }
 
     let page_count = doc.page_count();
@@ -682,6 +691,7 @@ fn dump_pages(args: &[String]) {
 
     let file_path = &args[0];
     let mut target_page: Option<u32> = None;
+    let mut respect_vpos_reset = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -691,6 +701,10 @@ fn dump_pages(args: &[String]) {
                     target_page = args[i + 1].parse().ok();
                     i += 2;
                 } else { i += 1; }
+            }
+            "--respect-vpos-reset" => {
+                respect_vpos_reset = true;
+                i += 1;
             }
             _ => { i += 1; }
         }
@@ -704,13 +718,17 @@ fn dump_pages(args: &[String]) {
         }
     };
 
-    let doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
+    let mut doc = match rhwp::wasm_api::HwpDocument::from_bytes(&data) {
         Ok(d) => d,
         Err(e) => {
             eprintln!("오류: HWP 파싱 실패 - {}", e);
             return;
         }
     };
+
+    if respect_vpos_reset {
+        doc.set_respect_vpos_reset(true);
+    }
 
     println!("문서 로드: {} ({}페이지)", file_path, doc.page_count());
     print!("{}", doc.dump_page_items(target_page));
