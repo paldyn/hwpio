@@ -1764,6 +1764,21 @@ impl LayoutEngine {
             }
             PageItem::PartialParagraph { para_index, start_line, end_line } => {
                 if let Some(para) = paragraphs.get(*para_index) {
+                    // Task #318: wrap=Square 표 호스트 문단의 텍스트는
+                    // layout_wrap_around_paras (자가 wrap 경로) 가 처리한다. PartialParagraph
+                    // 측에서 같은 paragraph 를 layout_partial_paragraph 로 다시 호출하면
+                    // 호스트 텍스트 + 인라인 수식이 중복 emit 됨 (#301 회귀).
+                    // FullParagraph 경로 (`is_wrap_host` 가드, layout.rs:1639) 와 동일한 처리.
+                    let is_wrap_host = para.controls.iter().any(|c| {
+                        if let Control::Table(t) = c {
+                            !t.common.treat_as_char
+                                && matches!(t.common.text_wrap, crate::model::shape::TextWrap::Square)
+                        } else { false }
+                    });
+                    if is_wrap_host {
+                        return (y_offset, false);
+                    }
+
                     // TAC 블록 표 문단의 post-text PP: 텍스트가 공백만이면 건너뜀
                     // (Table PageItem에서 이미 y_offset이 결정됨)
                     if prev_tac_seg_applied {
