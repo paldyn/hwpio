@@ -18,6 +18,7 @@ pub mod render_tree;
 pub mod scheduler;
 pub mod style_resolver;
 pub mod svg;
+pub mod svg_fragment;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pdf;
 pub mod typeset;
@@ -140,6 +141,18 @@ pub struct TextStyle {
     pub strike_color: ColorRef,
     /// 음영 색 (형광펜, 0xFFFFFF = 없음)
     pub shade_color: ColorRef,
+}
+
+impl TextStyle {
+    /// 시각적 bold 여부.
+    ///
+    /// CharShape.bold=true 외에도 HY헤드라인M 같은 heavy display face 를
+    /// 사용할 때 true 를 반환. 해당 face 가 fallback 으로 대체될 때 발생하는
+    /// 시각 bold 소실을 보완하기 위해 SVG 출력 시 font-weight="bold" 강제에
+    /// 사용된다.
+    pub fn is_visually_bold(&self) -> bool {
+        self.bold || crate::renderer::style_resolver::is_heavy_display_face(&self.font_family)
+    }
 }
 
 impl Default for TextStyle {

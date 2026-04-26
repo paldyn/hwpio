@@ -546,7 +546,7 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record]) -> SectionDef {
     // 숨기기 플래그 (flags에서 추출)
     sd.hide_header = sd.flags & 0x0100 != 0;
     sd.hide_footer = sd.flags & 0x0200 != 0;
-    sd.hide_master_page = sd.flags & 0x0400 != 0;
+    sd.hide_master_page = sd.flags & 0x0004 != 0; // bit 2 (HWP5 스펙, 첫쪽 바탕쪽 감춤)
     sd.hide_border = sd.flags & 0x0800 != 0;
     sd.hide_fill = sd.flags & 0x1000 != 0;
     sd.hide_empty_line = sd.flags & 0x00080000 != 0; // bit 19: 빈 줄 감추기
@@ -652,6 +652,12 @@ fn parse_master_pages_from_raw(raw_records: &[RawRecord]) -> Vec<MasterPage> {
         let text_height = r.read_u32().unwrap_or(0);
         let text_ref = r.read_u8().unwrap_or(0);
         let num_ref = r.read_u8().unwrap_or(0);
+
+        // 영역 0×0 LIST_HEADER는 MEMO/주석 컨트롤의 텍스트 박스가 오분류된 것.
+        // 실제 바탕쪽은 반드시 text_width > 0 || text_height > 0.
+        if text_width == 0 && text_height == 0 {
+            continue;
+        }
 
         // 확장 플래그 (byte 18-19, 표 139 이후)
         let ext_flags = r.read_u16().unwrap_or(0);

@@ -627,8 +627,9 @@ export function onClick(this: any, e: MouseEvent): void {
     {
       const picHit = this.findPictureAtClick(pageIdx, pageX, pageY);
       if (picHit) {
-        // Shift+클릭: 다중 선택
+        // Shift+클릭: 다중 선택 + 맨 앞으로 이동
         if (e.shiftKey && this.cursor.isInPictureObjectSelection()) {
+          bringShapeToFront.call(this, picHit);
           const selType = picHit.type === 'shape' ? 'shape' as const : picHit.type as any;
           this.cursor.togglePictureObjectSelection(picHit.sec, picHit.ppi, picHit.ci, selType);
           this.caret.hide();
@@ -640,7 +641,8 @@ export function onClick(this: any, e: MouseEvent): void {
         }
 
         if (picHit.type === 'line') {
-          // 직선 → 바로 객체 선택
+          // 직선 → 맨 앞으로 이동 후 객체 선택
+          bringShapeToFront.call(this, picHit);
           this.cursor.clearSelection();
           this.exitPictureObjectSelectionIfNeeded();
           this.cursor.enterPictureObjectSelectionDirect(picHit.sec, picHit.ppi, picHit.ci, 'line');
@@ -669,7 +671,8 @@ export function onClick(this: any, e: MouseEvent): void {
               return;
             }
           }
-          // 단일 클릭 → 객체 선택 (경계/내부 구분 없이)
+          // 단일 클릭 → 객체 선택 + 맨 앞으로 이동
+          bringShapeToFront.call(this, picHit);
           this.cursor.clearSelection();
           this.exitPictureObjectSelectionIfNeeded();
           this.cursor.enterPictureObjectSelectionDirect(picHit.sec, picHit.ppi, picHit.ci, 'shape');
@@ -681,7 +684,7 @@ export function onClick(this: any, e: MouseEvent): void {
           this.textarea.focus();
           return;
         }
-        // 이미지 → 기존 객체 선택 유지
+        // 이미지/방정식 → 객체 선택 (z-order 미지원)
         this.cursor.clearSelection();
         this.exitPictureObjectSelectionIfNeeded();
         this.cursor.enterPictureObjectSelectionDirect(picHit.sec, picHit.ppi, picHit.ci, picHit.type, picHit.cellIdx, picHit.cellParaIdx);
@@ -1353,6 +1356,15 @@ export function onMouseUp(this: any, _e: MouseEvent): void {
  * @param dir 기본 방향 ('nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w')
  * @param angleDeg 회전각 (도)
  */
+function bringShapeToFront(this: any, picHit: any): void {
+  if (picHit.type === 'shape' || picHit.type === 'line' || picHit.type === 'group') {
+    try {
+      this.wasm.changeShapeZOrder(picHit.sec, picHit.ppi, picHit.ci, 'front');
+      this.eventBus.emit('document-changed');
+    } catch { /* ignore */ }
+  }
+}
+
 function getRotatedCursor(dir: string, angleDeg: number): string {
   const dirs = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
   const idx = dirs.indexOf(dir);

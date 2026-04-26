@@ -125,6 +125,8 @@ pub struct ColumnContent {
     /// 어울림 배치 표와 나란히 배치되는 빈 리턴 문단 인덱스 목록
     /// (표 오른쪽에 문단 부호를 표시하기 위해 사용)
     pub wrap_around_paras: Vec<WrapAroundPara>,
+    /// 단을 닫을 시점의 누적 사용 높이 (px). 진단/측정 도구용.
+    pub used_height: f64,
 }
 
 /// 어울림 배치 표 옆에 배치되는 빈 리턴 문단 정보
@@ -286,6 +288,7 @@ impl PaginationResult {
                             table_para_index: (w.table_para_index as i64 + offset as i64).max(0) as usize,
                             has_text: w.has_text,
                         }).collect(),
+                        used_height: cc.used_height,
                     }
                 }).collect(),
                 active_header: old_page.active_header.clone(),
@@ -331,6 +334,15 @@ impl PaginationResult {
         }
         self.hidden_empty_paras = new_hidden;
     }
+}
+
+/// 페이지 분할 옵션
+#[derive(Debug, Clone, Default)]
+pub struct PaginationOpts {
+    /// 빈 줄 숨김 (SectionDef.hide_empty_line)
+    pub hide_empty_line: bool,
+    /// LINE_SEG vpos-reset (vertical_pos==0, line>0) 위치를 강제 단/페이지 경계로 처리
+    pub respect_vpos_reset: bool,
 }
 
 /// 페이지 분할 엔진

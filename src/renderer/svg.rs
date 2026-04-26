@@ -51,6 +51,8 @@ pub struct SvgRenderer {
     overlay_para_bounds: std::collections::HashMap<usize, OverlayBounds>,
     /// 디버그 오버레이용: 표 경계 수집
     overlay_table_bounds: Vec<OverlayTableInfo>,
+    /// 디버그 오버레이용: vpos=0 리셋 위치 수집 (문단 첫 줄 제외)
+    overlay_vpos_resets: Vec<OverlayVposReset>,
     /// 디버그 오버레이용: 표/머리말/꼬리말 내부 깊이 (셀 내·헤더 문단 제외)
     overlay_skip_depth: u32,
     /// 디버그 오버레이용: 현재 페이지의 메인 섹션 인덱스 (-1이면 미설정)
@@ -72,6 +74,19 @@ struct OverlayBounds {
     y: f64,
     width: f64,
     height: f64,
+}
+
+/// 디버그 오버레이용 vpos=0 리셋 마커
+struct OverlayVposReset {
+    section_index: usize,
+    para_index: usize,
+    line_index: u32,
+    /// 줄 시작 y (px)
+    y: f64,
+    /// 줄 시작 x (px)
+    x: f64,
+    /// 줄 폭 (px)
+    width: f64,
 }
 
 /// 디버그 오버레이용 표 정보
@@ -102,6 +117,7 @@ impl SvgRenderer {
             debug_overlay: false,
             overlay_para_bounds: std::collections::HashMap::new(),
             overlay_table_bounds: Vec::new(),
+            overlay_vpos_resets: Vec::new(),
             overlay_skip_depth: 0,
             overlay_page_section: -1,
             arrow_marker_ids: std::collections::HashSet::new(),
@@ -159,9 +175,19 @@ impl SvgRenderer {
                 }
                 // 이미지 (최상위)
                 if let Some(img) = &bg.image {
-                    let base64_data = base64::engine::general_purpose::STANDARD.encode(&img.data);
-                    let mime_type = detect_image_mime_type(&img.data);
-                    let data_uri = format!("data:{};base64,{}", mime_type, base64_data);
+                    let detected_mime = detect_image_mime_type(&img.data);
+                    // BMP → PNG 재인코딩 (브라우저 호환성)
+                    let (render_bytes, render_mime): (std::borrow::Cow<[u8]>, &str) =
+                        if detected_mime == "image/bmp" {
+                            match bmp_bytes_to_png_bytes(&img.data) {
+                                Some(png) => (std::borrow::Cow::Owned(png), "image/png"),
+                                None => (std::borrow::Cow::Borrowed(img.data.as_slice()), detected_mime),
+                            }
+                        } else {
+                            (std::borrow::Cow::Borrowed(img.data.as_slice()), detected_mime)
+                        };
+                    let base64_data = base64::engine::general_purpose::STANDARD.encode(&*render_bytes);
+                    let data_uri = format!("data:{};base64,{}", render_mime, base64_data);
                     self.output.push_str(&format!(
                         "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"{}\"/>\n",
                         node.bbox.x, node.bbox.y,
@@ -202,7 +228,7 @@ impl SvgRenderer {
                     };
                     let mut attrs = format!("font-family=\"{}\" font-size=\"{}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\"",
                         escape_xml(&font_family), font_size, color);
-                    if run.style.bold { attrs.push_str(" font-weight=\"bold\""); }
+                    if run.style.is_visually_bold() { attrs.push_str(" font-weight=\"bold\""); }
                     if run.style.italic { attrs.push_str(" font-style=\"italic\""); }
                     for c in run.text.chars() {
                         if c == ' ' { continue; }
@@ -334,6 +360,25 @@ impl SvgRenderer {
             RenderNodeType::FormObject(form) => {
                 self.render_form_object(form, &node.bbox);
             }
+            RenderNodeType::RawSvg(r) => {
+                // Task #195 단계 8: OOXML 차트 SVG 조각 그대로 삽입
+                self.output.push_str(&r.svg);
+            }
+            RenderNodeType::Placeholder(ph) => {
+                // Task #195: 차트/OLE placeholder (점선 테두리 + 중앙 라벨)
+                let cx = node.bbox.x + node.bbox.width / 2.0;
+                let cy = node.bbox.y + node.bbox.height / 2.0;
+                let font_size = (node.bbox.width.min(node.bbox.height) * 0.06).clamp(12.0, 28.0);
+                self.output.push_str(&format!(
+                    "<rect x=\"{:.2}\" y=\"{:.2}\" width=\"{:.2}\" height=\"{:.2}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"1\" stroke-dasharray=\"6 3\"/>\n",
+                    node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
+                    color_to_svg(ph.fill_color), color_to_svg(ph.stroke_color),
+                ));
+                self.output.push_str(&format!(
+                    "<text x=\"{:.2}\" y=\"{:.2}\" font-family=\"sans-serif\" font-size=\"{:.1}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
+                    cx, cy, font_size, color_to_svg(ph.stroke_color), escape_xml(&ph.label),
+                ));
+            }
             RenderNodeType::Body { clip_rect: Some(cr) } => {
                 let clip_id = format!("body-clip-{}", node.id);
                 self.defs.push(format!(
@@ -385,6 +430,20 @@ impl SvgRenderer {
                                 entry.y = min_y;
                                 entry.width = max_x - min_x;
                                 entry.height = max_y - min_y;
+
+                                // vpos=0 리셋 검출: 문단 첫 줄(line 0) 제외하고 vertical_pos == 0
+                                if let (Some(li), Some(vp)) = (tl.line_index, tl.vpos) {
+                                    if li > 0 && vp == 0 {
+                                        self.overlay_vpos_resets.push(OverlayVposReset {
+                                            section_index: si,
+                                            para_index: pi,
+                                            line_index: li,
+                                            y: node.bbox.y,
+                                            x: node.bbox.x,
+                                            width: node.bbox.width,
+                                        });
+                                    }
+                                }
                             }
                         }
                     }
@@ -836,6 +895,13 @@ impl SvgRenderer {
         if let Some(stroke) = style.stroke_color {
             attrs.push_str(&format!(" stroke=\"{}\" stroke-width=\"{}\"",
                 color_to_svg(stroke), style.stroke_width));
+            match style.stroke_dash {
+                StrokeDash::Dash => attrs.push_str(" stroke-dasharray=\"6 3\""),
+                StrokeDash::Dot => attrs.push_str(" stroke-dasharray=\"2 2\""),
+                StrokeDash::DashDot => attrs.push_str(" stroke-dasharray=\"6 3 2 3\""),
+                StrokeDash::DashDotDot => attrs.push_str(" stroke-dasharray=\"6 3 2 3 2 3\""),
+                _ => {}
+            }
         }
 
         if style.opacity < 1.0 {
@@ -999,9 +1065,15 @@ impl SvgRenderer {
         let mime_type = detect_image_mime_type(data);
 
         // WMF → SVG 변환 (브라우저는 WMF를 렌더링할 수 없으므로 SVG로 변환)
+        // BMP → PNG 변환 (브라우저는 SVG <image> 내부의 data:image/bmp 미지원)
         let (render_data, render_mime): (std::borrow::Cow<[u8]>, &str) = if mime_type == "image/x-wmf" {
             match convert_wmf_to_svg(data) {
                 Some(svg_bytes) => (std::borrow::Cow::Owned(svg_bytes), "image/svg+xml"),
+                None => (std::borrow::Cow::Borrowed(data), mime_type),
+            }
+        } else if mime_type == "image/bmp" {
+            match bmp_bytes_to_png_bytes(data) {
+                Some(png_bytes) => (std::borrow::Cow::Owned(png_bytes), "image/png"),
                 None => (std::borrow::Cow::Borrowed(data), mime_type),
             }
         } else {
@@ -1301,7 +1373,7 @@ impl SvgRenderer {
             format!("{},sans-serif", style.font_family)
         };
         let mut font_attrs = format!("font-family=\"{}\" font-size=\"{:.2}\"", escape_xml(&font_family_str), inner_font_size);
-        if style.bold { font_attrs.push_str(" font-weight=\"bold\""); }
+        if style.is_visually_bold() { font_attrs.push_str(" font-weight=\"bold\""); }
         if style.italic { font_attrs.push_str(" font-style=\"italic\""); }
 
         for (i, ch) in chars.iter().enumerate() {
@@ -1375,7 +1447,7 @@ impl SvgRenderer {
             format!("{},sans-serif", style.font_family)
         };
         let mut font_attrs = format!("font-family=\"{}\" font-size=\"{:.2}\"", escape_xml(&font_family_str), inner_font_size);
-        if style.bold { font_attrs.push_str(" font-weight=\"bold\""); }
+        if style.is_visually_bold() { font_attrs.push_str(" font-weight=\"bold\""); }
         if style.italic { font_attrs.push_str(" font-style=\"italic\""); }
 
         let cx = bbox_x + box_size / 2.0;
@@ -1676,6 +1748,28 @@ impl SvgRenderer {
         }
         self.overlay_table_bounds = table_bounds;
 
+        // vpos=0 리셋 위치 마커 (앰버 가로 점선 + 라벨)
+        let vpos_resets = std::mem::take(&mut self.overlay_vpos_resets);
+        for rs in &vpos_resets {
+            // 노란 가로선 (점선)
+            self.output.push_str(&format!(
+                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"#FFB300\" stroke-width=\"1.5\" stroke-dasharray=\"6,3\"/>\n",
+                rs.x, rs.y, rs.x + rs.width, rs.y,
+            ));
+            // 라벨 (좌측, 가로선 위)
+            let label = format!("vpos-reset s{}:pi={}:line={}", rs.section_index, rs.para_index, rs.line_index);
+            let label_w = label.len() as f64 * 5.0 + 4.0;
+            self.output.push_str(&format!(
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"11\" fill=\"#FFB300\" rx=\"2\"/>\n",
+                rs.x, rs.y - 11.0, label_w,
+            ));
+            self.output.push_str(&format!(
+                "<text x=\"{}\" y=\"{}\" font-family=\"monospace\" font-size=\"8\" fill=\"#000\" font-weight=\"bold\">{}</text>\n",
+                rs.x + 2.0, rs.y - 2.0, label,
+            ));
+        }
+        self.overlay_vpos_resets = vpos_resets;
+
         self.output.push_str("</g>\n");
     }
 }
@@ -1690,10 +1784,13 @@ impl Renderer for SvgRenderer {
         self.arrow_marker_ids.clear();
         self.overlay_para_bounds.clear();
         self.overlay_table_bounds.clear();
+        self.overlay_vpos_resets.clear();
         self.overlay_skip_depth = 0;
         self.overlay_page_section = -1;
+        // xmlns:xlink 필수: SVG 가 <img> 로 로드될 때(예: blob URL 미리보기)
+        // 엄격한 XML 파싱으로 인해 xmlns:xlink 미선언 시 <image xlink:href=...> 가 무시됨.
         self.output.push_str(&format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">\n",
             width, height, width, height,
         ));
         self.defs_insert_pos = self.output.len();
@@ -1717,6 +1814,11 @@ impl Renderer for SvgRenderer {
     }
 
     fn draw_text(&mut self, text: &str, x: f64, y: f64, style: &TextStyle) {
+        // PUA 문자(U+F000~F0FF, Wingdings 등 심볼 폰트)를 유니코드 표준 문자로 변환
+        let text = &text.chars().map(|ch| {
+            crate::renderer::layout::map_pua_bullet_char(ch)
+        }).collect::<String>();
+
         let color = color_to_svg(style.color);
         let font_size = if style.font_size > 0.0 { style.font_size } else { 12.0 };
         let font_family = if style.font_family.is_empty() {
@@ -1734,7 +1836,7 @@ impl Renderer for SvgRenderer {
             "font-family=\"{}\" font-size=\"{}\"",
             escape_xml(&font_family), font_size,
         );
-        if style.bold {
+        if style.is_visually_bold() {
             base_attrs.push_str(" font-weight=\"bold\"");
         }
         if style.italic {
@@ -1745,6 +1847,29 @@ impl Renderer for SvgRenderer {
         let char_positions = compute_char_positions(text, style);
         let clusters = split_into_clusters(text);
 
+        // Task #257: `·`(U+00B7) 를 <text> 대신 <circle> 로 렌더한다.
+        //
+        // 폰트 대체(휴먼명조→Batang 등)로 각 폰트의 `·` 글리프 LSB 와 글리프
+        // 폭이 달라, rhwp 의 metric DB 기반 advance 계산과 실제 브라우저 렌더
+        // 위치가 어긋난다. 한글 문서에서 `·` 의 시각적 의미는 "두 글자 사이의
+        // 중앙 점" 이므로 폰트 비의존 벡터 도형으로 직접 그린다.
+        //
+        //   cx = advance box 수평 중앙
+        //   cy = baseline(y) − font_size × 0.35  (CJK x-height 중앙 근사)
+        //   r  = font_size × 0.08               (PDF 관찰치 기준)
+        let cluster_advance = |char_idx: usize, cluster_str: &str| -> f64 {
+            let n = cluster_str.chars().count();
+            let end = char_idx + n;
+            if end < char_positions.len() {
+                char_positions[end] - char_positions[char_idx]
+            } else {
+                0.0
+            }
+        };
+        let is_middle_dot = |cluster_str: &str| cluster_str == "\u{00B7}";
+        let dot_radius = font_size * 0.08;
+        let dot_cy_offset = -font_size * 0.35;
+
         // 그림자 렌더링 (원본 아래에 오프셋된 그림자색 텍스트)
         if style.shadow_type > 0 {
             let shadow_color = color_to_svg(style.shadow_color);
@@ -1753,6 +1878,16 @@ impl Renderer for SvgRenderer {
             let dy = style.shadow_offset_y;
             for (char_idx, cluster_str) in &clusters {
                 if cluster_str == " " || cluster_str == "\t" { continue; }
+                if is_middle_dot(cluster_str) {
+                    let adv = cluster_advance(*char_idx, cluster_str);
+                    let cx = x + char_positions[*char_idx] + adv / 2.0 + dx;
+                    let cy = y + dot_cy_offset + dy;
+                    self.output.push_str(&format!(
+                        "<circle cx=\"{:.4}\" cy=\"{:.4}\" r=\"{:.4}\" fill=\"{}\"/>\n",
+                        cx, cy, dot_radius, shadow_color,
+                    ));
+                    continue;
+                }
                 let char_x = x + char_positions[*char_idx] + dx;
                 let char_y = y + dy;
                 if has_ratio {
@@ -1773,6 +1908,16 @@ impl Renderer for SvgRenderer {
         let common_attrs = format!("{} fill=\"{}\"", base_attrs, color);
         for (char_idx, cluster_str) in &clusters {
             if cluster_str == " " || cluster_str == "\t" { continue; }
+            if is_middle_dot(cluster_str) {
+                let adv = cluster_advance(*char_idx, cluster_str);
+                let cx = x + char_positions[*char_idx] + adv / 2.0;
+                let cy = y + dot_cy_offset;
+                self.output.push_str(&format!(
+                    "<circle cx=\"{:.4}\" cy=\"{:.4}\" r=\"{:.4}\" fill=\"{}\"/>\n",
+                    cx, cy, dot_radius, color,
+                ));
+                continue;
+            }
             let char_x = x + char_positions[*char_idx];
 
             if has_ratio {
@@ -1858,9 +2003,9 @@ impl Renderer for SvgRenderer {
                     ));
                 }
                 3 => {
-                    // 점선 ···
+                    // 점선 ··· — round cap으로 원형 점 표현 (한컴 동등)
                     self.output.push_str(&format!(
-                        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"0.5\" stroke-dasharray=\"1 2\"/>\n",
+                        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"1.0\" stroke-dasharray=\"0.1 3\" stroke-linecap=\"round\"/>\n",
                         lx1, ly, lx2, ly, color,
                     ));
                 }
@@ -2016,11 +2161,21 @@ impl Renderer for SvgRenderer {
         self.draw_ellipse_with_gradient(cx, cy, rx, ry, style, None);
     }
 
-    fn draw_image(&mut self, _data: &[u8], x: f64, y: f64, w: f64, h: f64) {
-        // TODO: Base64 인코딩 후 data URI 삽입
+    fn draw_image(&mut self, data: &[u8], x: f64, y: f64, w: f64, h: f64) {
+        let mime_type = detect_image_mime_type(data);
+        let (render_data, render_mime): (std::borrow::Cow<[u8]>, &str) = if mime_type == "image/x-wmf" {
+            match convert_wmf_to_svg(data) {
+                Some(svg_bytes) => (std::borrow::Cow::Owned(svg_bytes), "image/svg+xml"),
+                None => (std::borrow::Cow::Borrowed(data), mime_type),
+            }
+        } else {
+            (std::borrow::Cow::Borrowed(data), mime_type)
+        };
+        let base64_data = base64::engine::general_purpose::STANDARD.encode(&*render_data);
+        let data_uri = format!("data:{};base64,{}", render_mime, base64_data);
         self.output.push_str(&format!(
-            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"#eeeeee\" stroke=\"#cccccc\"/>\n",
-            x, y, w, h,
+            "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"{}\"/>\n",
+            x, y, w, h, data_uri,
         ));
     }
 
@@ -2065,8 +2220,21 @@ pub(crate) fn convert_wmf_to_svg(data: &[u8]) -> Option<Vec<u8>> {
     converter.run().ok()
 }
 
+/// BMP 바이트를 PNG 바이트로 재인코딩한다. 실패 시 None 반환.
+///
+/// 브라우저는 SVG `<image>` 내부의 `data:image/bmp` URI를 표준 지원하지 않으므로,
+/// SVG 임베딩 전에 PNG로 변환해 호환성을 확보한다.
+pub(crate) fn bmp_bytes_to_png_bytes(data: &[u8]) -> Option<Vec<u8>> {
+    use image::{ImageFormat, load_from_memory_with_format};
+    use std::io::Cursor;
+    let img = load_from_memory_with_format(data, ImageFormat::Bmp).ok()?;
+    let mut out = Vec::new();
+    img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png).ok()?;
+    Some(out)
+}
+
 /// 이미지 데이터에서 MIME 타입 감지
-fn detect_image_mime_type(data: &[u8]) -> &'static str {
+pub(crate) fn detect_image_mime_type(data: &[u8]) -> &'static str {
     if data.len() >= 8 {
         // PNG: 89 50 4E 47 0D 0A 1A 0A
         if data.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {

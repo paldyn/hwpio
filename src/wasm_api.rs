@@ -151,6 +151,20 @@ impl HwpDocument {
         self.debug_overlay = enabled;
     }
 
+    /// LINE_SEG vpos-reset 강제 분리 적용 여부를 설정한다.
+    /// 변경 시 페이지네이션 결과가 달라지므로 모든 섹션을 재페이지네이션한다.
+    pub fn set_respect_vpos_reset(&mut self, enabled: bool) {
+        if self.respect_vpos_reset != enabled {
+            self.respect_vpos_reset = enabled;
+            // 모든 섹션 dirty 마킹 후 즉시 재페이지네이션
+            for d in self.core.dirty_sections.iter_mut() {
+                *d = true;
+            }
+            self.invalidate_page_tree_cache();
+            self.core.paginate();
+        }
+    }
+
     /// 총 페이지 수를 반환한다.
     #[wasm_bindgen(js_name = pageCount)]
     pub fn page_count(&self) -> u32 {
@@ -2245,6 +2259,18 @@ impl HwpDocument {
             length as usize,
             new_text,
         ).map_err(|e| e.into())
+    }
+
+    /// 단일 치환 (검색어 기반) — 첫 번째 매치만 교체
+    #[wasm_bindgen(js_name = replaceOne)]
+    pub fn replace_one(
+        &mut self,
+        query: &str,
+        new_text: &str,
+        case_sensitive: bool,
+    ) -> Result<String, JsValue> {
+        self.core.replace_one_native(query, new_text, case_sensitive)
+            .map_err(|e| e.into())
     }
 
     /// 전체 치환

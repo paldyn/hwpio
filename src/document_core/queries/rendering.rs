@@ -163,7 +163,7 @@ impl DocumentCore {
         }
         set_bit(flags, 0x0100, sd.hide_header);      // bit 8
         set_bit(flags, 0x0200, sd.hide_footer);       // bit 9
-        set_bit(flags, 0x0400, sd.hide_master_page);  // bit 10
+        set_bit(flags, 0x0004, sd.hide_master_page);  // bit 2 (HWP5 스펙, 첫쪽 바탕쪽 감춤)
         set_bit(flags, 0x0800, sd.hide_border);       // bit 11
         set_bit(flags, 0x1000, sd.hide_fill);         // bit 12
         set_bit(flags, 0x00080000, sd.hide_empty_line); // bit 19
@@ -821,22 +821,25 @@ impl DocumentCore {
             };
 
             let column_def = Self::find_initial_column_def(&section.paragraphs);
-            let mut result = paginator.paginate_with_measured_opts(
-                &section.paragraphs,
-                &measured,
-                &section.section_def.page_def,
-                &column_def,
-                idx,
-                &self.styles.para_styles,
-                section.section_def.hide_empty_line,
-            );
-
-            // TypesetEngine 병렬 검증 (Phase 1: 비-표 구역)
-            #[cfg(debug_assertions)]
-            {
+            // TypesetEngine을 main pagination으로 사용. RHWP_USE_PAGINATOR=1 로 fallback 가능.
+            let use_paginator = std::env::var("RHWP_USE_PAGINATOR").map(|v| v == "1").unwrap_or(false);
+            let mut result = if use_paginator {
+                paginator.paginate_with_measured_opts(
+                    &section.paragraphs,
+                    &measured,
+                    &section.section_def.page_def,
+                    &column_def,
+                    idx,
+                    &self.styles.para_styles,
+                    crate::renderer::pagination::PaginationOpts {
+                        hide_empty_line: section.section_def.hide_empty_line,
+                        respect_vpos_reset: self.respect_vpos_reset,
+                    },
+                )
+            } else {
                 use crate::renderer::typeset::TypesetEngine;
                 let typesetter = TypesetEngine::new(self.dpi);
-                let ts_result = typesetter.typeset_section(
+                typesetter.typeset_section(
                     &section.paragraphs,
                     composed,
                     &self.styles,
@@ -844,47 +847,8 @@ impl DocumentCore {
                     &column_def,
                     idx,
                     &measured.tables,
-                );
-                if result.pages.len() != ts_result.pages.len() {
-                    eprintln!(
-                        "TYPESET_VERIFY: sec{} 페이지 수 차이 (paginator={}, typeset={})",
-                        idx, result.pages.len(), ts_result.pages.len(),
-                    );
-                    if std::env::var("TYPESET_DETAIL").is_ok() {
-                        use crate::renderer::pagination::PageItem;
-                        let describe_items = |pages: &[crate::renderer::pagination::PageContent]| -> Vec<String> {
-                            pages.iter().map(|p| {
-                                let mut descs = Vec::new();
-                                for col in &p.column_contents {
-                                    for item in &col.items {
-                                        let d = match item {
-                                            PageItem::FullParagraph { para_index, .. } => format!("F{}", para_index),
-                                            PageItem::PartialParagraph { para_index, start_line, end_line, .. } =>
-                                                format!("P{}({}-{})", para_index, start_line, end_line),
-                                            PageItem::Table { para_index, .. } => format!("T{}", para_index),
-                                            PageItem::PartialTable { para_index, start_row, end_row, .. } =>
-                                                format!("PT{}(r{}-{})", para_index, start_row, end_row),
-                                            PageItem::Shape { para_index, .. } => format!("S{}", para_index),
-                                        };
-                                        descs.push(d);
-                                    }
-                                }
-                                descs.join(",")
-                            }).collect()
-                        };
-                        let pag_descs = describe_items(&result.pages);
-                        let ts_descs = describe_items(&ts_result.pages);
-                        for i in 0..pag_descs.len().max(ts_descs.len()) {
-                            let pr = pag_descs.get(i).map(|s| s.as_str()).unwrap_or("-");
-                            let tr = ts_descs.get(i).map(|s| s.as_str()).unwrap_or("-");
-                            if pr != tr || std::env::var("TYPESET_ALL_PAGES").is_ok() {
-                                eprintln!("  page {:2}: pag=[{}]", i, pr);
-                                eprintln!("           ts =[{}]{}", tr, if pr != tr { " <<<" } else { "" });
-                            }
-                        }
-                    }
-                }
-            }
+                )
+            };
 
             self.measured_tables[idx] = measured.tables.clone();
             self.measured_sections[idx] = measured;
@@ -1328,8 +1292,13 @@ impl DocumentCore {
                     la.body_area.x, la.body_area.y, la.body_area.width, la.body_area.height));
 
                 for (col_idx, cc) in page.column_contents.iter().enumerate() {
-                    out.push_str(&format!("  단 {} (items={}{})\n",
-                        col_idx, cc.items.len(),
+                    let hwp_used_px = compute_hwp_used_height(cc, paragraphs, dpi);
+                    let diff_str = match hwp_used_px {
+                        Some(hwp) => format!(", hwp_used≈{:.1}px, diff={:+.1}px", hwp, cc.used_height - hwp),
+                        None => String::new(),
+                    };
+                    out.push_str(&format!("  단 {} (items={}, used={:.1}px{}{})\n",
+                        col_idx, cc.items.len(), cc.used_height, diff_str,
                         if cc.zone_y_offset > 0.0 { format!(", zone_y_offset={:.1}", cc.zone_y_offset) } else { String::new() }));
 
                     for item in &cc.items {
@@ -1351,12 +1320,14 @@ impl DocumentCore {
                                         format!("h={:.1} (sb={:.1} lines={:.1} sa={:.1})", sb + lines + sa, sb, lines, sa)
                                     })
                                     .unwrap_or_default();
-                                out.push_str(&format!("    FullParagraph  pi={}  {}  \"{}\"\n",
-                                    para_index, height, text_preview));
+                                let vpos_info = format_vpos_range(paragraphs.get(*para_index), None, None);
+                                out.push_str(&format!("    FullParagraph  pi={}  {}  {}  \"{}\"\n",
+                                    para_index, height, vpos_info, text_preview));
                             }
                             PageItem::PartialParagraph { para_index, start_line, end_line } => {
-                                out.push_str(&format!("    PartialParagraph  pi={}  lines={}..{}\n",
-                                    para_index, start_line, end_line));
+                                let vpos_info = format_vpos_range(paragraphs.get(*para_index), Some(*start_line), Some(*end_line));
+                                out.push_str(&format!("    PartialParagraph  pi={}  lines={}..{}  {}\n",
+                                    para_index, start_line, end_line, vpos_info));
                             }
                             PageItem::Table { para_index, control_index } => {
                                 let table_info = paragraphs.get(*para_index)
@@ -1371,8 +1342,9 @@ impl DocumentCore {
                                         } else { String::new() }
                                     })
                                     .unwrap_or_default();
-                                out.push_str(&format!("    Table          pi={} ci={}  {}\n",
-                                    para_index, control_index, table_info));
+                                let vpos_info = format_vpos_range(paragraphs.get(*para_index), None, None);
+                                out.push_str(&format!("    Table          pi={} ci={}  {}  {}\n",
+                                    para_index, control_index, table_info, vpos_info));
                             }
                             PageItem::PartialTable { para_index, control_index, start_row, end_row, is_continuation, .. } => {
                                 let table_info = paragraphs.get(*para_index)
@@ -1383,8 +1355,9 @@ impl DocumentCore {
                                         } else { String::new() }
                                     })
                                     .unwrap_or_default();
-                                out.push_str(&format!("    PartialTable   pi={} ci={}  rows={}..{}  cont={}  {}\n",
-                                    para_index, control_index, start_row, end_row, is_continuation, table_info));
+                                let vpos_info = format_vpos_range(paragraphs.get(*para_index), None, None);
+                                out.push_str(&format!("    PartialTable   pi={} ci={}  rows={}..{}  cont={}  {}  {}\n",
+                                    para_index, control_index, start_row, end_row, is_continuation, table_info, vpos_info));
                             }
                             PageItem::Shape { para_index, control_index } => {
                                 let shape_info = paragraphs.get(*para_index)
@@ -1398,8 +1371,9 @@ impl DocumentCore {
                                         }
                                     })
                                     .unwrap_or_default();
-                                out.push_str(&format!("    Shape          pi={} ci={}  {}\n",
-                                    para_index, control_index, shape_info));
+                                let vpos_info = format_vpos_range(paragraphs.get(*para_index), None, None);
+                                out.push_str(&format!("    Shape          pi={} ci={}  {}  {}\n",
+                                    para_index, control_index, shape_info, vpos_info));
                             }
                         }
                     }
@@ -1632,4 +1606,103 @@ impl DocumentCore {
     // 클립보드 API (내부)
     // =====================================================================
 
+}
+
+/// 단이 HWP 원본 layout 에서 사용했을 높이를 LINE_SEG vpos 기준으로 추정 (px).
+///
+/// 알고리즘:
+/// 1. 단의 항목들을 순회하며 첫 vpos-reset (line>0, vertical_pos==0) 발견 지점을 찾는다.
+/// 2. reset 발견: reset 직전 줄의 vpos + line_height (HWP 가 단을 끊은 위치)
+/// 3. reset 미발견: 단의 마지막 처리 줄 (FullParagraph: 마지막, PartialParagraph: end_line-1)
+/// 4. Table/Shape 만 있는 항목은 추정 불가 (None)
+fn compute_hwp_used_height(
+    cc: &crate::renderer::pagination::ColumnContent,
+    paragraphs: &[Paragraph],
+    dpi: f64,
+) -> Option<f64> {
+    use crate::renderer::pagination::PageItem;
+    use crate::renderer::hwpunit_to_px;
+
+    // 1) 단 항목 내 첫 vpos-reset 검색
+    for item in &cc.items {
+        let (para_idx, range_start, range_end) = match item {
+            PageItem::FullParagraph { para_index } => {
+                let p = match paragraphs.get(*para_index) { Some(p) => p, None => continue };
+                (*para_index, 0usize, p.line_segs.len())
+            }
+            PageItem::PartialParagraph { para_index, start_line, end_line } => {
+                let p = match paragraphs.get(*para_index) { Some(p) => p, None => continue };
+                (*para_index, *start_line, (*end_line).min(p.line_segs.len()))
+            }
+            _ => continue,
+        };
+        let p = match paragraphs.get(para_idx) { Some(p) => p, None => continue };
+        // line>0 인 줄 중 vertical_pos==0 첫 줄 찾기
+        for i in range_start.max(1)..range_end {
+            if let Some(seg) = p.line_segs.get(i) {
+                if seg.vertical_pos == 0 {
+                    if let Some(prev) = p.line_segs.get(i.saturating_sub(1)) {
+                        let bottom_hwpu = prev.vertical_pos + prev.line_height;
+                        return Some(hwpunit_to_px(bottom_hwpu, dpi));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2) reset 미발견: 단 마지막 항목의 마지막 줄
+    let last_item = cc.items.last()?;
+    let (para_idx, line_idx) = match last_item {
+        PageItem::FullParagraph { para_index } => {
+            let p = paragraphs.get(*para_index)?;
+            if p.line_segs.is_empty() { return None; }
+            (*para_index, p.line_segs.len() - 1)
+        }
+        PageItem::PartialParagraph { para_index, end_line, .. } => {
+            let p = paragraphs.get(*para_index)?;
+            if p.line_segs.is_empty() { return None; }
+            (*para_index, end_line.saturating_sub(1).min(p.line_segs.len() - 1))
+        }
+        _ => return None,
+    };
+    let p = paragraphs.get(para_idx)?;
+    let seg = p.line_segs.get(line_idx)?;
+    let bottom_hwpu = seg.vertical_pos + seg.line_height;
+    Some(hwpunit_to_px(bottom_hwpu, dpi))
+}
+
+/// LINE_SEG vertical_pos 범위를 문자열로 포맷.
+///
+/// `start_line..end_line` 가 None 이면 문단 전체 범위.
+/// `vertical_pos == 0` 인 줄(문단 첫 줄 제외)을 vpos-reset 으로 마킹.
+fn format_vpos_range(
+    para: Option<&Paragraph>,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> String {
+    let Some(p) = para else { return String::new() };
+    if p.line_segs.is_empty() { return String::new() };
+    let total = p.line_segs.len();
+    let s = start_line.unwrap_or(0).min(total.saturating_sub(1));
+    let e = end_line.unwrap_or(total - 1).min(total - 1);
+    if s > e { return String::new() };
+
+    let first = p.line_segs[s].vertical_pos;
+    let last = p.line_segs[e].vertical_pos;
+    let mut resets: Vec<usize> = Vec::new();
+    for i in s..=e {
+        // 문단 첫 줄(line 0)의 vpos는 자연 시작점이므로 제외
+        if i > 0 && p.line_segs[i].vertical_pos == 0 {
+            resets.push(i);
+        }
+    }
+    let mut s_out = if s == e {
+        format!("vpos={}", first)
+    } else {
+        format!("vpos={}..{}", first, last)
+    };
+    for r in resets {
+        s_out.push_str(&format!(" [vpos-reset@line{}]", r));
+    }
+    s_out
 }

@@ -108,6 +108,8 @@ impl RenderNode {
             RenderNodeType::Group(_) => ("Group", String::new()),
             RenderNodeType::FormObject(_) => ("Form", String::new()),
             RenderNodeType::FootnoteMarker(_) => ("FnMarker", String::new()),
+            RenderNodeType::Placeholder(_) => ("Placeholder", String::new()),
+            RenderNodeType::RawSvg(_) => ("RawSvg", String::new()),
         };
         buf.push_str(&format!("\"type\":\"{}\",\"bbox\":{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}}",
             type_str, self.bbox.x, self.bbox.y, self.bbox.width, self.bbox.height));
@@ -192,6 +194,28 @@ pub enum RenderNodeType {
     FormObject(FormObjectNode),
     /// 각주/미주 마커 (인라인 위첨자)
     FootnoteMarker(FootnoteMarkerNode),
+    /// 차트/OLE placeholder (배경 rect + 중앙 텍스트 라벨) — Task #195
+    Placeholder(PlaceholderNode),
+    /// 이미 생성된 SVG 조각을 그대로 출력 (OOXML 차트 등) — Task #195 단계 8
+    RawSvg(RawSvgNode),
+}
+
+/// 미리 렌더된 SVG 조각 (Task #195 단계 8)
+#[derive(Debug, Clone)]
+pub struct RawSvgNode {
+    /// 삽입할 SVG 조각 (유효한 `<g>...</g>` 또는 개별 요소)
+    pub svg: String,
+}
+
+/// 차트/OLE placeholder 렌더 노드 (Task #195)
+#[derive(Debug, Clone)]
+pub struct PlaceholderNode {
+    /// 배경 색상 (ARGB)
+    pub fill_color: u32,
+    /// 테두리 색상 (ARGB)
+    pub stroke_color: u32,
+    /// 표시할 라벨(중앙 정렬)
+    pub label: String,
 }
 
 /// 각주/미주 마커 렌더 노드
@@ -338,17 +362,26 @@ pub struct TextLineNode {
     pub section_index: Option<usize>,
     /// 소속 문단 인덱스 (빈 문단 커서 위치 계산용)
     pub para_index: Option<usize>,
+    /// 문단 내 줄 인덱스 (디버그 오버레이용)
+    pub line_index: Option<u32>,
+    /// LINE_SEG vertical_pos (HWPUNIT, 디버그 오버레이/vpos-reset 검출용)
+    pub vpos: Option<i32>,
 }
 
 impl TextLineNode {
     /// 기본 생성 (문단 식별 정보 없음)
     pub fn new(line_height: f64, baseline: f64) -> Self {
-        Self { line_height, baseline, section_index: None, para_index: None }
+        Self { line_height, baseline, section_index: None, para_index: None, line_index: None, vpos: None }
     }
 
     /// 문단 식별 정보 포함 생성 (커서 위치 계산용)
     pub fn with_para(line_height: f64, baseline: f64, section_index: usize, para_index: usize) -> Self {
-        Self { line_height, baseline, section_index: Some(section_index), para_index: Some(para_index) }
+        Self { line_height, baseline, section_index: Some(section_index), para_index: Some(para_index), line_index: None, vpos: None }
+    }
+
+    /// 문단 식별 + LINE_SEG vpos 정보 포함 생성 (디버그 오버레이용)
+    pub fn with_para_vpos(line_height: f64, baseline: f64, section_index: usize, para_index: usize, line_index: u32, vpos: i32) -> Self {
+        Self { line_height, baseline, section_index: Some(section_index), para_index: Some(para_index), line_index: Some(line_index), vpos: Some(vpos) }
     }
 }
 

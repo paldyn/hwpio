@@ -649,3 +649,67 @@ Monospace 계열:
 - 파생물도 OFL 라이선스 적용
 
 이 조건은 rhwp 프로젝트(오픈소스 HWP 뷰어)의 사용 방식과 완전히 호환된다.
+
+---
+
+## 부록 A. `resolve_metric_alias` 2-계층 폰트 이름 해석 (Task #259)
+
+### A.1 문제
+
+본 문서 §3~§7 의 CSS font-family 체인과 서브셋 번들링은 **브라우저 렌더** 단계의 폴백.
+그러나 rhwp 내부에는 **SVG 좌표 계산** 을 위한 별도 폰트 메트릭 조회 경로가 있다:
+
+```
+HWP 파일: "HY중고딕" (또는 별칭)
+  ↓ [Layer 1] style_resolver.rs: 한국어 별칭 → 한국어 정규명 (예: 한양중고딕 → HY중고딕)
+  ↓ [Layer 2] font_metrics_data.rs::resolve_metric_alias: 한국어 정규명 → 영문 DB 이름 (예: HY중고딕 → HYGothic-Medium)
+  ↓ font_metrics_data.rs::find_metric: FONT_METRICS 에서 영문 이름으로 조회
+  ↓ None 반환 시 기본 폭 (fallback) 사용 → SVG 에서 글자 겹침
+```
+
+Layer 1 은 구현되어 있었으나 Layer 2 가 HY / 본한글 계열에 대해 누락되어 있었다 (Task #259).
+
+### A.2 HY 계열 매핑 (7건)
+
+| 한국어 정규명 | 영문 DB 이름 | em_size | 비고 |
+|---|---|---|---|
+| HY중고딕 | HYGothic-Medium | 1000 | Regular 만 (bold 요청 시 bold_fallback) |
+| HY견고딕 | HYGothic-Extra | 1000 | |
+| HY헤드라인M | HYHeadLine-Medium | 1000 | |
+| HY견명조 | HYMyeongJo-Extra | 1000 | |
+| HY신명조 | HYSinMyeongJo-Medium | 1000 | |
+| HY그래픽 | HYGraphic-Medium | 1000 | |
+| HY궁서 | HYGungSo-Bold | 1000 | |
+
+### A.3 본한글 / 본명조 근사 매핑 정책
+
+HWP 문서에서 다음 폰트명들은 FONT_METRICS DB 에 정식 엔트리가 없음:
+- **본한글 / 본한글vf / 본고딕 계열** (Source Han Sans KR)
+- **본명조 계열** (Source Han Serif KR)
+
+정식 DB 엔트리 추가 (TTF → `extract_metrics` 파이프라인) 는 별도 대형 작업이므로, 현재는 **한글 원천이 동일한 오픈소스 폰트로 근사**:
+
+| 원본 폰트 계열 | 매핑 대상 | 근거 |
+|---|---|---|
+| Source Han Sans 계열 (본한글 · 본고딕 · Noto Sans CJK KR) | **Pretendard** | Pretendard 한글 글리프는 Source Han Sans KR 합성 · OFL 호환 · 이미 번들 |
+| Source Han Serif 계열 (본명조 · Noto Serif CJK KR) | **Noto Serif KR** | 같은 serif 한글 원천 · OFL 호환 · 이미 번들 |
+
+### A.4 근사 한계
+
+1. **Latin 폭 차이**: Pretendard Latin 은 Inter 기반. 본한글 Latin 과 미세 차이.
+2. **Weight 축 근사**: Pretendard 메트릭은 Regular / Bold 2단계. 본한글 ExtraLight/Light/Medium/Heavy, 본한글vf 의 임의 wght 는 Regular/Bold 중 가까운 쪽으로 근사. CJK 는 weight 별 한글 폭 차이가 작아 실무 허용.
+3. **정식 DB 엔트리 추가는 별도 이슈**.
+
+### A.5 유지보수 체크리스트
+
+**새 한글 폰트 추가 시 반드시 확인**:
+
+- [ ] `style_resolver.rs` 에 Layer 1 (별칭 → 정규명) 등록
+- [ ] `font_metrics_data.rs::resolve_metric_alias` 에 Layer 2 (정규명 → 영문 DB 이름) 등록
+- [ ] FONT_METRICS 배열에 영문 DB 이름으로 엔트리 존재하는지 확인. 없으면:
+  - (A) `extract_metrics` 로 TTF 추가 (정식), 또는
+  - (B) 기존 유사 폰트로 근사 매핑 (본한글 → Pretendard 사례)
+- [ ] 단위 테스트 추가 (`mod tests` in `font_metrics_data.rs`)
+
+Layer 2 누락 시 증상: `find_metric` None 반환 → 기본 폭 → SVG 에서 글자 겹침.
+
