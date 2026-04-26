@@ -800,20 +800,19 @@ impl LayoutEngine {
             } else {
                 y
             };
-            // TODO: 높이 계산 오차에 대한 임시 방어 로직.
-            // 줄 하단(text_y + line_height)이 단 하단(col_bottom)을 초과하면 col_bottom 바로 위로
-            // 클램핑하여 줄이 페이지 경계를 벗어나 시각적으로 잘리는 현상을 방지한다.
-            // current_height 누적이 정확해지면 이 코드는 제거 가능하다.
+            // Task #332 Stage 4b: clamp 제거. 단 하단을 초과하는 줄은 그대로 그린다
+            // (시각 경계 약간 넘김 허용). 기존의 `text_y = col_bottom - line_height`
+            // 클램프는 여러 overflow 줄을 같은 y 에 piling 해 글자 겹침을 만들었으나,
+            // 클램프 없이 원래 y 에 그리면 piling 자체가 발생하지 않는다. 콘텐츠 손실
+            // (stop drawing) 도 발생하지 않으며, drift 의 본질적 해결은 Stage 5 에서.
             let col_bottom = col_area.y + col_area.height;
-            let text_y = if cell_ctx.is_none() && text_y + line_height > col_bottom + 0.5 {
-                let clamped = (col_bottom - line_height).max(col_area.y);
-                // 클램핑 결과를 y에도 반영하여 이 줄의 모든 자식 노드(TextRun 등)가
-                // 클램핑된 y를 기준으로 배치되도록 한다.
-                y = clamped;
-                clamped
-            } else {
-                text_y
-            };
+            if cell_ctx.is_none() && text_y + line_height > col_bottom + 0.5 {
+                eprintln!(
+                    "LAYOUT_OVERFLOW_DRAW: section={} pi={} line={} y={:.1} col_bottom={:.1} overflow={:.1}px",
+                    section_index, para_index, line_idx,
+                    text_y + line_height, col_bottom, text_y + line_height - col_bottom,
+                );
+            }
             let line_id = tree.next_id();
             let mut line_node = RenderNode::new(
                 line_id,
@@ -2429,13 +2428,19 @@ impl LayoutEngine {
             }
 
             col_node.children.push(line_node);
-            // 줄간격 적용: 셀 내 마지막 문단의 마지막 줄에서만 trailing spacing 제외
+            // 줄간격 적용 — typeset 의 height_for_fit 모델과 정합:
+            //   - 셀 내 마지막 문단의 마지막 줄: 기존대로 trailing 제외
+            //   - 일반 문단의 마지막 visible 줄(=문단 전체 마지막 줄): trailing 제외 (Task #332)
+            //   - partial 문단(split 된 경우)의 마지막 visible 줄: trailing 유지 (다음 단의 첫 줄과의 간격)
             let is_cell_last_line = is_last_cell_para && line_idx + 1 >= end;
-            if !is_cell_last_line || cell_ctx.is_none() {
+            let is_para_last_line = cell_ctx.is_none()
+                && line_idx + 1 == end
+                && end == composed.lines.len();
+            if (is_cell_last_line && cell_ctx.is_some()) || is_para_last_line {
+                y += line_height;
+            } else {
                 let line_spacing_px = hwpunit_to_px(comp_line.line_spacing, self.dpi);
                 y += line_height + line_spacing_px;
-            } else {
-                y += line_height;
             }
         }
 
@@ -2445,8 +2450,11 @@ impl LayoutEngine {
             let bg_height = y - bg_y_start;
             if bg_height > 0.0 {
                 // margin_left/margin_right는 이미 px 단위 (style_resolver에서 변환됨)
+                // border_spacing[2]/[3] (top/bottom) 을 inset 으로 전달 — 병합 그룹의 첫/마지막 range 에서만 적용됨.
+                let top_inset = para_style.map(|s| s.border_spacing[2]).unwrap_or(0.0);
+                let bottom_inset = para_style.map(|s| s.border_spacing[3]).unwrap_or(0.0);
                 self.para_border_ranges.borrow_mut().push(
-                    (para_border_fill_id, col_area.x + margin_left, bg_y_start, col_area.width - margin_left - margin_right, y)
+                    (para_border_fill_id, col_area.x + margin_left, bg_y_start, col_area.width - margin_left - margin_right, y, top_inset, bottom_inset)
                 );
             }
         }
@@ -2522,16 +2530,15 @@ impl LayoutEngine {
                 line_height * 0.8, // fallback: 줄 높이 기반 최소 어센트
             );
 
-            // TODO: 높이 계산 오차에 대한 임시 방어 로직.
-            // 줄 하단(y + line_height)이 단 하단(col_bottom)을 초과하면 col_bottom 바로 위로
-            // 클램핑하여 줄이 페이지 경계를 벗어나 시각적으로 잘리는 현상을 방지한다.
-            // current_height 누적이 정확해지면 이 코드는 제거 가능하다.
+            // Task #332 Stage 4b: clamp 제거, overflow 그대로 그림 (piling 차단)
             let col_bottom = col_area.y + col_area.height;
-            let y_clamped = if y + line_height > col_bottom + 0.5 {
-                (col_bottom - line_height).max(col_area.y)
-            } else {
-                y
-            };
+            if y + line_height > col_bottom + 0.5 {
+                eprintln!(
+                    "LAYOUT_OVERFLOW_DRAW: line={} y={:.1} col_bottom={:.1} overflow={:.1}px (fast path)",
+                    line_idx, y + line_height, col_bottom, y + line_height - col_bottom,
+                );
+            }
+            let y_clamped = y;
             let line_id = tree.next_id();
             let mut line_node = RenderNode::new(
                 line_id,

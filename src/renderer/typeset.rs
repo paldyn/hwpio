@@ -117,6 +117,9 @@ struct TypesetState {
     current_zone_layout: Option<PageLayoutInfo>,
     /// 다단 첫 페이지 여부
     on_first_multicolumn_page: bool,
+    /// Task #321: col 0 상단의 body-wide TopAndBottom 표/도형이 차지하는 높이 (px).
+    /// col 1 이상으로 advance 시 zone_y_offset에 반영.
+    pending_body_wide_top_reserve: f64,
 }
 
 impl TypesetState {
@@ -142,6 +145,7 @@ impl TypesetState {
             current_zone_y_offset: 0.0,
             current_zone_layout: None,
             on_first_multicolumn_page: false,
+            pending_body_wide_top_reserve: 0.0,
         }
     }
 
@@ -212,7 +216,11 @@ impl TypesetState {
         self.flush_column();
         if self.current_column + 1 < self.col_count {
             self.current_column += 1;
-            self.current_height = 0.0;
+            // Task #321: col 0 상단의 body-wide TopAndBottom 표/도형이 차지한 높이를
+            // current_height의 시작값으로 사용 (가용 공간만 줄임, zone_y_offset은 건드리지 않음).
+            // layout은 body_wide_reserved로 별도 처리하므로 여기서 zone_y_offset에
+            // 넣으면 double-shift가 발생.
+            self.current_height = self.pending_body_wide_top_reserve;
         } else {
             self.push_new_page();
         }
@@ -235,6 +243,8 @@ impl TypesetState {
     fn push_new_page(&mut self) {
         self.pages.push(self.new_page_content(Vec::new()));
         self.reset_for_new_page();
+        // Task #321: 새 페이지에서는 body-wide top reserve 초기화
+        self.pending_body_wide_top_reserve = 0.0;
     }
 
     fn reset_for_new_page(&mut self) {
@@ -358,6 +368,23 @@ impl TypesetEngine {
                 st.force_new_page();
             }
 
+            // Task #321: 문단간 vpos-reset 기반 강제 분할
+            // HWP LINE_SEG의 vertical_pos는 페이지 내 흐름 y 좌표.
+            // 현재 문단 first_vpos=0이고 직전 문단이 같은 단에 있으며 last_vpos가 충분히 큰 경우,
+            // HWP가 pi 경계에서 페이지/단 분할을 의도한 것 → 강제 분할.
+            if para_idx > 0 && !st.current_items.is_empty() {
+                let prev_para = &paragraphs[para_idx - 1];
+                let curr_first_vpos = para.line_segs.first().map(|s| s.vertical_pos);
+                let prev_last_vpos = prev_para.line_segs.last().map(|s| s.vertical_pos);
+                if let (Some(cv), Some(pv)) = (curr_first_vpos, prev_last_vpos) {
+                    // 현재 문단의 vpos가 0 이고 직전 문단의 마지막 vpos가 의미있게 큰 경우 (5000 HU ≈ 1.76mm)
+                    if cv == 0 && pv > 5000 {
+                        st.advance_column_or_new_page();
+                    }
+                }
+            }
+
+
             st.ensure_page();
 
             if !has_table {
@@ -370,6 +397,18 @@ impl TypesetEngine {
                     &mut st, para_idx, para, composed.get(para_idx),
                     styles, measured_tables, page_def,
                 );
+            }
+
+            // Task #321: col 0 처리 중 body-wide TopAndBottom 표/도형이 발견되면
+            // col 1+ advance 시 적용할 current_height 시작값을 미리 등록.
+            // layout의 body_wide_reserved와 동일 조건으로 detect.
+            if st.col_count > 1 && st.current_column == 0 && st.pending_body_wide_top_reserve == 0.0 {
+                let reserve = compute_body_wide_top_reserve_for_para(
+                    para, &st.layout, self.dpi,
+                );
+                if reserve > 0.0 {
+                    st.pending_body_wide_top_reserve = reserve;
+                }
             }
 
             // 인라인 컨트롤 처리: 도형/그림/수식/각주 (Paginator engine.rs:509-525 동일)
@@ -508,7 +547,54 @@ impl TypesetEngine {
         para: &Paragraph,
         fmt: &FormattedParagraph,
     ) {
-        let available = st.available_height();
+        // Task #332 Stage 4a: layout drift 안전 마진.
+        // typeset 의 fit 추정과 layout 의 실측 진행은 폰트 메트릭/표 측정 다중성 등으로
+        // 미세하게 어긋날 수 있다 (~수 px). 마진을 빼서 보수적으로 fit 을 판정해
+        // layout 시점의 LAYOUT_OVERFLOW (clamp pile 트리거) 를 사전 차단한다.
+        const LAYOUT_DRIFT_SAFETY_PX: f64 = 10.0;
+        let available = (st.available_height() - LAYOUT_DRIFT_SAFETY_PX).max(0.0);
+
+        // Task #321 Stage 1 진단: 포맷터 총 높이 vs LINE_SEG 실측 총 높이 비교
+        // Stage 5a 확장: per-paragraph 카테고리 분해 (sb/sa/lines/line_sum/ls_sum)
+        if std::env::var("RHWP_TYPESET_DRIFT").is_ok() {
+            let vpos_h: Option<f64> = if let (Some(first), Some(last)) = (para.line_segs.first(), para.line_segs.last()) {
+                let span_hu = (last.vertical_pos + last.line_height) - first.vertical_pos;
+                if span_hu > 0 { Some(crate::renderer::hwpunit_to_px(span_hu, self.dpi)) } else { None }
+            } else { None };
+            let first_vpos = para.line_segs.first().map(|s| s.vertical_pos).unwrap_or(-1);
+            let last_vpos = para.line_segs.last().map(|s| s.vertical_pos).unwrap_or(-1);
+            let lh_sum: f64 = fmt.line_heights.iter().sum();
+            let ls_sum: f64 = fmt.line_spacings.iter().sum();
+            let line_count = fmt.line_heights.len();
+            let trailing_ls = fmt.line_spacings.last().copied().unwrap_or(0.0);
+            let diff = match vpos_h {
+                Some(v) => fmt.total_height - v,
+                None => 0.0,
+            };
+            let vpos_h_str = vpos_h.map(|v| format!("{:.1}", v)).unwrap_or_else(|| "-".to_string());
+            eprintln!(
+                "TYPESET_DRIFT_PI: pi={} col={} sb={:.1} sa={:.1} lines={} lh_sum={:.1} ls_sum={:.1} trail_ls={:.1} fmt_total={:.1} vpos_h={} diff={:+.1} first_vpos={} last_vpos={} cur_h={:.1} avail={:.1}",
+                para_idx, st.current_column, fmt.spacing_before, fmt.spacing_after,
+                line_count, lh_sum, ls_sum, trailing_ls,
+                fmt.total_height, vpos_h_str, diff,
+                first_vpos, last_vpos,
+                st.current_height, available,
+            );
+
+            // 옵션: per-line 분해 (LINE_SEG 와 비교)
+            if std::env::var("RHWP_TYPESET_DRIFT_LINES").is_ok() {
+                for (li, (lh, ls)) in fmt.line_heights.iter().zip(fmt.line_spacings.iter()).enumerate() {
+                    let seg = para.line_segs.get(li);
+                    let seg_lh = seg.map(|s| crate::renderer::hwpunit_to_px(s.line_height, self.dpi)).unwrap_or(-1.0);
+                    let seg_ls = seg.map(|s| crate::renderer::hwpunit_to_px(s.line_spacing, self.dpi)).unwrap_or(-1.0);
+                    let seg_vpos = seg.map(|s| s.vertical_pos).unwrap_or(-1);
+                    eprintln!(
+                        "TYPESET_DRIFT_LINE: pi={} li={} fmt_lh={:.1} fmt_ls={:.1} seg_lh={:.1} seg_ls={:.1} vpos={}",
+                        para_idx, li, lh, ls, seg_lh, seg_ls, seg_vpos,
+                    );
+                }
+            }
+        }
 
         // 다단 레이아웃에서 문단 내 단 경계 감지
         let col_breaks = if st.col_count > 1 && st.current_column == 0 && st.on_first_multicolumn_page {
@@ -528,7 +614,7 @@ impl TypesetEngine {
             st.current_items.push(PageItem::FullParagraph {
                 para_index: para_idx,
             });
-            st.current_height += fmt.total_height;
+            st.current_height += fmt.height_for_fit;
             return;
         }
 
@@ -538,11 +624,12 @@ impl TypesetEngine {
             st.current_items.push(PageItem::FullParagraph {
                 para_index: para_idx,
             });
-            st.current_height += fmt.total_height;
+            st.current_height += fmt.height_for_fit;
             return;
         }
 
-        let base_available = st.base_available_height();
+        // Task #332 Stage 4a: partial split 시에도 동일 마진 적용
+        let base_available = (st.base_available_height() - LAYOUT_DRIFT_SAFETY_PX).max(0.0);
 
         // 남은 공간이 없거나 첫 줄도 못 넣으면 먼저 다음 단/페이지로
         let first_line_h = fmt.line_heights[0];
@@ -569,7 +656,8 @@ impl TypesetEngine {
             };
 
             let sp_b = if cursor_line == 0 { fmt.spacing_before } else { 0.0 };
-            let avail_for_lines = (page_avail - sp_b).max(0.0);
+            // Task #332 Stage 4b: partial split 의 줄 단위 fit 검사에도 layout drift 마진 적용
+            let avail_for_lines = (page_avail - sp_b - LAYOUT_DRIFT_SAFETY_PX).max(0.0);
 
             // 현재 페이지에 들어갈 줄 범위 결정
             let mut cumulative = 0.0;
@@ -1036,6 +1124,33 @@ impl TypesetEngine {
 
         let host_spacing_total = ft.host_spacing.before + ft.host_spacing.after;
         let table_total = ft.effective_height + host_spacing_total;
+
+        // Task #321 v5: Paper-anchored TopAndBottom block 표는 절대 좌표로 그려지므로
+        // cur_h advance 에 표 effective_height 를 그대로 더하면 본문 LINE_SEG vpos 와
+        // mismatch (= 21_언어 page 1 col 0 의 +76 px drift). 본문 좌표계와 동기화 하기
+        // 위해 host paragraph 의 first_vpos 만큼 cur_h 를 미리 jump 하고 표 advance 를
+        // 본문 라인 만큼으로 축소.
+        use crate::model::shape::{TextWrap, VertRelTo};
+        let is_paper_topbottom_block =
+            !table.common.treat_as_char
+            && matches!(table.common.text_wrap, TextWrap::TopAndBottom)
+            && matches!(table.common.vert_rel_to, VertRelTo::Paper);
+        if is_paper_topbottom_block && st.current_column == 0 {
+            if let Some(first_seg) = para.line_segs.first() {
+                let target_y = crate::renderer::hwpunit_to_px(first_seg.vertical_pos as i32, self.dpi);
+                // 호스트 본문 lines + 표는 절대 좌표 → cur_h 는 first_vpos + host lines 만 진행.
+                let pre_lines_h = fmt.line_advances_sum(0..fmt.line_heights.len());
+                if target_y > st.current_height
+                    && target_y + pre_lines_h <= available
+                {
+                    st.current_height = target_y;
+                    // table_total = 0: 표 자체는 cur_h advance 에 영향 없음 (Paper-absolute).
+                    // 호스트 본문 lines 만 place_table_with_text 가 pre_height 로 추가.
+                    self.place_table_with_text(st, para_idx, ctrl_idx, para, table, fmt, 0.0);
+                    return;
+                }
+            }
+        }
 
         // fits: 전체가 현재 페이지에 들어가는가?
         if st.current_height + table_total <= available {
@@ -1588,6 +1703,61 @@ impl TypesetEngine {
     fn get_table_vertical_offset(table: &crate::model::table::Table) -> u32 {
         table.common.vertical_offset as u32
     }
+}
+
+/// Task #321: 단일 문단의 컨트롤에서 body-wide TopAndBottom 표/도형이 차지하는 높이 계산.
+///
+/// col 1+ advance 시 current_height 시작값으로 사용하여 layout의 `body_wide_reserved`
+/// 와 동일한 가용 공간 축소를 적용한다.
+///
+/// **Paper(용지) 기준 도형 가드 (v3 정밀화 #326)**: vert_rel_to=Paper 인 도형 중
+/// 본문 영역과 겹치지 않는(머리말 영역에만 위치하는) 도형만 제외. body 와 겹치는
+/// Paper 도형은 col 1 시작에 영향 → reserve 대상으로 포함.
+fn compute_body_wide_top_reserve_for_para(
+    para: &Paragraph,
+    layout: &PageLayoutInfo,
+    dpi: f64,
+) -> f64 {
+    use crate::model::shape::{TextWrap, VertRelTo};
+    let body_w = layout.body_area.width;
+    let body_h = layout.available_body_height();
+    let body_top = layout.body_area.y;
+    let mut max_bottom: f64 = 0.0;
+    for ctrl in &para.controls {
+        let common = match ctrl {
+            Control::Shape(s) => s.common(),
+            Control::Table(t) if !t.common.treat_as_char => &t.common,
+            Control::Picture(p) if !p.common.treat_as_char => &p.common,
+            _ => continue,
+        };
+        if !matches!(common.text_wrap, TextWrap::TopAndBottom) || common.treat_as_char {
+            continue;
+        }
+        // Paper 기준 도형: 본문과 겹치지 않을 때(=머리말 영역만 점유)만 제외.
+        if matches!(common.vert_rel_to, VertRelTo::Paper) {
+            let shape_top_abs = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
+            let shape_bottom_abs = shape_top_abs
+                + crate::renderer::hwpunit_to_px(common.height as i32, dpi);
+            if shape_bottom_abs <= body_top {
+                continue;
+            }
+        }
+        let shape_w = crate::renderer::hwpunit_to_px(common.width as i32, dpi);
+        if shape_w < body_w * 0.8 {
+            continue;
+        }
+        let shape_h = crate::renderer::hwpunit_to_px(common.height as i32, dpi);
+        let shape_y_offset = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
+        if shape_y_offset > body_h / 3.0 {
+            continue;
+        }
+        let outer_bottom = crate::renderer::hwpunit_to_px(common.margin.bottom as i32, dpi);
+        let bottom = shape_y_offset + shape_h + outer_bottom;
+        if bottom > max_bottom {
+            max_bottom = bottom;
+        }
+    }
+    max_bottom
 }
 
 #[cfg(test)]

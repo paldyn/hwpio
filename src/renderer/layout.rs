@@ -212,8 +212,8 @@ pub struct LayoutEngine {
     current_page_number: std::cell::Cell<u32>,
     /// 파일 이름 (머리말/꼬리말 필드 치환용)
     file_name: std::cell::RefCell<String>,
-    /// 문단 테두리/배경 범위 수집 (border_fill_id, x, y_start, width, y_end)
-    para_border_ranges: std::cell::RefCell<Vec<(u16, f64, f64, f64, f64)>>,
+    /// 문단 테두리/배경 범위 수집 (border_fill_id, x, y_start, width, y_end, top_inset, bottom_inset)
+    para_border_ranges: std::cell::RefCell<Vec<(u16, f64, f64, f64, f64, f64, f64)>>,
     /// 레이아웃 검증 결과: 경계 초과 목록
     layout_overflows: std::cell::RefCell<Vec<LayoutOverflow>>,
     /// 빈 줄 감추기로 높이 0 처리된 문단 인덱스 집합
@@ -1359,12 +1359,18 @@ impl LayoutEngine {
                     }).unwrap_or(false);
                     if !prev_has_overlay_shape {
                     if let Some(prev_para) = paragraphs.get(prev_pi) {
-                        let prev_seg = prev_para.line_segs.iter().rev().find(|ls| {
-                            ls.segment_width > 0 && (ls.segment_width - col_width_hu).abs() < 3000
-                        });
+                        // Task #332 Stage 5: vpos correction trigger 조건 완화 —
+                        // 기존엔 segment_width 가 col_width 와 ±3000 HWPUNIT 이내일 때만 적용해
+                        // 짧은 단락/indent 가 있는 경우 trigger 누락 → drift 누적. 조건을 완화해
+                        // 마지막 segment 를 사용하되 width 검증 자체는 가드 조건으로 약화.
+                        let prev_seg = prev_para.line_segs.iter().rev().find(|ls| ls.segment_width > 0)
+                            .or_else(|| prev_para.line_segs.last());
                         if let Some(seg) = prev_seg {
                             if !(seg.vertical_pos == 0 && prev_pi > 0) {
-                                let vpos_end = seg.vertical_pos + seg.line_height + seg.line_spacing;
+                                // Task #332: typeset/layout 의 height_for_fit 모델과 정합 —
+                                // vpos_end 의 trailing line_spacing 을 제외해 다음 문단의 시작 y_offset
+                                // 이 trail_ls 만큼 일찍 보정되도록 한다.
+                                let vpos_end = seg.vertical_pos + seg.line_height;
                                 let base = if let Some(b) = vpos_page_base {
                                     b
                                 } else if let Some(b) = vpos_lazy_base {
@@ -1387,10 +1393,15 @@ impl LayoutEngine {
                                 };
                                 let end_y = col_area.y
                                     + hwpunit_to_px(vpos_end - base, self.dpi);
-                                // 자가 검증: 보정값이 컬럼 영역 내에 있고
-                                // 현재 y_offset보다 뒤로 가지 않아야 유효
+                                // 자가 검증: 보정값이 컬럼 영역 내에 있어야 유효.
+                                // Task #332: 양방향 보정 + collapse 가드 —
+                                // 기존 단방향(`end_y >= y_offset - 1.0`) 은 layout 이 vpos 보다 앞설
+                                // 때 보정 미적용 → drift 누적. 양방향으로 풀되, 비정상적인 큰 후퇴
+                                // (이전 문단과 같은 y 로 collapse) 만 가드하기 위해 backward 한도를
+                                // line_height 의 3 배로 제한한다 (소량 drift 보정은 허용).
+                                let max_backward_px = hwpunit_to_px(seg.line_height as i32, self.dpi) * 3.0;
                                 if end_y >= col_area.y && end_y <= col_area.y + col_area.height
-                                    && end_y >= y_offset - 1.0
+                                    && end_y >= y_offset - max_backward_px
                                 {
                                     y_offset = end_y;
                                 }
@@ -1513,29 +1524,58 @@ impl LayoutEngine {
         {
             let ranges = self.para_border_ranges.borrow();
             if !ranges.is_empty() {
-                // 연속된 동일 border_fill_id를 하나의 사각형으로 병합
-                let mut groups: Vec<(u16, f64, f64, f64, f64)> = Vec::new(); // (bf_id, x, y_start, w, y_end)
-                for &(bf_id, x, y_start, w, y_end) in ranges.iter() {
+                // 연속 ranges 를 시각적 stroke signature 로 병합 (Task #321 v6 근본 수정).
+                // bf_id 가 달라도 동일한 stroke (line_type/width/color) 면 HWP/PDF 처럼 하나의
+                // 사각형으로 보이도록 병합. invisible (any_w=false) 그룹은 별개로 유지.
+                use crate::model::style::BorderLineType;
+                type StrokeSig = Option<(BorderLineType, u8, u32)>;
+                let stroke_sig = |bf_id: u16| -> StrokeSig {
+                    let idx = (bf_id as usize).saturating_sub(1);
+                    let bs = styles.border_styles.get(idx)?;
+                    let top = &bs.borders[2];
+                    let any_w = bs.borders.iter().any(|b|
+                        !matches!(b.line_type, BorderLineType::None) && b.width > 0);
+                    if any_w {
+                        Some((top.line_type, top.width, top.color))
+                    } else {
+                        None
+                    }
+                };
+                let mut groups: Vec<(u16, f64, f64, f64, f64, f64, f64)> = Vec::new();
+                for &(bf_id, x, y_start, w, y_end, top_inset, bottom_inset) in ranges.iter() {
                     if let Some(last) = groups.last_mut() {
-                        if last.0 == bf_id && (y_start - last.4) < 30.0 {
-                            // 같은 border_fill_id이고 연속(문단 간격 포함) → 합침
+                        // bf_id 가 동일하면 기존 동작과 호환 (1차 병합).
+                        // 다른 bf_id 지만 동일한 visible stroke 인 경우에만 시각 병합 (None ≠ None 으로 처리).
+                        let last_sig = stroke_sig(last.0);
+                        let cur_sig = stroke_sig(bf_id);
+                        let same_visual = if last.0 == bf_id {
+                            true
+                        } else {
+                            last_sig.is_some() && last_sig == cur_sig
+                        };
+                        if same_visual && (y_start - last.4) < 30.0 {
                             last.4 = y_end;
+                            last.6 = bottom_inset;
                             continue;
                         }
                     }
-                    groups.push((bf_id, x, y_start, w, y_end));
+                    groups.push((bf_id, x, y_start, w, y_end, top_inset, bottom_inset));
                 }
 
-                for (bf_id, x, y_start, w, y_end) in groups {
+                let groups_len = groups.len();
+                for (gi, (bf_id, x, y_start, w, y_end, top_inset, bottom_inset)) in groups.clone().into_iter().enumerate() {
                     let height = y_end - y_start;
                     if height <= 0.0 { continue; }
+                    // 인접한 다른 border 그룹 (간격 < 4px) 과는 inset 충돌 회피.
+                    let prev_touches = gi > 0 && (y_start - groups[gi - 1].4) < 4.0;
+                    let next_touches = gi + 1 < groups_len && (groups[gi + 1].2 - y_end) < 4.0;
                     let idx = (bf_id as usize).saturating_sub(1);
                     let border_style = styles.border_styles.get(idx);
                     let fill_color = border_style.and_then(|bs| bs.fill_color);
                     let (stroke_color, stroke_width) = if let Some(bs) = border_style {
-                        let has_border = bs.borders.iter().any(|b|
+                        let any_real_width = bs.borders.iter().any(|b|
                             !matches!(b.line_type, crate::model::style::BorderLineType::None) && b.width > 0);
-                        if has_border {
+                        if any_real_width {
                             let top = &bs.borders[2];
                             (Some(top.color), super::layout::border_rendering::border_width_to_px(top.width))
                         } else {
@@ -1544,6 +1584,13 @@ impl LayoutEngine {
                     } else {
                         (None, 0.0)
                     };
+                    // Task #321 v6: ParaShape::border_spacing 정식 반영 + stroke 있을 때 default 2px 최소.
+                    // 인접 border 그룹과 충돌 방지를 위해 인접 경계는 inset 0.
+                    const DEFAULT_MIN_INSET: f64 = 2.0;
+                    let top_pad = if stroke_width > 0.0 && !prev_touches { top_inset.max(DEFAULT_MIN_INSET) } else { top_inset };
+                    let bot_pad = if stroke_width > 0.0 && !next_touches { bottom_inset.max(DEFAULT_MIN_INSET) } else { bottom_inset };
+                    let rect_y = y_start - top_pad;
+                    let rect_h = height + top_pad + bot_pad;
                     let rect_id = tree.next_id();
                     let rect_node = RenderNode::new(
                         rect_id,
@@ -1557,7 +1604,7 @@ impl LayoutEngine {
                             },
                             None,
                         )),
-                        super::render_tree::BoundingBox::new(x, y_start, w, height),
+                        super::render_tree::BoundingBox::new(x, rect_y, w, rect_h),
                     );
                     col_node.children.insert(0, rect_node);
                 }
