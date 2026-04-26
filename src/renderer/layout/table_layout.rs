@@ -1268,14 +1268,26 @@ impl LayoutEngine {
             } else {
                 cell.vertical_align
             };
-            let text_y_start = match effective_valign {
-                VerticalAlign::Top => cell_y + pad_top,
-                VerticalAlign::Center => {
-                    let mechanical_offset = (inner_height - total_content_height).max(0.0) / 2.0;
-                    cell_y + pad_top + mechanical_offset
-                }
-                VerticalAlign::Bottom => {
-                    cell_y + pad_top + (inner_height - total_content_height).max(0.0)
+            // Task #347: HWP는 LineSeg.vertical_pos에 첫 줄의 절대 위치(셀 내부 컨텐츠 상단부터)
+            // 를 기록한다. 이 값을 그대로 적용하면 모든 vertical_align (Top/Center/Bottom)에서
+            // PDF와 일치하는 텍스트 시작 y가 자동으로 결정됨 (mechanical_offset 불필요).
+            // 단, line_segs가 비어있는 케이스는 기존 mechanical_offset 폴백 유지.
+            let first_line_vpos = cell.paragraphs.first()
+                .and_then(|p| p.line_segs.first())
+                .map(|ls| hwpunit_to_px(ls.vertical_pos, self.dpi));
+            let text_y_start = if let Some(vpos) = first_line_vpos.filter(|&v| v > 0.0) {
+                // vpos는 셀 컨텐츠 상단(=cell_y+pad_top)으로부터의 첫 줄 top y 오프셋
+                cell_y + pad_top + vpos
+            } else {
+                match effective_valign {
+                    VerticalAlign::Top => cell_y + pad_top,
+                    VerticalAlign::Center => {
+                        let mechanical_offset = (inner_height - total_content_height).max(0.0) / 2.0;
+                        cell_y + pad_top + mechanical_offset
+                    }
+                    VerticalAlign::Bottom => {
+                        cell_y + pad_top + (inner_height - total_content_height).max(0.0)
+                    }
                 }
             };
 
