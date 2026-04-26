@@ -589,9 +589,19 @@ impl TypesetEngine {
         // layout 시점의 LAYOUT_OVERFLOW (clamp pile 트리거) 를 사전 차단한다.
         // [Task #359] 다음 pi 가 vpos-reset 가드 발동 예정 시 안전마진 1회 비활성화
         // (단독 항목 페이지 차단).
+        // [Task #361] 직전 항목이 PartialTable 인 경우 안전마진 비활성화.
+        // PartialTable 의 cur_h 는 row 단위로 정확히 누적되므로 안전마진이 과함.
+        // (k-water-rfp p15 case: PartialTable 직후 작은 텍스트 (16px) 가 잔여 5.3px 부족으로
+        // fit 실패하여 다음 페이지로 밀리는 회귀.)
         const LAYOUT_DRIFT_SAFETY_PX: f64 = 10.0;
+        let prev_is_partial_table = matches!(
+            st.current_items.last(),
+            Some(PageItem::PartialTable { .. })
+        );
         let safety = if st.skip_safety_margin_once {
             st.skip_safety_margin_once = false;
+            0.0
+        } else if prev_is_partial_table {
             0.0
         } else {
             LAYOUT_DRIFT_SAFETY_PX
@@ -1685,28 +1695,12 @@ impl TypesetEngine {
         let mut current_header: Option<HeaderFooterRef> = None;
         let mut current_footer: Option<HeaderFooterRef> = None;
         let mut page_num: u32 = 1;
+        // [Task #361] 이전 페이지의 마지막 문단 추적 — NewNumber 가 이미 적용된 페이지에서
+        // 다시 적용되지 않도록 한다 (Paginator 시멘틱과 동일).
+        let mut prev_page_last_para: Option<usize> = None;
 
         for page in pages.iter_mut() {
-            // 새 번호 지정 확인
-            let first_para = page.column_contents.first()
-                .and_then(|col| col.items.first())
-                .map(|item| match item {
-                    PageItem::FullParagraph { para_index } => *para_index,
-                    PageItem::PartialParagraph { para_index, .. } => *para_index,
-                    PageItem::Table { para_index, .. } => *para_index,
-                    PageItem::PartialTable { para_index, .. } => *para_index,
-                    PageItem::Shape { para_index, .. } => *para_index,
-                });
-
-            if let Some(fp) = first_para {
-                for &(nn_pi, nn_num) in new_page_numbers {
-                    if nn_pi <= fp {
-                        page_num = nn_num as u32;
-                    }
-                }
-            }
-
-            // 이 페이지에 속하는 머리말/꼬리말 갱신
+            // 이 페이지에 속하는 첫/끝 문단 인덱스
             let page_last_para = page.column_contents.iter()
                 .flat_map(|col| col.items.iter())
                 .map(|item| match item {
@@ -1718,6 +1712,18 @@ impl TypesetEngine {
                 })
                 .max();
 
+            // [Task #361] NewNumber 적용 — 한 페이지에서 한 번만
+            // 조건: nn_pi 가 이전 페이지에 이미 적용되지 않았고 (after_prev),
+            //       이 페이지 안에 있어야 함 (in_current).
+            for &(nn_pi, nn_num) in new_page_numbers {
+                let after_prev = prev_page_last_para.map_or(true, |prev| nn_pi > prev);
+                let in_current = page_last_para.map_or(false, |last| nn_pi <= last);
+                if after_prev && in_current {
+                    page_num = nn_num as u32;
+                }
+            }
+
+            // 이 페이지에 속하는 머리말/꼬리말 갱신
             if let Some(last_pi) = page_last_para {
                 for (hf_pi, hf_ref, is_header, apply) in hf_entries {
                     if *hf_pi <= last_pi {
@@ -1761,6 +1767,9 @@ impl TypesetEngine {
                 }
             }
 
+            // [Task #361] 다음 페이지에서 NewNumber 가 이미 적용된 페이지인지 판단하기 위해
+            // 이 페이지의 마지막 문단을 추적.
+            prev_page_last_para = page_last_para.or(prev_page_last_para);
             page_num += 1;
         }
     }
