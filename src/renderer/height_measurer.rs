@@ -478,16 +478,12 @@ impl HeightMeasurer {
         for cell in &table.cells {
             if cell.row_span == 1 && (cell.row as usize) < row_count {
                 let r = cell.row as usize;
-                // 셀 패딩 (apply_inner_margin 고려)
-                let (pad_top, pad_bottom) = if !cell.apply_inner_margin {
-                    (hwpunit_to_px(table.padding.top as i32, self.dpi),
-                     hwpunit_to_px(table.padding.bottom as i32, self.dpi))
-                } else {
-                    (if cell.padding.top != 0 { hwpunit_to_px(cell.padding.top as i32, self.dpi) }
-                     else { hwpunit_to_px(table.padding.top as i32, self.dpi) },
-                     if cell.padding.bottom != 0 { hwpunit_to_px(cell.padding.bottom as i32, self.dpi) }
-                     else { hwpunit_to_px(table.padding.bottom as i32, self.dpi) })
-                };
+                // 셀 패딩 — aim 플래그 무관하게 cell.padding 명시값 우선
+                // (한컴 호환: layout 의 resolve_cell_padding 과 일관성)
+                let pad_top = if cell.padding.top != 0 { hwpunit_to_px(cell.padding.top as i32, self.dpi) }
+                    else { hwpunit_to_px(table.padding.top as i32, self.dpi) };
+                let pad_bottom = if cell.padding.bottom != 0 { hwpunit_to_px(cell.padding.bottom as i32, self.dpi) }
+                    else { hwpunit_to_px(table.padding.bottom as i32, self.dpi) };
 
                 // 셀 내 문단들의 실제 높이 합산
                 let text_height: f64 = if cell.text_direction != 0 {
