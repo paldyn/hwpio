@@ -46,5 +46,5 @@
 
 ## 관련 문서
 
-- 계획: [feature_text_markdown_export_plan.md](../plans/feature_text_markdown_export_plan.md)
-- 단계: [feature_text_markdown_export_stage1.md](../working/feature_text_markdown_export_stage1.md)
+- 계획: [task_m100_237.md](../plans/task_m100_237.md)
+- 단계: [task_m100_237_stage1.md](../working/task_m100_237_stage1.md)
