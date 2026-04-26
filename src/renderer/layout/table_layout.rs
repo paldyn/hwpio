@@ -779,17 +779,12 @@ impl LayoutEngine {
         cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
     ) -> (f64, f64, f64, f64) {
-        // apply_inner_margin=false: 셀 고유 패딩 무시, 표 기본 패딩 사용
-        // (HWP 스펙: aim 플래그가 셀 패딩 적용 여부를 결정)
-        if !cell.apply_inner_margin {
-            return (
-                hwpunit_to_px(table.padding.left as i32, self.dpi),
-                hwpunit_to_px(table.padding.right as i32, self.dpi),
-                hwpunit_to_px(table.padding.top as i32, self.dpi),
-                hwpunit_to_px(table.padding.bottom as i32, self.dpi),
-            );
-        }
-        // aim=true: 셀 고유 패딩이 있으면 사용, 없으면 표 기본 패딩 사용
+        // aim 플래그와 무관하게 cell.padding 명시값(0 아님) 우선,
+        // 0 이면 table.padding fallback.
+        // 한컴 동작 호환: aim=false 라도 작성자가 비대칭 cell.padding 을 의도
+        // 적으로 설정한 경우 (예: KTX 목차 R=1417 HU) 그 값을 적용해야 한컴
+        // PDF 와 동등 (Task #279 검증 결과 + toc_leader_right_tab_alignment.md
+        // 의 "한컴은 의도를 재해석" 원칙).
         let pad_left = if cell.padding.left != 0 {
             hwpunit_to_px(cell.padding.left as i32, self.dpi)
         } else {
