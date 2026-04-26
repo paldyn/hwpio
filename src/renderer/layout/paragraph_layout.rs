@@ -2453,8 +2453,11 @@ impl LayoutEngine {
                 // border_spacing[2]/[3] (top/bottom) 을 inset 으로 전달 — 병합 그룹의 첫/마지막 range 에서만 적용됨.
                 let top_inset = para_style.map(|s| s.border_spacing[2]).unwrap_or(0.0);
                 let bottom_inset = para_style.map(|s| s.border_spacing[3]).unwrap_or(0.0);
+                // 컬럼/페이지 wrap 시 inner edge 미렌더링용 partial 플래그
+                let is_partial_start = start_line > 0;
+                let is_partial_end = end < composed.lines.len();
                 self.para_border_ranges.borrow_mut().push(
-                    (para_border_fill_id, col_area.x + margin_left, bg_y_start, col_area.width - margin_left - margin_right, y, top_inset, bottom_inset)
+                    (para_border_fill_id, col_area.x + margin_left, bg_y_start, col_area.width - margin_left - margin_right, y, top_inset, bottom_inset, is_partial_start, is_partial_end)
                 );
             }
         }

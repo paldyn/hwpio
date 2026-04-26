@@ -212,8 +212,12 @@ pub struct LayoutEngine {
     current_page_number: std::cell::Cell<u32>,
     /// 파일 이름 (머리말/꼬리말 필드 치환용)
     file_name: std::cell::RefCell<String>,
-    /// 문단 테두리/배경 범위 수집 (border_fill_id, x, y_start, width, y_end, top_inset, bottom_inset)
-    para_border_ranges: std::cell::RefCell<Vec<(u16, f64, f64, f64, f64, f64, f64)>>,
+    /// 문단 테두리/배경 범위 수집
+    /// (border_fill_id, x, y_start, width, y_end, top_inset, bottom_inset,
+    ///  is_partial_start, is_partial_end)
+    /// is_partial_start: 다른 컬럼/페이지에서 이어진 부분 (top edge 미렌더링)
+    /// is_partial_end: 다음 컬럼/페이지로 이어지는 부분 (bottom edge 미렌더링)
+    para_border_ranges: std::cell::RefCell<Vec<(u16, f64, f64, f64, f64, f64, f64, bool, bool)>>,
     /// 레이아웃 검증 결과: 경계 초과 목록
     layout_overflows: std::cell::RefCell<Vec<LayoutOverflow>>,
     /// 빈 줄 감추기로 높이 0 처리된 문단 인덱스 집합
@@ -1533,8 +1537,10 @@ impl LayoutEngine {
                         None
                     }
                 };
-                let mut groups: Vec<(u16, f64, f64, f64, f64, f64, f64)> = Vec::new();
-                for &(bf_id, x, y_start, w, y_end, top_inset, bottom_inset) in ranges.iter() {
+                // 그룹 튜플: (bf_id, x, y_start, w, y_end, top_inset, bottom_inset,
+                //              is_partial_start, is_partial_end)
+                let mut groups: Vec<(u16, f64, f64, f64, f64, f64, f64, bool, bool)> = Vec::new();
+                for &(bf_id, x, y_start, w, y_end, top_inset, bottom_inset, is_partial_start, is_partial_end) in ranges.iter() {
                     if let Some(last) = groups.last_mut() {
                         // bf_id 가 동일하면 기존 동작과 호환 (1차 병합).
                         // 다른 bf_id 지만 동일한 visible stroke 인 경우에만 시각 병합 (None ≠ None 으로 처리).
@@ -1548,14 +1554,17 @@ impl LayoutEngine {
                         if same_visual && (y_start - last.4) < 30.0 {
                             last.4 = y_end;
                             last.6 = bottom_inset;
+                            // 그룹의 partial_end 는 마지막 range 의 값으로 갱신.
+                            // partial_start 는 첫 range 값(last.7)을 유지.
+                            last.8 = is_partial_end;
                             continue;
                         }
                     }
-                    groups.push((bf_id, x, y_start, w, y_end, top_inset, bottom_inset));
+                    groups.push((bf_id, x, y_start, w, y_end, top_inset, bottom_inset, is_partial_start, is_partial_end));
                 }
 
                 let groups_len = groups.len();
-                for (gi, (bf_id, x, y_start, w, y_end, top_inset, bottom_inset)) in groups.clone().into_iter().enumerate() {
+                for (gi, (bf_id, x, y_start, w, y_end, top_inset, bottom_inset, is_partial_start, is_partial_end)) in groups.clone().into_iter().enumerate() {
                     let height = y_end - y_start;
                     if height <= 0.0 { continue; }
                     // 인접한 다른 border 그룹 (간격 < 4px) 과는 inset 충돌 회피.
@@ -1583,22 +1592,81 @@ impl LayoutEngine {
                     let bot_pad = if stroke_width > 0.0 && !next_touches { bottom_inset.max(DEFAULT_MIN_INSET) } else { bottom_inset };
                     let rect_y = y_start - top_pad;
                     let rect_h = height + top_pad + bot_pad;
-                    let rect_id = tree.next_id();
-                    let rect_node = RenderNode::new(
-                        rect_id,
-                        RenderNodeType::Rectangle(super::render_tree::RectangleNode::new(
-                            0.0,
-                            super::ShapeStyle {
-                                fill_color,
-                                stroke_color,
-                                stroke_width,
-                                ..Default::default()
-                            },
-                            None,
-                        )),
-                        super::render_tree::BoundingBox::new(x, rect_y, w, rect_h),
-                    );
-                    col_node.children.insert(0, rect_node);
+                    // Wrap inner edge 처리: partial_start 면 top, partial_end 면 bottom 미렌더링.
+                    let skip_top = stroke_width > 0.0 && is_partial_start;
+                    let skip_bottom = stroke_width > 0.0 && is_partial_end;
+                    if !skip_top && !skip_bottom {
+                        // 기존 경로: 단일 Rectangle (fill + 4면 stroke)
+                        let rect_id = tree.next_id();
+                        let rect_node = RenderNode::new(
+                            rect_id,
+                            RenderNodeType::Rectangle(super::render_tree::RectangleNode::new(
+                                0.0,
+                                super::ShapeStyle {
+                                    fill_color,
+                                    stroke_color,
+                                    stroke_width,
+                                    ..Default::default()
+                                },
+                                None,
+                            )),
+                            super::render_tree::BoundingBox::new(x, rect_y, w, rect_h),
+                        );
+                        col_node.children.insert(0, rect_node);
+                    } else {
+                        // wrap 케이스: fill 만 Rectangle 로, stroke 는 면별 LineNode 로 분해.
+                        if fill_color.is_some() {
+                            let rect_id = tree.next_id();
+                            let rect_node = RenderNode::new(
+                                rect_id,
+                                RenderNodeType::Rectangle(super::render_tree::RectangleNode::new(
+                                    0.0,
+                                    super::ShapeStyle {
+                                        fill_color,
+                                        stroke_color: None,
+                                        stroke_width: 0.0,
+                                        ..Default::default()
+                                    },
+                                    None,
+                                )),
+                                super::render_tree::BoundingBox::new(x, rect_y, w, rect_h),
+                            );
+                            col_node.children.insert(0, rect_node);
+                        }
+                        let line_style = super::LineStyle {
+                            color: stroke_color.unwrap_or(0),
+                            width: stroke_width,
+                            ..Default::default()
+                        };
+                        let mut push_line = |x1: f64, y1: f64, x2: f64, y2: f64| {
+                            let lid = tree.next_id();
+                            let lnode = RenderNode::new(
+                                lid,
+                                RenderNodeType::Line(super::render_tree::LineNode::new(
+                                    x1, y1, x2, y2, line_style.clone(),
+                                )),
+                                super::render_tree::BoundingBox::new(
+                                    x1.min(x2), y1.min(y2),
+                                    (x2 - x1).abs().max(stroke_width),
+                                    (y2 - y1).abs().max(stroke_width),
+                                ),
+                            );
+                            col_node.children.insert(0, lnode);
+                        };
+                        let x_left = x;
+                        let x_right = x + w;
+                        let y_top = rect_y;
+                        let y_bot = rect_y + rect_h;
+                        // 좌·우 수직선은 항상 렌더
+                        push_line(x_left, y_top, x_left, y_bot);
+                        push_line(x_right, y_top, x_right, y_bot);
+                        if !skip_top {
+                            push_line(x_left, y_top, x_right, y_top);
+                        }
+                        if !skip_bottom {
+                            push_line(x_left, y_bot, x_right, y_bot);
+                        }
+                    }
                 }
             }
         }
