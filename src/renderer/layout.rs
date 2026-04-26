@@ -2522,15 +2522,26 @@ impl LayoutEngine {
                         let comp = composed.get(para_index);
                         let para_style_id = comp.map(|c| c.para_style_id as usize)
                             .unwrap_or(para.para_shape_id as usize);
-                        let para_alignment = styles.para_styles.get(para_style_id)
+                        let para_style_ref = styles.para_styles.get(para_style_id);
+                        let para_alignment = para_style_ref
                             .map(|s| s.alignment)
                             .unwrap_or(Alignment::Left);
+                        // Task #347: 첫 줄 effective_margin (hanging indent: indent<0 → first-line은 margin_left만 적용)
+                        let para_margin_left = para_style_ref.map(|s| s.margin_left).unwrap_or(0.0);
+                        let para_indent = para_style_ref.map(|s| s.indent).unwrap_or(0.0);
+                        let effective_margin_left = if para_indent > 0.0 {
+                            para_margin_left + para_indent
+                        } else {
+                            para_margin_left
+                        };
+                        let para_margin_right = para_style_ref.map(|s| s.margin_right).unwrap_or(0.0);
+                        let avail_w = (col_area.width - effective_margin_left - para_margin_right).max(pic_w);
                         let pic_x = match para_alignment {
                             Alignment::Center | Alignment::Distribute =>
-                                col_area.x + (col_area.width - pic_w).max(0.0) / 2.0,
+                                col_area.x + effective_margin_left + (avail_w - pic_w).max(0.0) / 2.0,
                             Alignment::Right =>
-                                col_area.x + (col_area.width - pic_w).max(0.0),
-                            _ => col_area.x,
+                                col_area.x + effective_margin_left + (avail_w - pic_w).max(0.0),
+                            _ => col_area.x + effective_margin_left,
                         };
 
                         // Task #347: paragraph_layout이 호출되지 않는 빈 문단(텍스트 없음 +
