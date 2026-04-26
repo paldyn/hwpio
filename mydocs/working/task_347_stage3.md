@@ -61,10 +61,31 @@ let pushed = if matches!(table_text_wrap, TextWrap::TopAndBottom) {
 pushed.clamp(body_top, body_bottom.max(body_top))
 ```
 
+## 추가 수정 4 — InFrontOfText 표 z-order 보존 (TAC 그림이 표 위 덮는 회귀 방지)
+
+**파일**: `src/renderer/layout.rs::layout_shape_item`
+
+**증상 원인**: pi=189(p4 Q28)는 컨트롤 순서가 `[표(InFrontOfText), 그림(TAC)]`이라 PageItem 처리 순서대로 렌더하면 표가 먼저 그려지고 인라인 TAC 그림이 나중에 그려져 그림이 표 텍스트를 덮음 → 박스 본문 텍스트가 박스 프레임 그림에 가려져 보이지 않음.
+
+**수정**: 인라인 TAC 그림을 col_node에 push할 때, 같은 문단에 이미 렌더된 Table 노드가 있으면 그 **앞에** insert하여 z-order(그림 → 표) 보존.
+
+```rust
+let insert_pos = col_node.children.iter().position(|c| {
+    matches!(&c.node_type, RenderNodeType::Table(t)
+        if t.para_index == Some(para_index))
+});
+if let Some(pos) = insert_pos {
+    col_node.children.insert(pos, img_node);
+} else {
+    col_node.children.push(img_node);
+}
+```
+
 ## 시각 검증
 
-- **p2 우측**: "Dear Rosydale City Marathon Racers" 박스 안 텍스트가 PDF처럼 박스 상단 직하 위치 (이미지: `task_347_exam_eng_p2_after.png`)
-- **p4 우측**: Q27 Adamville City Pass Card + Q28 Lockwood Snow Festival 박스 모두 프레임 + 내용 정상 (이미지: `task_347_exam_eng_p4_after.png`)
+- **p2 우측**: "Dear Rosydale City Marathon Racers" 박스 안 텍스트가 PDF처럼 박스 상단 직하 위치 (`task_347_exam_eng_p2_after.png`)
+- **p4 우측 Q27**: Adamville City Pass Card 박스 프레임 + 내용 정상 (`task_347_exam_eng_p4_after.png`)
+- **p4 우측 Q28**: Lockwood Snow Festival 박스 프레임 + 내용 (제목, When & Where, Special Activities, Transportation 등) 모두 정상 (`task_347_exam_eng_p4_q28_after.png`)
 - **p1, 3, 5, 6, 7, 8**: 시각 회귀 없음
 
 ## 회귀 검증

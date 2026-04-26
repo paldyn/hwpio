@@ -2565,7 +2565,19 @@ impl LayoutEngine {
                                 }),
                                 BoundingBox::new(pic_x, pic_y, pic_w, pic_h),
                             );
-                            col_node.children.push(img_node);
+                            // Task #347: 같은 문단의 InFrontOfText 표가 이미 렌더되어
+                            // col_node.children에 들어있으면 그 앞에 끼워넣어 z-order 보존
+                            // (인라인 TAC 그림은 박스 프레임 시각이고 InFrontOfText 표가
+                            //  본문 콘텐츠로 그 위에 그려져야 함).
+                            let insert_pos = col_node.children.iter().position(|c| {
+                                matches!(&c.node_type, RenderNodeType::Table(t)
+                                    if t.para_index == Some(para_index))
+                            });
+                            if let Some(pos) = insert_pos {
+                                col_node.children.insert(pos, img_node);
+                            } else {
+                                col_node.children.push(img_node);
+                            }
                             // 후속 InFrontOfText 객체의 para_y 기준이 되도록 위치 등록
                             tree.set_inline_shape_position(
                                 page_content.section_index, para_index, control_index, pic_x, pic_y,

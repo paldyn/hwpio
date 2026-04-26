@@ -8,7 +8,7 @@
 
 `samples/exam_eng.hwp`의 SVG 출력이 PDF 원본과 상이하다는 작업지시자 보고로 시작. 페이지 2/4의 박스형 안내문 콘텐츠가 잘못된 위치·누락 상태로 렌더링됨을 확인.
 
-## 문제 정리 (5건, 단일 이슈로 통합)
+## 문제 정리 (6건, 단일 이슈로 통합)
 
 | # | 위치 | 증상 | 원인 |
 |---|------|------|------|
@@ -16,7 +16,8 @@
 | 2 | p2 박스 우측 정렬 | 페이지 우측 벗어남 | `HorzAlign::Right`에서 `+ h_offset` (그림 코드는 `-`) |
 | 3 | (잠재) `VertRelTo::Page` 표 | 컬럼 기준 위치 | 주석은 body 기준이나 코드는 col_area |
 | 4 | p2 우측 박스 내부 텍스트 | 70px 아래로 밀림 | 글뒤로 그림이 `y_offset += pic_height` 적용 |
-| 5 | p4 우측 Q27/Q28 박스 | 프레임 누락 + 내용 겹침 | TAC 그림 미렌더 + InFrontOfText 표 push-down |
+| 5 | p4 우측 Q27 박스 | 프레임 누락 + 내용 겹침 | TAC 그림 미렌더 + InFrontOfText 표 push-down |
+| 6 | p4 우측 Q28 박스 | 프레임이 표 텍스트 덮음 | `[표,그림]` 순서 컨트롤에서 z-order 보존 누락 |
 
 ## 수정 파일
 
@@ -36,6 +37,7 @@
 
 - `mydocs/working/task_347_exam_eng_p2_after.png` — p2 박스 위치 + 박스 내부 텍스트 정상
 - `mydocs/working/task_347_exam_eng_p4_after.png` — p4 Q27 City Pass Card 박스 정상
+- `mydocs/working/task_347_exam_eng_p4_q28_after.png` — p4 Q28 Lockwood Snow Festival 박스 정상 (z-order 수정 후)
 
 ## 회귀 검증
 
@@ -55,6 +57,7 @@
 | InFrontOfText/BehindText Para 표 | push-down 미적용 | 의도된 정정 |
 | TopAndBottom Para 표 | push-down 유지 | 없음 |
 | TAC 표 / 중첩 표 / Paper 기준 | 미변경 | 없음 |
+| 같은 문단의 [TAC 그림, InFrontOfText 표] 컨트롤 순서 | 그림이 표 앞으로 z-order 보존 | 의도된 정정 |
 
 ## 결론
 
