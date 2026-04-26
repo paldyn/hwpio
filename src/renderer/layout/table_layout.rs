@@ -779,8 +779,17 @@ impl LayoutEngine {
         cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
     ) -> (f64, f64, f64, f64) {
-        // 셀 고유 패딩이 있으면 사용, 없으면 표 기본 패딩 사용
-        // apply_inner_margin=false이더라도 셀에 명시적 패딩이 있으면 적용
+        // apply_inner_margin=false: 셀 고유 패딩 무시, 표 기본 패딩 사용
+        // (HWP 스펙: aim 플래그가 셀 패딩 적용 여부를 결정)
+        if !cell.apply_inner_margin {
+            return (
+                hwpunit_to_px(table.padding.left as i32, self.dpi),
+                hwpunit_to_px(table.padding.right as i32, self.dpi),
+                hwpunit_to_px(table.padding.top as i32, self.dpi),
+                hwpunit_to_px(table.padding.bottom as i32, self.dpi),
+            );
+        }
+        // aim=true: 셀 고유 패딩이 있으면 사용, 없으면 표 기본 패딩 사용
         let pad_left = if cell.padding.left != 0 {
             hwpunit_to_px(cell.padding.left as i32, self.dpi)
         } else {

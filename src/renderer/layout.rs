@@ -1367,10 +1367,7 @@ impl LayoutEngine {
                             .or_else(|| prev_para.line_segs.last());
                         if let Some(seg) = prev_seg {
                             if !(seg.vertical_pos == 0 && prev_pi > 0) {
-                                // Task #332: typeset/layout 의 height_for_fit 모델과 정합 —
-                                // vpos_end 의 trailing line_spacing 을 제외해 다음 문단의 시작 y_offset
-                                // 이 trail_ls 만큼 일찍 보정되도록 한다.
-                                let vpos_end = seg.vertical_pos + seg.line_height;
+                                let vpos_end = seg.vertical_pos + seg.line_height + seg.line_spacing;
                                 let base = if let Some(b) = vpos_page_base {
                                     b
                                 } else if let Some(b) = vpos_lazy_base {
@@ -1393,15 +1390,10 @@ impl LayoutEngine {
                                 };
                                 let end_y = col_area.y
                                     + hwpunit_to_px(vpos_end - base, self.dpi);
-                                // 자가 검증: 보정값이 컬럼 영역 내에 있어야 유효.
-                                // Task #332: 양방향 보정 + collapse 가드 —
-                                // 기존 단방향(`end_y >= y_offset - 1.0`) 은 layout 이 vpos 보다 앞설
-                                // 때 보정 미적용 → drift 누적. 양방향으로 풀되, 비정상적인 큰 후퇴
-                                // (이전 문단과 같은 y 로 collapse) 만 가드하기 위해 backward 한도를
-                                // line_height 의 3 배로 제한한다 (소량 drift 보정은 허용).
-                                let max_backward_px = hwpunit_to_px(seg.line_height as i32, self.dpi) * 3.0;
+                                // 자가 검증: 보정값이 컬럼 영역 내에 있고
+                                // 현재 y_offset보다 뒤로 가지 않아야 유효
                                 if end_y >= col_area.y && end_y <= col_area.y + col_area.height
-                                    && end_y >= y_offset - max_backward_px
+                                    && end_y >= y_offset - 1.0
                                 {
                                     y_offset = end_y;
                                 }
