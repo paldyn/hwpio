@@ -779,28 +779,36 @@ impl LayoutEngine {
         cell: &crate::model::table::Cell,
         table: &crate::model::table::Table,
     ) -> (f64, f64, f64, f64) {
-        // aim 플래그와 무관하게 cell.padding 명시값(0 아님) 우선,
-        // 0 이면 table.padding fallback.
-        // 한컴 동작 호환: aim=false 라도 작성자가 비대칭 cell.padding 을 의도
-        // 적으로 설정한 경우 (예: KTX 목차 R=1417 HU) 그 값을 적용해야 한컴
-        // PDF 와 동등 (Task #279 검증 결과 + toc_leader_right_tab_alignment.md
-        // 의 "한컴은 의도를 재해석" 원칙).
-        let pad_left = if cell.padding.left != 0 {
+        // HWP 스펙: aim(apply_inner_margin)=true → cell.padding,
+        //           aim=false → table.padding 우선.
+        // Task #347: 단, aim=false에서도 cell.padding이 table.padding보다
+        // 큰 비대칭 값이면 작성자 의도(예: KTX 목차 R=1417 HU)로 보고 그 축만 cell 사용.
+        // (Task #279의 "전 축에서 cell 우선" 휴리스틱은 일반 박스 셀에서 표 padding을
+        // 무시해 텍스트가 왼쪽으로 붙어버리는 부작용이 있어 축소 적용.)
+        let prefer_cell_axis = |c: i16, t: i16| -> bool {
+            if cell.apply_inner_margin {
+                c != 0
+            } else {
+                // aim=false: cell이 table보다 명백히 큰 경우만 cell 우선 (의도된 비대칭)
+                (c as i32) > (t as i32)
+            }
+        };
+        let pad_left = if prefer_cell_axis(cell.padding.left, table.padding.left) {
             hwpunit_to_px(cell.padding.left as i32, self.dpi)
         } else {
             hwpunit_to_px(table.padding.left as i32, self.dpi)
         };
-        let pad_right = if cell.padding.right != 0 {
+        let pad_right = if prefer_cell_axis(cell.padding.right, table.padding.right) {
             hwpunit_to_px(cell.padding.right as i32, self.dpi)
         } else {
             hwpunit_to_px(table.padding.right as i32, self.dpi)
         };
-        let pad_top = if cell.padding.top != 0 {
+        let pad_top = if prefer_cell_axis(cell.padding.top, table.padding.top) {
             hwpunit_to_px(cell.padding.top as i32, self.dpi)
         } else {
             hwpunit_to_px(table.padding.top as i32, self.dpi)
         };
-        let pad_bottom = if cell.padding.bottom != 0 {
+        let pad_bottom = if prefer_cell_axis(cell.padding.bottom, table.padding.bottom) {
             hwpunit_to_px(cell.padding.bottom as i32, self.dpi)
         } else {
             hwpunit_to_px(table.padding.bottom as i32, self.dpi)
@@ -837,7 +845,11 @@ impl LayoutEngine {
             }
         }
         let available = (cell_w - pad_left - pad_right).max(0.0);
-        if max_line_w <= available || cell_w <= 2.0 {
+        // Task #347: estimate_text_width는 영어 본문(Times New Roman 등) 자연 폭을
+        // 5~15%까지 과대 추정할 수 있어, HWP가 이미 줄바꿈한 본문에서도
+        // padding 축소가 잘못 트리거됨. 15% 이내 초과는 정상으로 보고 미축소.
+        let overflow_threshold = available * 1.15;
+        if max_line_w <= overflow_threshold || cell_w <= 2.0 {
             return (pad_left, pad_right);
         }
         let min_pad = 1.0;
