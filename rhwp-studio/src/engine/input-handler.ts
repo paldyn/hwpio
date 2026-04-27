@@ -1500,7 +1500,10 @@ export class InputHandler {
     }
     this.updateSelection();
     this.emitCursorFormatState();
-    this.checkTransparentBordersTransition();
+    // [Task #394] 셀 진입 자동 ON 로직 비활성화 — 한컴 출력 정합성을 위해 OFF 기본값 유지.
+    // 되돌리려면 아래 호출 + line ~1520 의 동일 호출 + 메서드 본체 / 상태 변수 / 이벤트 핸들러
+    // 의 주석을 동시에 풀면 이전 동작 복원.
+    // this.checkTransparentBordersTransition();
     this.updateFieldMarkers();
     // 눈금자 다단 영역 표시용 커서 좌표 전달
     const cursorRect = this.cursor.getRect();
@@ -1517,7 +1520,8 @@ export class InputHandler {
     }
     this.updateSelection();
     this.emitCursorFormatState();
-    this.checkTransparentBordersTransition();
+    // [Task #394] 셀 진입 자동 ON 로직 비활성화 — 위 updateCaretAndScroll 의 코멘트 참고.
+    // this.checkTransparentBordersTransition();
   }
 
   /** 클릭 좌표에서 같은 표 내 셀의 row/col을 반환한다. 다른 표이거나 셀이 아니면 null. */
