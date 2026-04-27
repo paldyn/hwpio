@@ -20,6 +20,21 @@ use crate::error::HwpError;
 use super::super::helpers::color_ref_to_css;
 
 impl DocumentCore {
+    /// 페이지 렌더 트리를 생성하여 반환한다 (native bridge / 외부 렌더러용).
+    pub fn build_page_render_tree(&self, page_num: u32) -> Result<PageRenderTree, HwpError> {
+        let tree = self.build_page_tree(page_num)?;
+        let _overflows = self.layout_engine.take_overflows();
+        Ok(tree)
+    }
+
+    /// 바이너리 데이터를 0-based `bin_data_content` 인덱스로 반환한다.
+    pub fn get_bin_data(&self, index: usize) -> Option<&[u8]> {
+        self.document
+            .bin_data_content
+            .get(index)
+            .map(|b| b.data.as_slice())
+    }
+
     pub fn render_page_svg_native(&self, page_num: u32) -> Result<String, HwpError> {
         let tree = self.build_page_tree(page_num)?;
         let _overflows = self.layout_engine.take_overflows();
@@ -2006,4 +2021,47 @@ fn format_vpos_range(
         s_out.push_str(&format!(" [vpos-reset@line{}]", r));
     }
     s_out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::bin_data::BinDataContent;
+    use crate::renderer::render_tree::RenderNodeType;
+
+    #[test]
+    fn build_page_render_tree_exposes_public_page_tree() {
+        let mut core = DocumentCore::new_empty();
+        core.paginate();
+
+        let tree = core
+            .build_page_render_tree(0)
+            .expect("empty document should expose page render tree");
+
+        match tree.root.node_type {
+            RenderNodeType::Page(page) => {
+                assert_eq!(page.page_index, 0);
+            }
+            other => panic!("root should be Page node, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn get_bin_data_returns_zero_based_content_slice() {
+        let mut core = DocumentCore::new_empty();
+        core.document.bin_data_content.push(BinDataContent {
+            id: 1,
+            data: vec![0x01, 0x02, 0x03],
+            extension: "png".to_string(),
+        });
+        core.document.bin_data_content.push(BinDataContent {
+            id: 2,
+            data: vec![0xAA, 0xBB],
+            extension: "jpg".to_string(),
+        });
+
+        assert_eq!(core.get_bin_data(0), Some(&[0x01, 0x02, 0x03][..]));
+        assert_eq!(core.get_bin_data(1), Some(&[0xAA, 0xBB][..]));
+        assert_eq!(core.get_bin_data(2), None);
+    }
 }
