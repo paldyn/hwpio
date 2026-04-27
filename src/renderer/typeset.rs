@@ -120,6 +120,27 @@ struct TypesetState {
     /// Task #321: col 0 상단의 body-wide TopAndBottom 표/도형이 차지하는 높이 (px).
     /// col 1 이상으로 advance 시 zone_y_offset에 반영.
     pending_body_wide_top_reserve: f64,
+    /// [Task #359] 다음 pi 가 vpos-reset 가드를 발동할 예정 → 현재 pi 의 fit 안전마진 비활성화.
+    /// 단독 항목 페이지 발생 차단용.
+    skip_safety_margin_once: bool,
+    /// [Task #362] 한컴 빈 줄 감추기 옵션 (SectionDef bit 19). true 이면 페이지 시작에서
+    /// overflow 유발하는 빈 paragraph 최대 2개까지 height=0 처리.
+    hide_empty_line: bool,
+    /// [Task #362] 현재 페이지에서 감춘 빈 줄 수 (페이지마다 reset, 최대 2).
+    hidden_empty_lines: u32,
+    /// [Task #362] 감춘 빈 줄이 적용된 페이지 인덱스 (페이지 변경 감지용).
+    hidden_empty_page_idx: usize,
+    /// [Task #362] hide_empty_line 으로 감춘 paragraph 인덱스 (PaginationResult 에 포함).
+    hidden_empty_paras: std::collections::HashSet<usize>,
+    /// [Task #362] Square wrap 표의 column_start (HU). -1 = 비활성. 후속 같은 cs/sw paragraph 흡수용.
+    wrap_around_cs: i32,
+    /// [Task #362] Square wrap 표의 segment_width (HU). -1 = 비활성.
+    wrap_around_sw: i32,
+    /// [Task #362] Square wrap 표가 있는 paragraph 인덱스 (WrapAroundPara 에 기록).
+    wrap_around_table_para: usize,
+    /// [Task #362] 현재 단에서 표 옆에 배치되는 wrap-around paragraphs.
+    /// flush_column 에서 ColumnContent 로 전달.
+    current_column_wrap_around_paras: Vec<crate::renderer::pagination::WrapAroundPara>,
 }
 
 impl TypesetState {
@@ -146,6 +167,15 @@ impl TypesetState {
             current_zone_layout: None,
             on_first_multicolumn_page: false,
             pending_body_wide_top_reserve: 0.0,
+            skip_safety_margin_once: false,
+            hide_empty_line: false,
+            hidden_empty_lines: 0,
+            hidden_empty_page_idx: usize::MAX,
+            hidden_empty_paras: std::collections::HashSet::new(),
+            wrap_around_cs: -1,
+            wrap_around_sw: -1,
+            wrap_around_table_para: 0,
+            current_column_wrap_around_paras: Vec::new(),
         }
     }
 
@@ -176,7 +206,7 @@ impl TypesetState {
 
     /// 현재 항목을 ColumnContent로 만들어 마지막 페이지에 push
     fn flush_column(&mut self) {
-        if self.current_items.is_empty() {
+        if self.current_items.is_empty() && self.current_column_wrap_around_paras.is_empty() {
             return;
         }
         let col_content = ColumnContent {
@@ -184,7 +214,7 @@ impl TypesetState {
             items: std::mem::take(&mut self.current_items),
             zone_layout: self.current_zone_layout.clone(),
             zone_y_offset: self.current_zone_y_offset,
-            wrap_around_paras: Vec::new(),
+            wrap_around_paras: std::mem::take(&mut self.current_column_wrap_around_paras),
             used_height: self.current_height,
         };
         if let Some(page) = self.pages.last_mut() {
@@ -201,7 +231,7 @@ impl TypesetState {
             items: std::mem::take(&mut self.current_items),
             zone_layout: self.current_zone_layout.clone(),
             zone_y_offset: self.current_zone_y_offset,
-            wrap_around_paras: Vec::new(),
+            wrap_around_paras: std::mem::take(&mut self.current_column_wrap_around_paras),
             used_height: self.current_height,
         };
         if let Some(page) = self.pages.last_mut() {
@@ -329,6 +359,7 @@ impl TypesetEngine {
         column_def: &ColumnDef,
         section_index: usize,
         measured_tables: &[MeasuredTable],
+        hide_empty_line: bool,
     ) -> PaginationResult {
         let layout = PageLayoutInfo::from_page_def(page_def, column_def, self.dpi);
         let col_count = column_def.column_count.max(1);
@@ -339,6 +370,7 @@ impl TypesetEngine {
             layout, col_count, section_index,
             footnote_separator_overhead, footnote_safety_margin,
         );
+        st.hide_empty_line = hide_empty_line;
 
         // 머리말/꼬리말/쪽 번호/새 번호/감추기 컨트롤 수집
         let (hf_entries, page_number_pos, new_page_numbers, page_hides) =
@@ -372,7 +404,9 @@ impl TypesetEngine {
             // HWP LINE_SEG의 vertical_pos는 페이지 내 흐름 y 좌표.
             // 현재 문단 first_vpos=0이고 직전 문단이 같은 단에 있으며 last_vpos가 충분히 큰 경우,
             // HWP가 pi 경계에서 페이지/단 분할을 의도한 것 → 강제 분할.
-            if para_idx > 0 && !st.current_items.is_empty() {
+            // [Task #362] wrap-around zone 활성 중에는 vpos-reset 가드 무시.
+            // 외부 표 옆에 흡수되는 paragraph 들의 vpos 가 0 으로 reset 되어 가드가 잘못 발동.
+            if para_idx > 0 && !st.current_items.is_empty() && st.wrap_around_cs < 0 {
                 let prev_para = &paragraphs[para_idx - 1];
                 let curr_first_vpos = para.line_segs.first().map(|s| s.vertical_pos);
                 let prev_last_vpos = prev_para.line_segs.last().map(|s| s.vertical_pos);
@@ -384,6 +418,74 @@ impl TypesetEngine {
                 }
             }
 
+            // [Task #359] 단독 항목 페이지 차단:
+            // 다음 pi 가 vpos-reset 가드를 발동할 예정이고 현재 pi 가 잔여 공간 부족으로
+            // 새 페이지를 시작하면 단독 항목 페이지가 발생.
+            //   - 현재 pi 가 빈 문단이면: skip (한컴은 표시하지 않음)
+            //   - 현재 pi 가 일반 텍스트이면: fit 안전마진 (10px) 1회 비활성화
+            //     (kps-ai pi=317 case: 0.x px 차이로 fit 실패하여 단독 페이지 35 발생)
+            // 가드 제외 조건:
+            //   - 다음 pi 가 force_page_break (column_type==Page/Section) 인 경우 발동 안 함
+            //     (정상 쪽나누기 신호 — 단독 페이지 발생 안 함, hwp-multi-001 회귀 차단)
+            let next_will_vpos_reset = if !st.current_items.is_empty() && para_idx + 1 < paragraphs.len() {
+                let next_para = &paragraphs[para_idx + 1];
+                let next_force_break = next_para.column_type == ColumnBreakType::Page
+                    || next_para.column_type == ColumnBreakType::Section;
+                if next_force_break {
+                    false
+                } else {
+                    let next_first_vpos = next_para.line_segs.first().map(|s| s.vertical_pos);
+                    let curr_last_vpos = para.line_segs.last().map(|s| s.vertical_pos);
+                    matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl)) if nv == 0 && cl > 5000)
+                }
+            } else { false };
+
+            if next_will_vpos_reset {
+                // [Task #362] 빈 paragraph 가 표/도형/그림 컨트롤을 포함하면 skip 안 함
+                // (kps-ai pi=778 case: 빈 텍스트 + 3x3 wrap=Square 표를 가진 paragraph 가
+                //  잘못 skip 되어 표 누락).
+                let is_empty_no_ctrl = para.text.is_empty() && para.controls.is_empty();
+                if is_empty_no_ctrl {
+                    // 빈 문단 skip (단독 빈페이지 차단)
+                    continue;
+                } else {
+                    // 일반 텍스트 또는 컨트롤 보유: 안전마진 1회 비활성화 (단독 텍스트 페이지 차단)
+                    st.skip_safety_margin_once = true;
+                }
+            }
+            // [Task #362] 어울림(Square wrap) 표 옆 paragraph 흡수.
+            // Paginator engine.rs:288-320 동일 시멘틱.
+            // 직전에 처리한 Square wrap 표의 (cs, sw) 와 동일한 LINE_SEG 를 가진
+            // 후속 paragraph 는 표 옆에 배치되므로 height 소비 없이 wrap_around_paras 에 기록.
+            if st.wrap_around_cs >= 0 && !has_table {
+                let para_cs = para.line_segs.first().map(|s| s.column_start).unwrap_or(0);
+                let para_sw = para.line_segs.first().map(|s| s.segment_width as i32).unwrap_or(0);
+                let is_empty_para = para.text.chars().all(|ch| ch.is_whitespace() || ch == '\r' || ch == '\n')
+                    && para.controls.is_empty();
+                let any_seg_matches = para.line_segs.iter().any(|s|
+                    s.column_start == st.wrap_around_cs && s.segment_width as i32 == st.wrap_around_sw
+                );
+                let body_w = (page_def.width as i32) - (page_def.margin_left as i32) - (page_def.margin_right as i32);
+                let sw0_match = st.wrap_around_sw == 0 && is_empty_para && para_sw > 0
+                    && para_sw < body_w / 2;
+                if (para_cs == st.wrap_around_cs && para_sw == st.wrap_around_sw)
+                    || (any_seg_matches && is_empty_para)
+                    || sw0_match {
+                    // 어울림 문단: 표 옆에 기록 + height 소비 없음
+                    st.current_column_wrap_around_paras.push(
+                        crate::renderer::pagination::WrapAroundPara {
+                            para_index: para_idx,
+                            table_para_index: st.wrap_around_table_para,
+                            has_text: !is_empty_para,
+                        }
+                    );
+                    continue;
+                } else {
+                    // 매칭 실패 → wrap zone 종료, 정상 처리 진행
+                    st.wrap_around_cs = -1;
+                    st.wrap_around_sw = -1;
+                }
+            }
 
             st.ensure_page();
 
@@ -397,6 +499,32 @@ impl TypesetEngine {
                     &mut st, para_idx, para, composed.get(para_idx),
                     styles, measured_tables, page_def,
                 );
+            }
+
+            // [Task #362] Square wrap 표 처리 후 wrap zone 활성화.
+            // Paginator engine.rs:356-372 동일 시멘틱.
+            // 후속 paragraph 가 동일 cs/sw 를 가지면 흡수.
+            if has_table {
+                let has_tac_block = para.controls.iter().any(|c| {
+                    matches!(c, Control::Table(t) if t.common.treat_as_char)
+                });
+                let has_non_tac_table = !has_tac_block;
+                if has_non_tac_table {
+                    let is_wrap_around = para.controls.iter().any(|c| {
+                        if let Control::Table(t) = c {
+                            matches!(t.common.text_wrap, crate::model::shape::TextWrap::Square)
+                        } else { false }
+                    });
+                    if is_wrap_around {
+                        st.wrap_around_cs = para.line_segs.first()
+                            .map(|s| s.column_start)
+                            .unwrap_or(0);
+                        st.wrap_around_sw = para.line_segs.first()
+                            .map(|s| s.segment_width as i32)
+                            .unwrap_or(0);
+                        st.wrap_around_table_para = para_idx;
+                    }
+                }
             }
 
             // Task #321: col 0 처리 중 body-wide TopAndBottom 표/도형이 발견되면
@@ -454,7 +582,7 @@ impl TypesetEngine {
             &new_page_numbers, &page_hides, section_index,
         );
 
-        PaginationResult { pages: st.pages, wrap_around_paras: Vec::new(), hidden_empty_paras: std::collections::HashSet::new() }
+        PaginationResult { pages: st.pages, wrap_around_paras: Vec::new(), hidden_empty_paras: st.hidden_empty_paras }
     }
 
     // ========================================================
@@ -551,8 +679,26 @@ impl TypesetEngine {
         // typeset 의 fit 추정과 layout 의 실측 진행은 폰트 메트릭/표 측정 다중성 등으로
         // 미세하게 어긋날 수 있다 (~수 px). 마진을 빼서 보수적으로 fit 을 판정해
         // layout 시점의 LAYOUT_OVERFLOW (clamp pile 트리거) 를 사전 차단한다.
+        // [Task #359] 다음 pi 가 vpos-reset 가드 발동 예정 시 안전마진 1회 비활성화
+        // (단독 항목 페이지 차단).
+        // [Task #361] 직전 항목이 PartialTable 인 경우 안전마진 비활성화.
+        // PartialTable 의 cur_h 는 row 단위로 정확히 누적되므로 안전마진이 과함.
+        // (k-water-rfp p15 case: PartialTable 직후 작은 텍스트 (16px) 가 잔여 5.3px 부족으로
+        // fit 실패하여 다음 페이지로 밀리는 회귀.)
         const LAYOUT_DRIFT_SAFETY_PX: f64 = 10.0;
-        let available = (st.available_height() - LAYOUT_DRIFT_SAFETY_PX).max(0.0);
+        let prev_is_partial_table = matches!(
+            st.current_items.last(),
+            Some(PageItem::PartialTable { .. })
+        );
+        let safety = if st.skip_safety_margin_once {
+            st.skip_safety_margin_once = false;
+            0.0
+        } else if prev_is_partial_table {
+            0.0
+        } else {
+            LAYOUT_DRIFT_SAFETY_PX
+        };
+        let available = (st.available_height() - safety).max(0.0);
 
         // Task #321 Stage 1 진단: 포맷터 총 높이 vs LINE_SEG 실측 총 높이 비교
         // Stage 5a 확장: per-paragraph 카테고리 분해 (sb/sa/lines/line_sum/ls_sum)
@@ -608,13 +754,46 @@ impl TypesetEngine {
             return;
         }
 
+        // [Task #362] 한컴 빈 줄 감추기 (SectionDef bit 19, hide_empty_line):
+        // 빈 paragraph 가 현재 공간을 overflow 시키면 height=0 으로 처리 (페이지 당 최대 2개).
+        // Paginator (engine.rs:85-106) 와 동일 시멘틱.
+        // (kps-ai p67~70 case: PartialTable 후속 빈 paragraphs 가 다수 발생, 한컴은 표시 안 함.)
+        if st.hide_empty_line {
+            let current_page_idx = st.pages.len();
+            if current_page_idx != st.hidden_empty_page_idx {
+                st.hidden_empty_lines = 0;
+                st.hidden_empty_page_idx = current_page_idx;
+            }
+            let trimmed = para.text.replace(|c: char| c.is_control(), "");
+            let is_empty_para = trimmed.trim().is_empty() && para.controls.is_empty();
+            if is_empty_para
+                && !st.current_items.is_empty()
+                && st.current_height + fmt.height_for_fit > available
+                && st.hidden_empty_lines < 2
+            {
+                st.hidden_empty_lines += 1;
+                st.hidden_empty_paras.insert(para_idx);
+                // height=0 으로 page 진행 — fit 분기에서 추가 처리하지 않음
+                st.current_items.push(PageItem::FullParagraph {
+                    para_index: para_idx,
+                });
+                return;
+            }
+        }
+
         // fits: 문단 전체가 현재 공간에 들어가는가?
+        // [Task #359] fit 판정은 height_for_fit (trailing_ls 제외) 으로,
+        // 누적은 total_height (full) 로 분리. 각 항목별 trailing_ls 가
+        // 누적에서 빠지면 N items 누적 시 N × trailing_ls 만큼 drift 발생
+        // (k-water-rfp p3 case: 36 items × 평균 ~9px = ~311px LAYOUT_OVERFLOW).
+        // trailing_ls 는 페이지 마지막 항목의 fit 판정에만 의미가 있음
+        // (페이지 끝에는 다음 줄이 없으니 line_spacing 미적용).
         if st.current_height + fmt.height_for_fit <= available {
             // place: 전체 배치
             st.current_items.push(PageItem::FullParagraph {
                 para_index: para_idx,
             });
-            st.current_height += fmt.height_for_fit;
+            st.current_height += fmt.total_height;
             return;
         }
 
@@ -624,7 +803,7 @@ impl TypesetEngine {
             st.current_items.push(PageItem::FullParagraph {
                 para_index: para_idx,
             });
-            st.current_height += fmt.height_for_fit;
+            st.current_height += fmt.total_height;
             return;
         }
 
@@ -1635,28 +1814,12 @@ impl TypesetEngine {
         let mut current_header: Option<HeaderFooterRef> = None;
         let mut current_footer: Option<HeaderFooterRef> = None;
         let mut page_num: u32 = 1;
+        // [Task #361] 이전 페이지의 마지막 문단 추적 — NewNumber 가 이미 적용된 페이지에서
+        // 다시 적용되지 않도록 한다 (Paginator 시멘틱과 동일).
+        let mut prev_page_last_para: Option<usize> = None;
 
         for page in pages.iter_mut() {
-            // 새 번호 지정 확인
-            let first_para = page.column_contents.first()
-                .and_then(|col| col.items.first())
-                .map(|item| match item {
-                    PageItem::FullParagraph { para_index } => *para_index,
-                    PageItem::PartialParagraph { para_index, .. } => *para_index,
-                    PageItem::Table { para_index, .. } => *para_index,
-                    PageItem::PartialTable { para_index, .. } => *para_index,
-                    PageItem::Shape { para_index, .. } => *para_index,
-                });
-
-            if let Some(fp) = first_para {
-                for &(nn_pi, nn_num) in new_page_numbers {
-                    if nn_pi <= fp {
-                        page_num = nn_num as u32;
-                    }
-                }
-            }
-
-            // 이 페이지에 속하는 머리말/꼬리말 갱신
+            // 이 페이지에 속하는 첫/끝 문단 인덱스
             let page_last_para = page.column_contents.iter()
                 .flat_map(|col| col.items.iter())
                 .map(|item| match item {
@@ -1668,6 +1831,18 @@ impl TypesetEngine {
                 })
                 .max();
 
+            // [Task #361] NewNumber 적용 — 한 페이지에서 한 번만
+            // 조건: nn_pi 가 이전 페이지에 이미 적용되지 않았고 (after_prev),
+            //       이 페이지 안에 있어야 함 (in_current).
+            for &(nn_pi, nn_num) in new_page_numbers {
+                let after_prev = prev_page_last_para.map_or(true, |prev| nn_pi > prev);
+                let in_current = page_last_para.map_or(false, |last| nn_pi <= last);
+                if after_prev && in_current {
+                    page_num = nn_num as u32;
+                }
+            }
+
+            // 이 페이지에 속하는 머리말/꼬리말 갱신
             if let Some(last_pi) = page_last_para {
                 for (hf_pi, hf_ref, is_header, apply) in hf_entries {
                     if *hf_pi <= last_pi {
@@ -1711,6 +1886,9 @@ impl TypesetEngine {
                 }
             }
 
+            // [Task #361] 다음 페이지에서 NewNumber 가 이미 적용된 페이지인지 판단하기 위해
+            // 이 페이지의 마지막 문단을 추적.
+            prev_page_last_para = page_last_para.or(prev_page_last_para);
             page_num += 1;
         }
     }
@@ -1881,7 +2059,7 @@ mod tests {
 
         let result = engine.typeset_section(
             &[], &composed, &styles,
-            &a4_page_def(), &ColumnDef::default(), 0, &[],
+            &a4_page_def(), &ColumnDef::default(), 0, &[], false,
         );
 
         assert_eq!(result.pages.len(), 1, "빈 문서도 최소 1페이지");
@@ -1902,7 +2080,7 @@ mod tests {
         );
         let new_result = engine.typeset_section(
             &paras, &composed, &styles, &page_def, &col_def, 0,
-            &measured.tables,
+            &measured.tables, false,
         );
 
         assert_pagination_match(&old_result, &new_result, "single_paragraph");
@@ -1925,7 +2103,7 @@ mod tests {
         );
         let new_result = engine.typeset_section(
             &paras, &composed, &styles, &page_def, &col_def, 0,
-            &measured.tables,
+            &measured.tables, false,
         );
 
         assert_pagination_match(&old_result, &new_result, "page_overflow");
@@ -1955,7 +2133,7 @@ mod tests {
         );
         let new_result = engine.typeset_section(
             &paras, &composed, &styles, &page_def, &col_def, 0,
-            &measured.tables,
+            &measured.tables, false,
         );
 
         assert_pagination_match(&old_result, &new_result, "line_split");
@@ -1985,7 +2163,7 @@ mod tests {
         );
         let new_result = engine.typeset_section(
             &paras, &composed, &styles, &page_def, &col_def, 0,
-            &measured.tables,
+            &measured.tables, false,
         );
 
         assert_pagination_match(&old_result, &new_result, "mixed_paragraphs");
@@ -2016,7 +2194,7 @@ mod tests {
         );
         let new_result = engine.typeset_section(
             &paras, &composed, &styles, &page_def, &col_def, 0,
-            &measured.tables,
+            &measured.tables, false,
         );
 
         assert_pagination_match(&old_result, &new_result, "page_break");
@@ -2066,6 +2244,7 @@ mod tests {
                 &column_def,
                 sec_idx,
                 measured_tables,
+                section.section_def.hide_empty_line,
             );
 
             let old_result = &doc.pagination[sec_idx];

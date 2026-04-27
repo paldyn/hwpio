@@ -478,12 +478,22 @@ impl HeightMeasurer {
         for cell in &table.cells {
             if cell.row_span == 1 && (cell.row as usize) < row_count {
                 let r = cell.row as usize;
-                // 셀 패딩 — aim 플래그 무관하게 cell.padding 명시값 우선
-                // (한컴 호환: layout 의 resolve_cell_padding 과 일관성)
-                let pad_top = if cell.padding.top != 0 { hwpunit_to_px(cell.padding.top as i32, self.dpi) }
-                    else { hwpunit_to_px(table.padding.top as i32, self.dpi) };
-                let pad_bottom = if cell.padding.bottom != 0 { hwpunit_to_px(cell.padding.bottom as i32, self.dpi) }
-                    else { hwpunit_to_px(table.padding.bottom as i32, self.dpi) };
+                // 셀 패딩 — layout 의 resolve_cell_padding 과 일관성:
+                //   aim=true  → cell.padding (0 도 명시값으로 존중)
+                //   aim=false → 기본은 table.padding, 단 cell > table 인 비대칭 축만 cell 우선
+                let prefer_cell_axis = |c: i16, t: i16| -> bool {
+                    if cell.apply_inner_margin { c != 0 } else { (c as i32) > (t as i32) }
+                };
+                let pad_top = if prefer_cell_axis(cell.padding.top, table.padding.top) {
+                    hwpunit_to_px(cell.padding.top as i32, self.dpi)
+                } else {
+                    hwpunit_to_px(table.padding.top as i32, self.dpi)
+                };
+                let pad_bottom = if prefer_cell_axis(cell.padding.bottom, table.padding.bottom) {
+                    hwpunit_to_px(cell.padding.bottom as i32, self.dpi)
+                } else {
+                    hwpunit_to_px(table.padding.bottom as i32, self.dpi)
+                };
 
                 // 셀 내 문단들의 실제 높이 합산
                 let text_height: f64 = if cell.text_direction != 0 {
@@ -1079,7 +1089,15 @@ impl MeasuredTable {
                 // 연속적 비율 기반으로 remaining 계산
                 let line_sum: f64 = c.line_heights.iter().sum();
                 if line_sum < capped * 0.5 {
-                    return (capped - content_offset).max(0.0);
+                    // [Task #362] nested table 의 잔여 계산 시 외부 셀 행 높이로 cap.
+                    // total_content_height 가 nested 의 raw 누적이라 외부 행보다 클 수 있음 →
+                    // 외부 행 기준 잔여로 cap 하여 후속 페이지 누적 결함 차단.
+                    let effective_total = if c.has_nested_table {
+                        capped.min(max_content.max(line_sum))
+                    } else {
+                        capped
+                    };
+                    return (effective_total - content_offset).max(0.0);
                 }
                 // 줄 단위 스냅: content_offset을 줄별로 소비하고 나머지 줄의 높이 합산
                 // (layout의 compute_cell_line_ranges와 동일한 이산 계산)
