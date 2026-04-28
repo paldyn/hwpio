@@ -1380,7 +1380,7 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
     let mut pic_name_to_id = std::collections::HashMap::new();
 
     // 7. 문단 리스트 파싱 및 Document Model(IR)로 매핑 변환
-    let paragraphs = parse_paragraph_list(&mut body_cursor, &mut doc_char_shapes, &mut doc_para_shapes, &mut doc_border_fills, &mut pic_name_to_id)?;
+    let mut paragraphs = parse_paragraph_list(&mut body_cursor, &mut doc_char_shapes, &mut doc_para_shapes, &mut doc_border_fills, &mut pic_name_to_id)?;
 
 
     // 추가 정보 블록 읽기 (압축 해제된 스트림의 끝 부분)
@@ -1401,6 +1401,7 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
     let mut doc_bin_data_list = Vec::new();
     let mut temp_bin_data_content = Vec::new();
     let mut processed_ids = std::collections::HashSet::new();
+    let mut hyperlink_urls: Vec<String> = Vec::new();
 
     for block in additional_info_blocks {
         if block.id == 1 { // 포함된 이미지
@@ -1408,7 +1409,7 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
                 let name_buf = &block.data[0..16];
                 let mut name = crate::parser::hwp3::encoding::decode_hwp3_string(name_buf);
                 name = name.trim_end_matches('\0').to_string();
-                
+
                 let id = if let Some(&id) = pic_name_to_id.get(&name) {
                     id
                 } else {
@@ -1416,9 +1417,9 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
                     pic_name_to_id.insert(name.clone(), next_id);
                     next_id
                 };
-                
+
                 let img_data = block.data[32..].to_vec();
-                
+
                 let ext = if img_data.starts_with(b"\xFF\xD8\xFF") {
                     "jpg"
                 } else if img_data.starts_with(b"\x89PNG\r\n\x1a\n") {
@@ -1446,6 +1447,40 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
                 temp_bin_data_content.push(content);
                 doc_bin_data_list.push(bin_data);
                 processed_ids.insert(id);
+            }
+        } else if block.id == 3 {
+            // 추가정보블록 #1 TagID 3 = 하이퍼텍스트(HyperLink) 정보
+            // 구조 (스펙 §8.3): 각 항목 617바이트, n개 연속
+            //   data[  0..256]: 건너뛸 파일 이름(URL) — kchar[256], null 종료
+            //   data[256..288]: 건너뛸 책갈피 — hchar[16]
+            //   data[288..613]: 매크로 (도스용) — byte[325]
+            //   data[613]     : 종류 (0,1=한글 2=HTML/ETC)
+            //   data[614..617]: 예약
+            const ENTRY_SIZE: usize = 617;
+            let n = block.data.len() / ENTRY_SIZE;
+            for i in 0..n {
+                let offset = i * ENTRY_SIZE;
+                if offset + 256 <= block.data.len() {
+                    let url = crate::parser::hwp3::encoding::decode_hwp3_string(
+                        &block.data[offset..offset + 256]
+                    );
+                    hyperlink_urls.push(url);
+                }
+            }
+        }
+    }
+
+    // 하이퍼링크 URL을 본문 단락의 Control::Hyperlink에 등장 순서대로 적용
+    if !hyperlink_urls.is_empty() {
+        let mut url_idx = 0;
+        for para in &mut paragraphs {
+            for ctrl in &mut para.controls {
+                if let crate::model::control::Control::Hyperlink(hl) = ctrl {
+                    if url_idx < hyperlink_urls.len() {
+                        hl.url = hyperlink_urls[url_idx].clone();
+                        url_idx += 1;
+                    }
+                }
             }
         }
     }
