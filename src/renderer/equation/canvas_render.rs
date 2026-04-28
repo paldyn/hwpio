@@ -143,8 +143,11 @@ fn render_box(
             }
         }
         LayoutKind::Limit { is_upper, sub } => {
+            // [Task PR #396 후속] SVG 경로 (svg_render.rs::Limit) 와 동일하게 base font_size 사용.
+            // font_size_from_box(lb, fs) 는 lb.height 를 사용하는데, Limit 의 lb 는 "lim + 첨자"
+            // 전체 높이라 base 의 1.5~2 배가 되어 lim 글자가 비정상으로 커지는 정황.
             let name = if *is_upper { "Lim" } else { "lim" };
-            let fi = font_size_from_box(lb, fs);
+            let fi = fs;
             set_font(ctx, fi, false, false);
             ctx.set_fill_style_str(color);
             let _ = ctx.fill_text(name, x, y + fi * 0.8);
