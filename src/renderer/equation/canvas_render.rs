@@ -76,8 +76,8 @@ fn render_box(
         }
         LayoutKind::Fraction { numer, denom } => {
             render_box(ctx, numer, x, y, color, fs, italic, bold);
-            // 분수선
-            let line_y = y + lb.baseline;
+            // 분수선 — baseline에서 axis_height 위에 배치 (SVG 경로와 동일)
+            let line_y = y + lb.baseline - fs * super::layout::AXIS_HEIGHT;
             let line_thick = fs * 0.04;
             ctx.set_stroke_style_str(color);
             ctx.set_line_width(line_thick);
