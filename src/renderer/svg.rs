@@ -1219,7 +1219,10 @@ impl SvgRenderer {
 
     /// 밝기/대비 조정용 SVG 필터를 defs에 보장하고 ID를 반환한다.
     /// 둘 다 0이면 필터 불필요 → None 반환.
+    /// HWP 스펙은 brightness/contrast 를 -100..=100 으로 정의하므로 손상된 입력에 대비해 clamp 한다.
     fn ensure_brightness_contrast_filter(&mut self, brightness: i8, contrast: i8) -> Option<String> {
+        let brightness = brightness.clamp(-100, 100);
+        let contrast = contrast.clamp(-100, 100);
         if brightness == 0 && contrast == 0 {
             return None;
         }
