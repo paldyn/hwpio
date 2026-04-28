@@ -25,6 +25,7 @@ pub mod crypto;
 pub mod doc_info;
 pub mod header;
 pub mod hwpx;
+pub mod hwp3;
 pub mod record;
 pub mod tags;
 
@@ -76,6 +77,7 @@ pub enum ParseError {
     BodyTextError(body_text::BodyTextError),
     CryptoError(crypto::CryptoError),
     HwpxError(hwpx::HwpxError),
+    Hwp3Error(hwp3::Hwp3Error),
     EncryptedDocument,
     /// 감지는 되었으나 지원하지 않는 포맷 (Issue #265)
     UnsupportedFormat { format: &'static str, hint: &'static str },
@@ -90,6 +92,7 @@ impl std::fmt::Display for ParseError {
             ParseError::BodyTextError(e) => write!(f, "BodyText 오류: {}", e),
             ParseError::CryptoError(e) => write!(f, "암호 오류: {}", e),
             ParseError::HwpxError(e) => write!(f, "HWPX 오류: {}", e),
+            ParseError::Hwp3Error(e) => write!(f, "HWP 3.0 오류: {}", e),
             ParseError::EncryptedDocument => write!(f, "암호화된 문서는 지원하지 않습니다"),
             ParseError::UnsupportedFormat { format, hint } =>
                 write!(f, "지원하지 않는 포맷입니다: {format}. {hint}"),
@@ -102,6 +105,12 @@ impl std::error::Error for ParseError {}
 impl From<hwpx::HwpxError> for ParseError {
     fn from(e: hwpx::HwpxError) -> Self {
         ParseError::HwpxError(e)
+    }
+}
+
+impl From<hwp3::Hwp3Error> for ParseError {
+    fn from(e: hwp3::Hwp3Error) -> Self {
+        ParseError::Hwp3Error(e)
     }
 }
 
@@ -523,7 +532,9 @@ pub struct HwpxParser;
 
 impl DocumentParser for HwpxParser {
     fn parse(&self, data: &[u8]) -> Result<Document, ParseError> {
-        hwpx::parse_hwpx(data).map_err(ParseError::from)
+        let mut doc = hwpx::parse_hwpx(data).map_err(ParseError::from)?;
+        assign_auto_numbers(&mut doc);
+        Ok(doc)
     }
 }
 
@@ -531,12 +542,11 @@ impl DocumentParser for HwpxParser {
 pub fn parse_document(data: &[u8]) -> Result<Document, ParseError> {
     match detect_format(data) {
         FileFormat::Hwpx => HwpxParser.parse(data),
-        FileFormat::Hwp3 => Err(ParseError::UnsupportedFormat {
-            format: "HWP 3.0",
-            hint: "현재 rhwp 는 HWP 5.0 과 HWPX 만 지원합니다. \
-                   한컴오피스 또는 LibreOffice 에서 파일을 연 뒤 \
-                   HWP 5.0 포맷으로 다시 저장하여 시도해주세요.",
-        }),
+        FileFormat::Hwp3 => {
+            let mut doc = hwp3::parse_hwp3(data).map_err(ParseError::from)?;
+            assign_auto_numbers(&mut doc);
+            Ok(doc)
+        },
         _ => HwpParser.parse(data),
     }
 }
@@ -851,31 +861,25 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_document_hwp3_returns_unsupported_error() {
-        // Issue #265: HWP 3.0 헤더 → UnsupportedFormat 에러
+    fn test_parse_document_hwp3_too_short_errors() {
+        // Issue #265 (updated): HWP 3.0 헤더 (now supported, but data is incomplete)
         let hwp3_header = b"HWP Document File V3.00 \x1a\x01\x02\x03\x04\x05";
         let err = parse_document(hwp3_header).unwrap_err();
         match err {
-            ParseError::UnsupportedFormat { format, hint } => {
-                assert_eq!(format, "HWP 3.0");
-                assert!(hint.contains("HWP 5.0"));
-            }
-            other => panic!("expected UnsupportedFormat, got {other:?}"),
+            ParseError::Hwp3Error(_) => {}
+            other => panic!("expected Hwp3Error, got {other:?}"),
         }
     }
 
     #[test]
     fn test_parse_document_issue_265_sample() {
         // Issue #265: 실제 제보 파일 samples/issue_265.hwp 가 HWP 3.0 으로
-        // 감지되고 친절한 에러 메시지를 반환하는지 확인.
+        // 감지되고 정상적으로 파싱되는지 확인.
         let data = std::fs::read("samples/issue_265.hwp")
             .expect("samples/issue_265.hwp should exist in repo");
         assert_eq!(detect_format(&data), FileFormat::Hwp3);
-        let err = parse_document(&data).unwrap_err();
-        assert!(matches!(err, ParseError::UnsupportedFormat { .. }));
-        let msg = format!("{err}");
-        assert!(msg.contains("HWP 3.0"), "message should mention HWP 3.0: {msg}");
-        assert!(msg.contains("HWP 5.0"), "message should mention HWP 5.0: {msg}");
+        let doc = parse_document(&data).expect("Should successfully parse HWP3 sample");
+        assert!(doc.sections.len() > 0, "Document should have at least one section");
     }
 
     #[test]
