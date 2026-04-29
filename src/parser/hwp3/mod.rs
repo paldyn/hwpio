@@ -204,7 +204,12 @@ pub(crate) fn parse_paragraph_list(
                         i += 3;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
-                        text_string.push('\u{FFFC}');
+                        // AutoNumber(ch=18)은 HWP5 패턴("  ")과 일치하도록 공백으로 저장
+                        if ch == 18 {
+                            text_string.push(' ');
+                        } else {
+                            text_string.push('\u{FFFC}');
+                        }
                         
                         let ctrl = match ch {
                             18 => {
