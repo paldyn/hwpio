@@ -210,7 +210,7 @@ pub(crate) fn parse_paragraph_list(
                         } else {
                             text_string.push('\u{FFFC}');
                         }
-                        
+
                         let ctrl = match ch {
                             18 => {
                                 let mut auto_num = crate::model::control::AutoNumber::default();
@@ -609,7 +609,7 @@ pub(crate) fn parse_paragraph_list(
                                     }
 
                                     doc_border_fills.push(border_fill);
-                                    cell.border_fill_id = doc_border_fills.len() as u16;
+                                    cell.border_fill_id = (doc_border_fills.len() - 1) as u16;
 
                                     // 중복된 스팬 계산 제거됨
                                     
@@ -1263,26 +1263,6 @@ pub(crate) fn parse_paragraph_list(
             para.line_segs = line_segs;
         }
 
-        // HWP3 쪽 경계: 비-TAC TopAndBottom 그림을 가진 문단에서
-        // 첫 LINE_SEG break_flag bit 0 = HWP3 word processor가 새 페이지에 배치했음.
-        // → column_type = Page로 변환하여 TypesetEngine이 자연스럽게 처리하게 함.
-        // 단순 쪽 넘김(그림 없는 heading 등)은 TypesetEngine 높이 측정으로 처리되므로 제외.
-        let has_non_tac_float_pic = para.controls.iter().any(|c| {
-            matches!(c, crate::model::control::Control::Picture(pic)
-                if !pic.common.treat_as_char
-                    && matches!(pic.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom))
-        });
-        if has_non_tac_float_pic {
-            if let Some(first_seg) = para.line_segs.first() {
-                if first_seg.tag & 0x01 != 0 {
-                    para.column_type = crate::model::paragraph::ColumnBreakType::Page;
-                }
-            }
-        }
-
-        // HWP3 혼합 단락: Para-relative TopAndBottom 그림 구역 내 줄을 그림 하단 아래로 재배치
-        fixup_hwp3_mixed_para_line_segs(&mut para);
-
         // HWP3 후처리: tac=false(부동) + 자리차지(TopAndBottom) 그림의
         // caption.width=0 보정 (layout_body_picture 캡션 렌더링에 그림 너비 사용).
         // paginator는 Control::Picture 처리 시 pic_h를 current_height에 추가하므로
@@ -1298,6 +1278,49 @@ pub(crate) fn parse_paragraph_list(
                         }
                     }
                 }
+            }
+        }
+
+        // Fix 1: HWP3 그림 자리차지 LINE_SEG 제거
+        // HWP3은 비-TAC TopAndBottom 그림 높이를 LINE_SEG(th=0, lh≈그림높이)로 인코딩한다.
+        // HWP5/HWPX에는 이 패턴이 없고, 그림 높이는 typeset.rs pushdown_h로만 반영된다.
+        // HWP3에서 이 자리차지 LINE_SEG를 유지하면 높이가 이중 계산되므로 제거한다.
+        {
+            let non_tac_pic_heights: Vec<i32> = para.controls.iter()
+                .filter_map(|c| {
+                    if let crate::model::control::Control::Picture(pic) = c {
+                        if !pic.common.treat_as_char
+                            && matches!(pic.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
+                        {
+                            return Some(pic.common.height as i32);
+                        }
+                    }
+                    None
+                })
+                .collect();
+            if !non_tac_pic_heights.is_empty() {
+                para.line_segs.retain(|seg| {
+                    !(seg.text_height == 0
+                        && non_tac_pic_heights.iter().any(|&h| (seg.line_height as i32 - h).abs() < 1000))
+                });
+            }
+        }
+
+        // Fix 2: 단일 LINE_SEG 비-TAC TopAndBottom 그림 문단 → 새 페이지 시작
+        // HWP3 non-TAC TopAndBottom 그림의 vpos 레이아웃은 typeset.rs pushdown_h와 충돌.
+        // 단일 LINE_SEG 문단은 텍스트 높이(21px)만으로 배치 결정 → pushdown_h로 OVERFLOW 발생.
+        // 파서에서 column_type=Page를 설정해 TypesetEngine이 새 페이지에서 시작하게 한다.
+        {
+            let has_non_tac_float_pic = para.controls.iter().any(|c| {
+                if let crate::model::control::Control::Picture(pic) = c {
+                    !pic.common.treat_as_char
+                        && matches!(pic.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
+                } else {
+                    false
+                }
+            });
+            if has_non_tac_float_pic && para.line_segs.len() == 1 {
+                para.column_type = crate::model::paragraph::ColumnBreakType::Page;
             }
         }
 
@@ -1581,75 +1604,6 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
     doc.bin_data_content = doc_bin_data_content;
 
     Ok(doc)
-}
-
-/// HWP3 혼합 단락(텍스트 + Para-relative TopAndBottom 비-TAC 그림)에서
-/// 그림 구역에 겹치는 LINE_SEG를 그림 하단 아래로 재배치한다.
-///
-/// 마지막 "그림 위쪽" LINE_SEG의 line_height를 그림 하단까지의 거리로 확장하면
-/// compose_paragraph → 렌더러의 순차 y+=line_height가 그림 구역을 자동 점프한다.
-fn fixup_hwp3_mixed_para_line_segs(para: &mut crate::model::paragraph::Paragraph) {
-    use crate::model::control::Control;
-    use crate::model::shape::{TextWrap, VertRelTo};
-
-    let Some((fig_top_hu, fig_bottom_hu)) = para.controls.iter().find_map(|c| {
-        if let Control::Picture(p) = c {
-            if !p.common.treat_as_char
-                && p.common.text_wrap == TextWrap::TopAndBottom
-                && p.common.vert_rel_to == VertRelTo::Para
-                && p.common.height > 0
-            {
-                Some((
-                    p.common.vertical_offset as i32,
-                    p.common.vertical_offset as i32 + p.common.height as i32,
-                ))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }) else {
-        return;
-    };
-
-    if para.line_segs.len() <= 1 {
-        return;
-    }
-
-    // LINE_SEG 누적 위치 계산 (document.rs advance 공식과 동일)
-    let mut pos: i32 = 0;
-    let mut split_idx: Option<usize> = None;
-    for (i, seg) in para.line_segs.iter().enumerate() {
-        let advance = if seg.text_height > 0
-            && (seg.text_height as i32) < (seg.line_height as i32)
-        {
-            seg.text_height as i32 + seg.line_spacing as i32
-        } else {
-            seg.line_height as i32 + seg.line_spacing as i32
-        };
-        if pos < fig_top_hu && pos + advance > fig_top_hu {
-            split_idx = Some(i);
-            break;
-        }
-        pos += advance;
-    }
-
-    let Some(idx) = split_idx else {
-        return;
-    };
-
-    let gap = fig_bottom_hu - pos;
-    if gap <= 0 {
-        return;
-    }
-
-    // 마지막 그림-위쪽 LINE_SEG: line_height를 그림 하단까지 확장
-    // text_height=0으로 설정해 advance=lh+ls 공식을 보장
-    let seg = &mut para.line_segs[idx];
-    seg.line_height = gap;
-    seg.text_height = 0;
-    seg.line_spacing = 0;
 }
 
 #[cfg(test)]
