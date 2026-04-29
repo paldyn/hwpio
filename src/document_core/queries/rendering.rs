@@ -7,14 +7,17 @@ use crate::model::paragraph::Paragraph;
 use crate::model::page::ColumnDef;
 use crate::renderer::pagination::{Paginator, PaginationResult};
 use crate::renderer::height_measurer::{MeasuredTable, MeasuredSection, HeightMeasurer};
+use crate::renderer::layer_renderer::LayerRenderer;
 use crate::renderer::layout::LayoutEngine;
 use crate::renderer::render_tree::PageRenderTree;
 use crate::renderer::svg::SvgRenderer;
+use crate::renderer::svg_layer::SvgLayerRenderer;
 use crate::renderer::html::HtmlRenderer;
 use crate::renderer::canvas::CanvasRenderer;
 use crate::renderer::style_resolver::resolve_styles;
 use crate::renderer::composer::{compose_section, compose_paragraph, ComposedParagraph};
 use crate::renderer::page_layout::PageLayoutInfo;
+use crate::paint::{LayerBuilder, LayerOutputOptions, PageLayerTree, RenderProfile};
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
 use super::super::helpers::color_ref_to_css;
@@ -27,6 +30,22 @@ impl DocumentCore {
         Ok(tree)
     }
 
+    /// 페이지 레이어 트리를 생성하여 반환한다 (native bridge / backend replay용).
+    pub fn build_page_layer_tree(&self, page_num: u32) -> Result<PageLayerTree, HwpError> {
+        let tree = self.build_page_tree(page_num)?;
+        let _overflows = self.layout_engine.take_overflows();
+        let output_options = LayerOutputOptions {
+            show_paragraph_marks: self.show_paragraph_marks,
+            show_control_codes: self.show_control_codes,
+            show_transparent_borders: self.show_transparent_borders,
+            clip_enabled: self.clip_enabled,
+            debug_overlay: self.debug_overlay,
+        };
+        let mut builder =
+            LayerBuilder::new(RenderProfile::Screen).with_output_options(output_options);
+        Ok(builder.build(&tree))
+    }
+
     /// 바이너리 데이터를 0-based `bin_data_content` 인덱스로 반환한다.
     pub fn get_bin_data(&self, index: usize) -> Option<&[u8]> {
         self.document
@@ -36,6 +55,16 @@ impl DocumentCore {
     }
 
     pub fn render_page_svg_native(&self, page_num: u32) -> Result<String, HwpError> {
+        if matches!(
+            std::env::var("RHWP_RENDER_PATH").ok().as_deref(),
+            Some("layer-svg")
+        ) {
+            return self.render_page_svg_layer_native(page_num);
+        }
+        self.render_page_svg_legacy_native(page_num)
+    }
+
+    pub fn render_page_svg_legacy_native(&self, page_num: u32) -> Result<String, HwpError> {
         let tree = self.build_page_tree(page_num)?;
         let _overflows = self.layout_engine.take_overflows();
         let mut renderer = SvgRenderer::new();
@@ -43,6 +72,16 @@ impl DocumentCore {
         renderer.show_control_codes = self.show_control_codes;
         renderer.debug_overlay = self.debug_overlay;
         renderer.render_tree(&tree);
+        Ok(renderer.output().to_string())
+    }
+
+    pub fn render_page_svg_layer_native(&self, page_num: u32) -> Result<String, HwpError> {
+        let layer_tree = self.build_page_layer_tree(page_num)?;
+        let mut renderer = SvgLayerRenderer::new();
+        renderer.inner_mut().show_paragraph_marks = self.show_paragraph_marks;
+        renderer.inner_mut().show_control_codes = self.show_control_codes;
+        renderer.inner_mut().debug_overlay = self.debug_overlay;
+        renderer.render_page(&layer_tree)?;
         Ok(renderer.output().to_string())
     }
 
@@ -99,6 +138,10 @@ impl DocumentCore {
         let mut renderer = CanvasRenderer::new();
         renderer.render_tree(&tree);
         Ok(renderer.command_count() as u32)
+    }
+
+    pub fn get_page_layer_tree_native(&self, page_num: u32) -> Result<String, HwpError> {
+        Ok(self.build_page_layer_tree(page_num)?.to_json())
     }
 
     /// 페이지 정보 (네이티브 에러 타입)
