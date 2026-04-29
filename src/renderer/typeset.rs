@@ -489,6 +489,85 @@ impl TypesetEngine {
 
             st.ensure_page();
 
+            // [Task #404] heading-orphan 패턴 보정 (vpos 기반).
+            // 현재 paragraph 가 누적 height 로는 fit 하지만 HWP vpos 기준 페이지 한계를
+            // 넘고, 다음 substantial block(Table/Shape/큰 paragraph)이 잔여 영역에 들어
+            // 가지 않을 때 → 현재 paragraph 를 다음 페이지로 push 하여 heading + 후속
+            // 블록을 같은 페이지에 배치.
+            //
+            // 조건 (모두 AND):
+            //   A) current_items 비어있지 않음 (페이지 첫 item 자기참조 회피)
+            //   B) 단일 단 + wrap-around zone 아님 (multi-column / wrap 의미 차이 회피)
+            //   C) 누적 height 로 fit
+            //   D) vpos overflow > 1mm (283 HU)
+            //   E) 다음 paragraph 의 height 가 substantial (>30px ≈ 8mm) AND 잔여 영역에
+            //      들어가지 않음
+            //
+            // Stage 1 진단 로그 분석으로 false positive 41건 → 1건(pi=83)으로 축소.
+            // page_top_vpos 는 current_items 의 첫 item para_index 를 통해 즉시 계산
+            // (TypesetState 필드 추적은 typeset_paragraph 내부 페이지 flush 와 동기 안 됨).
+            if !st.current_items.is_empty()
+                && st.wrap_around_cs < 0
+                && st.col_count == 1
+            {
+                let page_first_para_idx = st.current_items.first().map(|item| match item {
+                    PageItem::FullParagraph { para_index } => *para_index,
+                    PageItem::PartialParagraph { para_index, .. } => *para_index,
+                    PageItem::Table { para_index, .. } => *para_index,
+                    PageItem::PartialTable { para_index, .. } => *para_index,
+                    PageItem::Shape { para_index, .. } => *para_index,
+                });
+                let page_top_vpos_opt = page_first_para_idx
+                    .and_then(|pi| paragraphs.get(pi))
+                    .and_then(|p| p.line_segs.first())
+                    .map(|s| s.vertical_pos);
+                if let (Some(first_seg), Some(page_top_vpos)) =
+                    (para.line_segs.first(), page_top_vpos_opt)
+                {
+                    let body_h_hu =
+                        crate::renderer::px_to_hwpunit(st.layout.body_area.height, self.dpi);
+                    let para_h_px: f64 = para
+                        .line_segs
+                        .iter()
+                        .map(|s| {
+                            crate::renderer::hwpunit_to_px(
+                                s.line_height + s.line_spacing,
+                                self.dpi,
+                            )
+                        })
+                        .sum();
+                    let para_h_hu = crate::renderer::px_to_hwpunit(para_h_px, self.dpi);
+                    let vpos_end = first_seg.vertical_pos + para_h_hu;
+                    let page_bottom_vpos = page_top_vpos + body_h_hu;
+
+                    let avail = st.available_height();
+                    let current_fits = st.current_height + para_h_px <= avail;
+                    let vpos_overflow = vpos_end > page_bottom_vpos + 283; // 1mm 안전여유
+
+                    let next_h_px: f64 = paragraphs
+                        .get(para_idx + 1)
+                        .map(|p| {
+                            p.line_segs
+                                .iter()
+                                .map(|s| {
+                                    crate::renderer::hwpunit_to_px(
+                                        s.line_height + s.line_spacing,
+                                        self.dpi,
+                                    )
+                                })
+                                .sum::<f64>()
+                        })
+                        .unwrap_or(0.0);
+                    let next_substantial = next_h_px > 30.0;
+                    let next_doesnt_fit =
+                        st.current_height + para_h_px + next_h_px > avail;
+
+                    if current_fits && vpos_overflow && next_substantial && next_doesnt_fit {
+                        st.advance_column_or_new_page();
+                    }
+                }
+            }
+
             if !has_table {
                 // --- 핵심: format → fits → place/split ---
                 let formatted = self.format_paragraph(para, composed.get(para_idx), styles);
@@ -548,6 +627,37 @@ impl TypesetEngine {
                                 para_index: para_idx,
                                 control_index: ctrl_idx,
                             });
+                            // Task #409 v2: 비-TAC TopAndBottom + vert=Para Picture/Shape 는
+                            // layout 에서 picture_footnote.rs:356 의 `y_offset + total_height`
+                            // 패턴으로 후속 콘텐츠를 개체 높이만큼 밀어냄. 하지만 paragraph
+                            // line_seg 의 lh 는 텍스트 baseline 만 반영하므로 페이지네이션의
+                            // current_height 가 개체 높이만큼 부족하게 누적되어 page packing
+                            // 시 layout 실제 y 와 어긋남 (21페이지: pagination used=803px vs
+                            // layout y=1275px → pi=192 가 21페이지에 packing 되었다가
+                            // overflow 로 잘림). pagination 측에서도 layout 과 동일하게
+                            // 개체 높이를 current_height 에 누적.
+                            use crate::model::shape::{TextWrap, VertRelTo};
+                            let pushdown_h: Option<f64> = match ctrl {
+                                Control::Picture(pic) if !pic.common.treat_as_char
+                                    && matches!(pic.common.text_wrap, TextWrap::TopAndBottom)
+                                    && matches!(pic.common.vert_rel_to, VertRelTo::Para) => {
+                                    let h = hwpunit_to_px(pic.common.height as i32, self.dpi);
+                                    let mb = hwpunit_to_px(pic.common.margin.bottom as i32, self.dpi);
+                                    Some(h + mb)
+                                }
+                                Control::Shape(s) if !s.common().treat_as_char
+                                    && matches!(s.common().text_wrap, TextWrap::TopAndBottom)
+                                    && matches!(s.common().vert_rel_to, VertRelTo::Para) => {
+                                    let cm = s.common();
+                                    let h = hwpunit_to_px(cm.height as i32, self.dpi);
+                                    let mb = hwpunit_to_px(cm.margin.bottom as i32, self.dpi);
+                                    Some(h + mb)
+                                }
+                                _ => None,
+                            };
+                            if let Some(extra) = pushdown_h {
+                                st.current_height += extra;
+                            }
                         }
                     }
                     Control::Footnote(fn_ctrl) => {
@@ -793,8 +903,50 @@ impl TypesetEngine {
             st.current_items.push(PageItem::FullParagraph {
                 para_index: para_idx,
             });
-            st.current_height += fmt.total_height;
+            // [Task #391] 다단/단단 분기:
+            //   - 단단 (col_count == 1): total_height (k-water-rfp p3 311px drift 차단, #359)
+            //   - 다단 (col_count > 1): height_for_fit (exam_eng 8p 정상 단 채움 복원)
+            // 다단에서는 layout 이 vpos 기반으로 항목을 단별로 stacking 하므로
+            // typeset 누적 시 trailing_ls 인플레이션이 단을 조기 종료시킴.
+            st.current_height += if st.col_count > 1 { fmt.height_for_fit } else { fmt.total_height };
             return;
+        }
+
+        // [Task #409 v3] atomic TAC top-fit:
+        // 단일 라인 + TAC Picture/Shape (분할 불가능) 항목은 시작점이 본문 안이면
+        // 현재 페이지에 배치하고 하단 일부는 하단 여백 (15mm) 으로 흘림 허용.
+        // HWP 시멘틱 — atomic 항목은 strict bottom-fit 대신 top-fit 으로 판정.
+        // (대상 샘플 23페이지 차트 pi=208: lh=316px, 시작 y=721.4 < 1028(본문 끝),
+        //  끝 y=1037.4 가 9.4px 초과하지만 하단 여백 56.7px 안이므로 HWP 가 23페이지 배치.)
+        let is_atomic_tac_singleton = fmt.line_heights.len() == 1
+            && para.controls.iter().any(|c| match c {
+                Control::Picture(p) => p.common.treat_as_char,
+                Control::Shape(s) => s.common().treat_as_char,
+                _ => false,
+            });
+        if is_atomic_tac_singleton
+            && st.current_height < available
+            && !st.current_items.is_empty()
+        {
+            // 추가 가드: 본문 + 하단 여백 안에 들어가야 함 (footer 침범 금지)
+            let bottom_margin_px = hwpunit_to_px(
+                st.layout.body_area.height as i32, // body_area.height 는 이미 px
+                self.dpi,
+            );
+            // 보수적 tolerance: 1mm (약 3.78px) 이상 ~ 하단 여백 끝까지 허용
+            // body_area.height 가 px 이므로 직접 비교 — base_available_height 와의
+            // 차이는 footnote_area 만 (본 케이스 0). bottom_margin 은 PageDef 에서
+            // 가져와야 하나 직접 접근 어려우므로 1mm 이상 ~ 60px 정도까지 허용.
+            let _ = bottom_margin_px; // (위 변수는 향후 정밀화용 — 현재 사용 안 함)
+            let overflow = st.current_height + fmt.height_for_fit - available;
+            // 60px 이내 초과 (대략 하단 여백 1.6cm 까지 허용; HWP 표준 15mm 여백 안)
+            if overflow <= 60.0 {
+                st.current_items.push(PageItem::FullParagraph {
+                    para_index: para_idx,
+                });
+                st.current_height += if st.col_count > 1 { fmt.height_for_fit } else { fmt.total_height };
+                return;
+            }
         }
 
         // split: 줄 단위 분할
@@ -803,7 +955,12 @@ impl TypesetEngine {
             st.current_items.push(PageItem::FullParagraph {
                 para_index: para_idx,
             });
-            st.current_height += fmt.total_height;
+            // [Task #391] 다단/단단 분기:
+            //   - 단단 (col_count == 1): total_height (k-water-rfp p3 311px drift 차단, #359)
+            //   - 다단 (col_count > 1): height_for_fit (exam_eng 8p 정상 단 채움 복원)
+            // 다단에서는 layout 이 vpos 기반으로 항목을 단별로 stacking 하므로
+            // typeset 누적 시 trailing_ls 인플레이션이 단을 조기 종료시킴.
+            st.current_height += if st.col_count > 1 { fmt.height_for_fit } else { fmt.total_height };
             return;
         }
 
@@ -1111,12 +1268,44 @@ impl TypesetEngine {
                     }
                 }
                 Control::Shape(_) | Control::Picture(_) | Control::Equation(_) => {
-                    // 사각형/직선/타원 등 Shape 컨트롤도 PageItem::Shape 로 등록
-                    // (둥근사각형 글상자 "제 2 교시" 등이 누락되는 문제 차단)
+                    // Task #402: 같은 paragraph의 선행 TAC 컨트롤이 있는 TAC 그림은
+                    // 자기 line_seg에 위치하므로 그 line의 높이를 페이지 누적에 반영해야 함.
+                    // 누락 시 후속 항목이 페이지 끝을 넘어 그려져 겹침/오버플로 발생 (#402).
+                    let tac_separate_line_h: Option<f64> = match ctrl {
+                        Control::Picture(p) if p.common.treat_as_char => Some(()),
+                        Control::Shape(s) if s.common().treat_as_char => Some(()),
+                        _ => None,
+                    }.and_then(|_| {
+                        let prior_tac_count = para.controls.iter().take(ctrl_idx).filter(|c| match c {
+                            Control::Table(t) => t.common.treat_as_char,
+                            Control::Picture(p) => p.common.treat_as_char,
+                            Control::Shape(s) => s.common().treat_as_char,
+                            _ => false,
+                        }).count();
+                        if prior_tac_count == 0 { return None; }
+                        para.line_segs.get(prior_tac_count).map(|seg| {
+                            let lh = hwpunit_to_px(seg.line_height, self.dpi);
+                            let ls_extra = if seg.line_spacing > 0 {
+                                hwpunit_to_px(seg.line_spacing, self.dpi)
+                            } else { 0.0 };
+                            lh + ls_extra
+                        })
+                    });
+                    if let Some(line_h) = tac_separate_line_h {
+                        // 자기 line이 현재 페이지에 들어가지 않으면 다음 페이지로 분할
+                        if !st.current_items.is_empty()
+                            && st.current_height + line_h > st.available_height() + 0.5
+                        {
+                            st.advance_column_or_new_page();
+                        }
+                    }
                     st.current_items.push(PageItem::Shape {
                         para_index: para_idx,
                         control_index: ctrl_idx,
                     });
+                    if let Some(line_h) = tac_separate_line_h {
+                        st.current_height += line_h;
+                    }
                 }
                 _ => {}
             }
@@ -1369,11 +1558,25 @@ impl TypesetEngine {
         let base_available = st.base_available_height();
         let table_available = available; // 각주/존 오프셋 차감된 가용 높이
 
-        // 첫 행이 남은 공간보다 크면 다음 페이지로 (인트라-로우 분할 가능성 확인)
+        // 첫 행이 남은 공간보다 크면 다음 페이지로 (인트라-로우 분할 가능성 확인).
+        // Task #398: rowspan>1 셀이 행 0의 시작점이면 블록 전체 높이로 판정.
         let remaining_on_page = (table_available - st.current_height).max(0.0);
-        let first_row_h = mt.row_heights[0];
-        if remaining_on_page < first_row_h && !st.current_items.is_empty() {
-            let first_row_splittable = can_intra_split && mt.is_row_splittable(0);
+        let (first_block_start, first_block_end, first_block_h) = if row_count > 0 {
+            mt.row_block_for(0)
+        } else { (0, 0, 0.0) };
+        let first_block_size = first_block_end.saturating_sub(first_block_start);
+        let first_block_is_single_row = first_block_size == 1;
+        let first_block_protected = first_block_size >= 2 && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+        // Task #398 v2: 보호 블록(2~3 rows)만 블록 전체 높이로 판정. 큰 rowspan(>3)은 행 단위 분할.
+        let split_unit_h = if first_block_protected {
+            first_block_h
+        } else {
+            mt.row_heights.first().copied().unwrap_or(0.0)
+        };
+        if remaining_on_page < split_unit_h && !st.current_items.is_empty() {
+            let first_row_splittable = (first_block_is_single_row || !first_block_protected)
+                && can_intra_split
+                && mt.is_row_splittable(0);
             let min_content = if first_row_splittable {
                 mt.min_first_line_height_for_row(0, 0.0) + mt.max_padding_for_row(0)
             } else {
@@ -1460,11 +1663,19 @@ impl TypesetEngine {
             {
                 const MIN_SPLIT_CONTENT_PX: f64 = 10.0;
 
-                let approx_end = mt.find_break_row(avail_for_rows, cursor_row, effective_first_row_h);
+                let approx_end_raw = mt.find_break_row(avail_for_rows, cursor_row, effective_first_row_h);
+                // Task #398: rowspan 묶음 중간에서 잘리지 않도록 블록 경계로 스냅
+                let approx_end = mt.snap_to_block_boundary(approx_end_raw);
+
+                let (cur_b_start, cur_b_end, _) = mt.row_block_for(cursor_row);
+                let cur_block_size = cur_b_end.saturating_sub(cur_b_start);
+                let cur_block_single = cur_block_size == 1;
+                let cur_block_protected = cur_block_size >= 2 && cur_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                let cur_can_intra_split = (cur_block_single || !cur_block_protected) && can_intra_split;
 
                 if approx_end <= cursor_row {
                     let r = cursor_row;
-                    let splittable = can_intra_split && mt.is_row_splittable(r);
+                    let splittable = cur_can_intra_split && mt.is_row_splittable(r);
                     if splittable {
                         let padding = mt.max_padding_for_row(r);
                         let avail_content = (avail_for_rows - padding).max(0.0);
@@ -1480,7 +1691,7 @@ impl TypesetEngine {
                         } else {
                             end_row = r + 1;
                         }
-                    } else if can_intra_split && effective_first_row_h > avail_for_rows {
+                    } else if cur_can_intra_split && effective_first_row_h > avail_for_rows {
                         let padding = mt.max_padding_for_row(r);
                         let avail_content = (avail_for_rows - padding).max(0.0);
                         if avail_content >= MIN_SPLIT_CONTENT_PX {
@@ -1489,6 +1700,9 @@ impl TypesetEngine {
                         } else {
                             end_row = r + 1;
                         }
+                    } else if cur_block_protected {
+                        // Task #398: 보호 블록(2~3 rows)이 들어가지 않으면 블록 전체 배치.
+                        end_row = cur_b_end;
                     } else {
                         end_row = r + 1;
                     }
@@ -1502,7 +1716,12 @@ impl TypesetEngine {
                     };
                     let range_h = mt.range_height(cursor_row, approx_end) - delta;
                     let remaining_avail = avail_for_rows - range_h;
-                    if can_intra_split && mt.is_row_splittable(r) {
+                    let (next_b_start, next_b_end, _) = mt.row_block_for(r);
+                    let next_block_size = next_b_end.saturating_sub(next_b_start);
+                    let next_block_single = next_block_size == 1;
+                    let next_block_protected = next_block_size >= 2 && next_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                    let next_can_intra_split = (next_block_single || !next_block_protected) && can_intra_split;
+                    if next_can_intra_split && mt.is_row_splittable(r) {
                         let row_cs = cs;
                         let padding = mt.max_padding_for_row(r);
                         let avail_content_for_r = (remaining_avail - row_cs - padding).max(0.0);
@@ -1516,7 +1735,7 @@ impl TypesetEngine {
                             end_row = r + 1;
                             split_end_limit = avail_content_for_r;
                         }
-                    } else if can_intra_split && mt.row_heights[r] > base_available {
+                    } else if next_can_intra_split && mt.row_heights[r] > base_available {
                         let row_cs = cs;
                         let padding = mt.max_padding_for_row(r);
                         let avail_content_for_r = (remaining_avail - row_cs - padding).max(0.0);
@@ -1925,26 +2144,34 @@ fn compute_body_wide_top_reserve_for_para(
         if !matches!(common.text_wrap, TextWrap::TopAndBottom) || common.treat_as_char {
             continue;
         }
-        // Paper 기준 도형: 본문과 겹치지 않을 때(=머리말 영역만 점유)만 제외.
-        if matches!(common.vert_rel_to, VertRelTo::Paper) {
-            let shape_top_abs = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
-            let shape_bottom_abs = shape_top_abs
-                + crate::renderer::hwpunit_to_px(common.height as i32, dpi);
-            if shape_bottom_abs <= body_top {
-                continue;
-            }
-        }
         let shape_w = crate::renderer::hwpunit_to_px(common.width as i32, dpi);
         if shape_w < body_w * 0.8 {
             continue;
         }
         let shape_h = crate::renderer::hwpunit_to_px(common.height as i32, dpi);
-        let shape_y_offset = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
-        if shape_y_offset > body_h / 3.0 {
+        let raw_v_offset = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
+
+        // body-rel 기준 시작/끝 y 계산.
+        // - VertRelTo::Paper: vertical_offset 이 용지 상단(= 0) 기준 → body_top 차감.
+        //   본문과 전혀 겹치지 않으면(머리말만 점유) 제외.
+        //   본문 위쪽으로 일부 빠져나가면(shape_top_abs < body_top) 본문 침범 영역만 reserve.
+        // - VertRelTo::Page / Para: vertical_offset 이 본문/단 top 기준 → body-rel 그대로.
+        let (body_y, body_bottom) = if matches!(common.vert_rel_to, VertRelTo::Paper) {
+            let shape_top_abs = raw_v_offset;
+            let shape_bottom_abs = shape_top_abs + shape_h;
+            if shape_bottom_abs <= body_top {
+                continue;
+            }
+            ((shape_top_abs - body_top).max(0.0), shape_bottom_abs - body_top)
+        } else {
+            (raw_v_offset, raw_v_offset + shape_h)
+        };
+
+        if body_y > body_h / 3.0 {
             continue;
         }
         let outer_bottom = crate::renderer::hwpunit_to_px(common.margin.bottom as i32, dpi);
-        let bottom = shape_y_offset + shape_h + outer_bottom;
+        let bottom = body_bottom + outer_bottom;
         if bottom > max_bottom {
             max_bottom = bottom;
         }

@@ -43,9 +43,14 @@ fn render_box(
             let text_y = y + lb.baseline;
             let esc = escape_xml(text);
             let fi = fs;
+            // CJK/한글 텍스트는 이탤릭 없이 렌더링 (수학 변수명만 이탤릭)
+            let has_cjk = text.chars().any(|c| matches!(c,
+                '\u{3000}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{AC00}'..='\u{D7AF}'
+            ));
+            let style = if has_cjk { "" } else { " font-style=\"italic\"" };
             svg.push_str(&format!(
-                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\" font-style=\"italic\"{}>{}</text>\n",
-                text_x, text_y, fi, color, EQ_FONT_FAMILY, esc,
+                "<text x=\"{:.2}\" y=\"{:.2}\" font-size=\"{:.2}\" fill=\"{}\"{}{}>{}</text>\n",
+                text_x, text_y, fi, color, style, EQ_FONT_FAMILY, esc,
             ));
         }
         LayoutKind::Number(text) => {
@@ -104,6 +109,10 @@ fn render_box(
             ));
             // 분모
             render_box(svg, denom, x, y, color, fs, italic, bold);
+        }
+        LayoutKind::Atop { top, bottom } => {
+            render_box(svg, top, x, y, color, fs, italic, bold);
+            render_box(svg, bottom, x, y, color, fs, italic, bold);
         }
         LayoutKind::Sqrt { index, body } => {
             // √ 기호
@@ -518,6 +527,29 @@ mod tests {
         let svg = render_eq("a over b");
         assert!(svg.contains("<text")); // 분자/분모 텍스트
         assert!(svg.contains("<line")); // 분수선
+    }
+
+    #[test]
+    fn test_atop_svg_has_no_fraction_line() {
+        let svg = render_eq("a atop b");
+        assert!(svg.contains("<text"));
+        assert!(!svg.contains("<line"));
+        let y_values: Vec<&str> = svg
+            .lines()
+            .filter_map(|line| line.split(" y=\"").nth(1))
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        assert_eq!(
+            y_values.len(),
+            2,
+            "ATOP은 위/아래 텍스트 2개를 렌더링해야 함: {}",
+            svg
+        );
+        assert_ne!(
+            y_values[0], y_values[1],
+            "ATOP은 두 항을 세로로 배치해야 함: {}",
+            svg
+        );
     }
 
     #[test]
