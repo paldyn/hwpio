@@ -657,9 +657,35 @@ impl LayoutEngine {
 
         // 문단 스타일에서 여백 및 정렬 정보
         let para_style = styles.para_styles.get(composed.para_style_id as usize);
-        let margin_left = para_style.map(|s| s.margin_left).unwrap_or(0.0);
-        let margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+        let box_margin_left = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+        let box_margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
         let indent = para_style.map(|s| s.indent).unwrap_or(0.0);
+
+        // 문단에 시각적 테두리(stroke 있는 border)가 있고 border_spacing 좌/우가 0인
+        // 파일의 경우, 한컴은 paragraph margin 값을 inner padding으로도 사용하여
+        // 텍스트가 테두리에 붙지 않도록 한다. rhwp는 동일 효과를 내기 위해 텍스트
+        // 위치 계산에 사용하는 margin 값에만 inner padding을 더하고, 박스(테두리)
+        // 위치는 원래 margin 값을 그대로 사용한다.
+        // 배경(fill)만 있는 문단은 영향 받지 않도록 stroke 유무를 확인한다.
+        let para_border_fill_id_pre = para_style.map(|s| s.border_fill_id).unwrap_or(0);
+        let has_visible_stroke = if para_border_fill_id_pre > 0 {
+            let idx = (para_border_fill_id_pre as usize).saturating_sub(1);
+            styles.border_styles.get(idx)
+                .map(|bs| bs.borders.iter().any(|b|
+                    !matches!(b.line_type, crate::model::style::BorderLineType::None) && b.width > 0))
+                .unwrap_or(false)
+        } else {
+            false
+        };
+        let bs_left_px = para_style.map(|s| s.border_spacing[0]).unwrap_or(0.0);
+        let bs_right_px = para_style.map(|s| s.border_spacing[1]).unwrap_or(0.0);
+        let (inner_pad_left, inner_pad_right) = if has_visible_stroke && bs_left_px == 0.0 && bs_right_px == 0.0 {
+            (box_margin_left, box_margin_right)
+        } else {
+            (0.0, 0.0)
+        };
+        let margin_left = box_margin_left + inner_pad_left;
+        let margin_right = box_margin_right + inner_pad_right;
         let alignment = para_style.map(|s| s.alignment).unwrap_or(Alignment::Justify);
         let spacing_before = para_style.map(|s| s.spacing_before).unwrap_or(0.0);
         let spacing_after = para_style.map(|s| s.spacing_after).unwrap_or(0.0);
@@ -993,7 +1019,25 @@ impl LayoutEngine {
             let total_char_count: usize = comp_line.runs.iter()
                 .map(|r| r.text.chars().filter(|c| *c != '\t').count()).sum();
 
-            let (extra_word_sp, extra_char_sp) = if needs_justify {
+            // Task #352: 라인 내 dash leader (3+ 연속 '-') 글자 수 카운트.
+            // visible_count 까지의 chars 에서만 카운트 (후행 공백 제외).
+            let count_dash_leaders = |chars: &[char]| -> usize {
+                let mut count = 0;
+                let n = chars.len();
+                let mut i = 0;
+                while i < n {
+                    if chars[i] == '-' {
+                        let mut j = i;
+                        while j < n && chars[j] == '-' { j += 1; }
+                        let run_len = j - i;
+                        if run_len >= 3 { count += run_len; }
+                        i = j;
+                    } else { i += 1; }
+                }
+                count
+            };
+
+            let (extra_word_sp, extra_char_sp, extra_dash_sp) = if needs_justify {
                 // 양쪽 정렬: 후행 공백 제외한 내부 공백에 분배
                 let all_chars: Vec<char> = comp_line.runs.iter()
                     .flat_map(|r| r.text.chars()).collect();
@@ -1002,6 +1046,7 @@ impl LayoutEngine {
                 let visible_count = all_chars.len() - trailing_spaces;
                 let interior_spaces = all_chars[..visible_count].iter()
                     .filter(|c| **c == ' ').count();
+                let leader_dashes = count_dash_leaders(&all_chars[..visible_count]);
                 if interior_spaces > 0 {
                     // 후행 공백 폭 계산
                     let trailing_width = if trailing_spaces > 0 {
@@ -1013,42 +1058,46 @@ impl LayoutEngine {
                         } else { 0.0 }
                     } else { 0.0 };
                     let effective_used = total_text_width - trailing_width;
-                    // 양쪽 정렬: 단어 간격 분배
-                    // 메트릭 차이로 text_w > avail이면 음수가 되지만,
-                    // 공백 최소 폭을 보장하여 글자 겹침 방지
-                    let raw_ews = (available_width - effective_used) / interior_spaces as f64;
-                    let space_base_w = estimate_text_width(" ", &resolved_to_text_style(
-                        styles, comp_line.runs[0].char_style_id, comp_line.runs[0].lang_index));
-                    let min_ews = -(space_base_w * 0.5); // 공백 폭의 50%까지만 축소 허용
-                    (raw_ews.max(min_ews), 0.0)
+                    let slack = available_width - effective_used;
+                    if leader_dashes > 0 && slack > 0.0 {
+                        // Task #352: 라인에 dash leader 가 있고 슬랙이 양수면
+                        // dash 가 흡수 (PDF elastic leader 동작 모방). 공백·일반
+                        // 글자 자연 폭 유지.
+                        (0.0, 0.0, slack / leader_dashes as f64)
+                    } else {
+                        // 양쪽 정렬: 단어 간격 분배 (또는 음수 슬랙 시 압축)
+                        let raw_ews = slack / interior_spaces as f64;
+                        let space_base_w = estimate_text_width(" ", &resolved_to_text_style(
+                            styles, comp_line.runs[0].char_style_id, comp_line.runs[0].lang_index));
+                        let min_ews = -(space_base_w * 0.5);
+                        (raw_ews.max(min_ews), 0.0, 0.0)
+                    }
                 } else if total_char_count > 1 {
                     // 양쪽 정렬이지만 공백 없음 (일본어/숫자 등):
-                    // 단어 간격 대신 글자 간격으로 양쪽 맞춤
-                    // 겹침 방지: 음수 자간을 평균 글자폭의 50%로 제한
-                    let raw = (available_width - total_text_width) / total_char_count as f64;
-                    let avg_char_w = total_text_width / total_char_count as f64;
-                    let min_sp = -avg_char_w * 0.5;
-                    (0.0, raw.max(min_sp))
+                    let slack = available_width - total_text_width;
+                    if leader_dashes > 0 && slack > 0.0 {
+                        (0.0, 0.0, slack / leader_dashes as f64)
+                    } else {
+                        let raw = slack / total_char_count as f64;
+                        let avg_char_w = total_text_width / total_char_count as f64;
+                        let min_sp = -avg_char_w * 0.5;
+                        (0.0, raw.max(min_sp), 0.0)
+                    }
                 } else {
-                    (0.0, 0.0)
+                    (0.0, 0.0, 0.0)
                 }
             } else if needs_distribute && total_char_count > 1 {
                 // 배분/나눔 정렬: 모든 글자에 균등 분배
-                // 겹침 방지: 음수 자간을 평균 글자폭의 50%로 제한
                 let raw = (available_width - total_text_width) / total_char_count as f64;
                 let avg_char_w = total_text_width / total_char_count as f64;
                 let min_sp = -avg_char_w * 0.5;
-                (0.0, raw.max(min_sp))
+                (0.0, raw.max(min_sp), 0.0)
             } else if total_text_width > available_width && total_char_count > 1 && !has_tabs {
                 // 비정렬(왼쪽/오른쪽/가운데) 텍스트가 오버플로우할 때 글자 간격 압축
-                // 원본 HWP line_segs가 우리 폰트 메트릭과 다를 경우
-                // 텍스트가 body_area를 넘지 않도록 균등 압축
-                // 탭이 있는 줄은 탭 정지가 절대 위치를 제어하므로 압축하지 않음
-                // 겹침 방지: 음수 자간을 평균 글자폭의 50%로 제한
                 let raw = (available_width - total_text_width) / total_char_count as f64;
                 let avg_char_w = total_text_width / total_char_count as f64;
                 let min_sp = -avg_char_w * 0.5;
-                (0.0, raw.max(min_sp))
+                (0.0, raw.max(min_sp), 0.0)
             } else if cell_ctx.is_some()
                 && total_char_count > 1
                 && !has_tabs
@@ -1092,9 +1141,9 @@ impl LayoutEngine {
                     if delta.abs() < 0.5 { break; }
                     extra += delta / total_char_count as f64;
                 }
-                (0.0, extra)
+                (0.0, extra, 0.0)
             } else {
-                (0.0, 0.0)
+                (0.0, 0.0, 0.0)
             };
 
             // 셀 underflow 분기로 자간 확장된 경우 정렬 기준 폭은 확장 후 폭이어야 함
@@ -1333,6 +1382,7 @@ impl LayoutEngine {
                 text_style.line_x_offset = x - col_area.x;
                 text_style.extra_word_spacing = extra_word_sp;
                 text_style.extra_char_spacing = extra_char_sp;
+                text_style.extra_dash_advance = extra_dash_sp;
                 let run_border_fill_id = styles.char_styles.get(run.char_style_id as usize)
                     .map(|cs| cs.border_fill_id).unwrap_or(0);
                 let full_width = if run.char_overlap.is_some() {
@@ -1702,6 +1752,8 @@ impl LayoutEngine {
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
                                             effect: pic.image_attr.effect,
+                                            brightness: pic.image_attr.brightness,
+                                            contrast: pic.image_attr.contrast,
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -1733,9 +1785,17 @@ impl LayoutEngine {
                                 let svg_content = crate::renderer::equation::svg_render::render_equation_svg(
                                     &layout_box, &color_str, font_size_px,
                                 );
-                                let eq_h = layout_box.height;
+                                // HWP 저장 높이를 우선 사용 (한컴 조판 결과 기준)
+                                let hwp_eq_h = hwpunit_to_px(eq.common.height as i32, self.dpi);
+                                let eq_h = if hwp_eq_h > 0.0 { hwp_eq_h } else { layout_box.height };
                                 // 수식 baseline을 텍스트 baseline에 맞춤
-                                let eq_y = (y + baseline - layout_box.baseline).max(y);
+                                // HWP 높이와 레이아웃 높이가 다르면 baseline도 비례 조정
+                                let eq_y = if hwp_eq_h > 0.0 && layout_box.height > 0.0 {
+                                    let scale = hwp_eq_h / layout_box.height;
+                                    (y + baseline - layout_box.baseline * scale).max(y)
+                                } else {
+                                    (y + baseline - layout_box.baseline).max(y)
+                                };
                                 let (eq_cell_idx, eq_cell_para_idx) = if let Some(ref ctx) = cell_ctx {
                                     (Some(ctx.path[0].cell_index), Some(ctx.path[0].cell_para_index))
                                 } else {
@@ -1952,6 +2012,8 @@ impl LayoutEngine {
                                         para_index: Some(para_index),
                                         control_index: Some(tac_ci),
                                         effect: pic.image_attr.effect,
+                                        brightness: pic.image_attr.brightness,
+                                        contrast: pic.image_attr.contrast,
                                         ..ImageNode::new(bin_data_id, image_data)
                                     }),
                                     BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -2035,11 +2097,19 @@ impl LayoutEngine {
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
                                             effect: pic.image_attr.effect,
+                                            brightness: pic.image_attr.brightness,
+                                            contrast: pic.image_attr.contrast,
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(img_x, img_y, tac_w, pic_h),
                                     );
                                     line_node.children.push(img_node);
+                                    // [Task #418/#376] layout_shape_item 의 Task #347 분기 (빈 문단 +
+                                    // TAC Picture 직접 emit) 와 이중 렌더링되지 않도록 인라인 위치를
+                                    // 등록한다. layout_shape_item 은 등록된 경우 push 를 스킵한다.
+                                    tree.set_inline_shape_position(
+                                        section_index, para_index, tac_ci, img_x, img_y,
+                                    );
                                     img_x += tac_w;
                                 }
                             }
@@ -2098,8 +2168,14 @@ impl LayoutEngine {
                             let svg_content = crate::renderer::equation::svg_render::render_equation_svg(
                                 &layout_box, &color_str, font_size_px,
                             );
-                            let eq_h = layout_box.height;
-                            let eq_y = (y + baseline - layout_box.baseline).max(y);
+                            let hwp_eq_h = hwpunit_to_px(eq.common.height as i32, self.dpi);
+                            let eq_h = if hwp_eq_h > 0.0 { hwp_eq_h } else { layout_box.height };
+                            let eq_y = if hwp_eq_h > 0.0 && layout_box.height > 0.0 {
+                                let scale = hwp_eq_h / layout_box.height;
+                                (y + baseline - layout_box.baseline * scale).max(y)
+                            } else {
+                                (y + baseline - layout_box.baseline).max(y)
+                            };
                             let (eq_cell_idx, eq_cell_para_idx) = if let Some(ref ctx) = cell_ctx {
                                 (Some(ctx.path[0].cell_index), Some(ctx.path[0].cell_para_index))
                             } else {
@@ -2457,7 +2533,7 @@ impl LayoutEngine {
                 let is_partial_start = start_line > 0;
                 let is_partial_end = end < composed.lines.len();
                 self.para_border_ranges.borrow_mut().push(
-                    (para_border_fill_id, col_area.x + margin_left, bg_y_start, col_area.width - margin_left - margin_right, y, top_inset, bottom_inset, is_partial_start, is_partial_end)
+                    (para_border_fill_id, col_area.x + box_margin_left, bg_y_start, col_area.width - box_margin_left - box_margin_right, y, top_inset, bottom_inset, is_partial_start, is_partial_end)
                 );
             }
         }
