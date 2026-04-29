@@ -1263,6 +1263,23 @@ pub(crate) fn parse_paragraph_list(
             para.line_segs = line_segs;
         }
 
+        // HWP3 쪽 경계: 비-TAC TopAndBottom 그림을 가진 문단에서
+        // 첫 LINE_SEG break_flag bit 0 = HWP3 word processor가 새 페이지에 배치했음.
+        // → column_type = Page로 변환하여 TypesetEngine이 자연스럽게 처리하게 함.
+        // 단순 쪽 넘김(그림 없는 heading 등)은 TypesetEngine 높이 측정으로 처리되므로 제외.
+        let has_non_tac_float_pic = para.controls.iter().any(|c| {
+            matches!(c, crate::model::control::Control::Picture(pic)
+                if !pic.common.treat_as_char
+                    && matches!(pic.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom))
+        });
+        if has_non_tac_float_pic {
+            if let Some(first_seg) = para.line_segs.first() {
+                if first_seg.tag & 0x01 != 0 {
+                    para.column_type = crate::model::paragraph::ColumnBreakType::Page;
+                }
+            }
+        }
+
         // HWP3 혼합 단락: Para-relative TopAndBottom 그림 구역 내 줄을 그림 하단 아래로 재배치
         fixup_hwp3_mixed_para_line_segs(&mut para);
 
