@@ -609,7 +609,7 @@ pub(crate) fn parse_paragraph_list(
                                     }
 
                                     doc_border_fills.push(border_fill);
-                                    cell.border_fill_id = (doc_border_fills.len() - 1) as u16;
+                                    cell.border_fill_id = doc_border_fills.len() as u16;
 
                                     // 중복된 스팬 계산 제거됨
                                     
