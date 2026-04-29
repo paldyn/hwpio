@@ -169,9 +169,22 @@ See the [roadmap document](mydocs/eng/report/rhwp-milestone.md) for details.
 - vpos-based paragraph position correction
 
 ### Output
-- SVG export (CLI)
+- SVG export (CLI, legacy + layer replay)
 - Canvas rendering (WASM/Web)
 - Debug overlay (paragraph/table boundaries + indices + y-coordinates)
+
+### Multi-Renderer Backends
+- `PageRenderTree` can be lowered into a `PageLayerTree` paint IR before backend replay.
+- P1 public surfaces are Rust native `DocumentCore::build_page_layer_tree(page)` and WASM `getPageLayerTree(page)`.
+- Layer JSON starts at `schemaVersion: 1`, uses `unit: "px"`, and uses `coordinateSystem: "page-top-left"` to match the existing page render coordinates.
+- Compatible schema changes should be additive; incompatible JSON shape changes require a schema version bump.
+- **Legacy SVG** remains the default compatibility output.
+- **Layered SVG** can be exercised with `RHWP_RENDER_PATH=layer-svg`.
+- The layered SVG path is a transition adapter that expands `PageLayerTree` back into the existing SVG renderer.
+- Browser/native Canvas paths still use the legacy `PageRenderTree` renderer in this phase.
+- C ABI export is intentionally left for a later PR.
+- `ResourceArena` is reserved in `PageLayerTree`; binary resource interning is not implemented yet.
+- This phase establishes the frontend/backend boundary for later CanvasKit and native Skia backends.
 
 ### Web Editor
 - Text editing (insert, delete, undo/redo)
