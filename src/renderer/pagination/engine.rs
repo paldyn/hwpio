@@ -604,7 +604,9 @@ impl Paginator {
         };
 
         // 다단 레이아웃에서 문단 내 단 경계 감지
-        let col_breaks = if st.col_count > 1 && st.current_column == 0 && st.on_first_multicolumn_page {
+        // [Task #459] on_first_multicolumn_page 가드 제거: 다단 구역이 여러 페이지에 걸칠 때
+        // 후속 페이지에서도 LINE_SEG vpos-reset 으로 인코딩된 단 경계를 인식해야 함.
+        let col_breaks = if st.col_count > 1 && st.current_column == 0 {
             Self::detect_column_breaks_in_paragraph(para)
         } else {
             vec![0]
@@ -983,10 +985,37 @@ impl Paginator {
                     );
                 }
                 Control::Shape(shape_obj) => {
-                    st.current_items.push(PageItem::Shape {
+                    // [Issue #476] treat_as_char Shape 는 박스가 속한 line 이 라우팅된 페이지/단에 등록.
+                    // paragraph 가 페이지 분할되면 process_controls 시점에 st.current_items 는 마지막
+                    // 페이지 상태이므로, 그대로 push 하면 박스가 잘못된 페이지에 떠 있게 된다.
+                    let routed = if shape_obj.common().treat_as_char {
+                        super::find_inline_control_target_page(
+                            &st.pages, &st.current_items, para_idx, ctrl_idx, para,
+                        )
+                    } else {
+                        None
+                    };
+                    let item = PageItem::Shape {
                         para_index: para_idx,
                         control_index: ctrl_idx,
-                    });
+                    };
+                    match routed {
+                        Some((page_idx, col_idx)) => {
+                            // 이전 페이지의 해당 단 items 에 직접 push
+                            if let Some(page) = st.pages.get_mut(page_idx) {
+                                if let Some(col) = page.column_contents.get_mut(col_idx) {
+                                    col.items.push(item);
+                                } else {
+                                    st.current_items.push(item);
+                                }
+                            } else {
+                                st.current_items.push(item);
+                            }
+                        }
+                        None => {
+                            st.current_items.push(item);
+                        }
+                    }
                     // 글상자 내 각주 수집
                     if let Some(text_box) = shape_obj.drawing().and_then(|d| d.text_box.as_ref()) {
                         for (tp_idx, tp) in text_box.paragraphs.iter().enumerate() {
@@ -1496,7 +1525,10 @@ impl Paginator {
         } else { (0, 0, 0.0) };
         let first_block_size = first_block_end.saturating_sub(first_block_start);
         let first_block_is_single_row = first_block_size == 1;
-        let first_block_protected = first_block_size >= 2 && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+        // [Task #474] RowBreak 표는 보호 블록 정책 비적용 (HWP 행 경계 분할 정책 정합)
+        let first_block_protected = !mt.allows_row_break_split()
+            && first_block_size >= 2
+            && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
         let can_intra_split_early = !mt.cells.is_empty();
         let split_unit_h = if first_block_protected {
             first_block_h
@@ -1624,7 +1656,10 @@ impl Paginator {
                 let (cur_b_start, cur_b_end, _) = mt.row_block_for(cursor_row);
                 let cur_block_size = cur_b_end.saturating_sub(cur_b_start);
                 let cur_block_single = cur_block_size == 1;
-                let cur_block_protected = cur_block_size >= 2 && cur_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+                let cur_block_protected = !mt.allows_row_break_split()
+                    && cur_block_size >= 2
+                    && cur_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
                 // 큰 블록(>3) 또는 단일 행은 분할 가능; 보호 블록(2~3)은 분할 불가
                 let cur_can_intra_split = (cur_block_single || !cur_block_protected) && can_intra_split;
 
@@ -1677,7 +1712,10 @@ impl Paginator {
                     let (next_b_start, next_b_end, _) = mt.row_block_for(r);
                     let next_block_size = next_b_end.saturating_sub(next_b_start);
                     let next_block_single = next_block_size == 1;
-                    let next_block_protected = next_block_size >= 2 && next_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                    // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+                    let next_block_protected = !mt.allows_row_break_split()
+                        && next_block_size >= 2
+                        && next_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
                     let next_can_intra_split = (next_block_single || !next_block_protected) && can_intra_split;
                     if next_can_intra_split && mt.is_row_splittable(r) {
                         let row_cs = cs;

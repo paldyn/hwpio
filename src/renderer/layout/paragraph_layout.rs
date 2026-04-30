@@ -9,7 +9,7 @@ use super::super::page_layout::LayoutRect;
 use super::super::height_measurer::MeasuredTable;
 use super::super::composer::{ComposedParagraph, compose_paragraph};
 use super::super::style_resolver::ResolvedStyleSet;
-use super::super::{TextStyle, ShapeStyle, TabStop, hwpunit_to_px, format_number, NumberFormat as NumFmt, AutoNumberCounter};
+use super::super::{TextStyle, ShapeStyle, TabStop, hwpunit_to_px, px_to_hwpunit, format_number, NumberFormat as NumFmt, AutoNumberCounter};
 use super::{LayoutEngine, CellContext};
 use super::text_measurement::{resolved_to_text_style, estimate_text_width, compute_char_positions, extract_tab_leaders_with_extended, find_next_tab_stop};
 use super::border_rendering::create_border_line_nodes;
@@ -693,6 +693,25 @@ impl LayoutEngine {
         let tab_stops = para_style.map(|s| s.tab_stops.clone()).unwrap_or_default();
         let auto_tab_right = para_style.map(|s| s.auto_tab_right).unwrap_or(false);
 
+        // [Task #489] 비-TAC Picture/Shape with wrap=Square 보유 여부.
+        // 한컴은 어울림 그림이 있는 paragraph 의 LINE_SEG.cs/sw 를 그림 너비만큼 좁혀
+        // 인코딩한다. 표 Square wrap (#362/#439/#463) 은 caller 가 col_area 를 좁혀
+        // wrap_area 로 우회하지만, Picture/Shape 는 호스트 paragraph 와 같은 paragraph
+        // 에 anchor 되므로 별도 우회 경로가 없다. 이 플래그가 true 면 줄별 루프에서
+        // LINE_SEG.cs/sw 를 effective col_x/col_width 로 사용한다.
+        let has_picture_shape_square_wrap = para
+            .map(|p| p.controls.iter().any(|c| {
+                use crate::model::shape::TextWrap;
+                let common_opt = match c {
+                    Control::Picture(pic) if !pic.common.treat_as_char => Some(&pic.common),
+                    Control::Shape(s) if !s.common().treat_as_char => Some(s.common()),
+                    _ => None,
+                };
+                common_opt.map(|cm| matches!(cm.text_wrap, TextWrap::Square)).unwrap_or(false)
+            }))
+            .unwrap_or(false);
+        let col_area_w_hu = px_to_hwpunit(col_area.width, self.dpi);
+
         // treat_as_char 컨트롤의 px 폭 목록 (절대 char 위치, px 폭, control_index) — 정렬 보장
         let tac_offsets_px: Vec<(usize, f64, usize)> = {
             let mut v: Vec<(usize, f64, usize)> = composed.tac_controls.iter()
@@ -818,6 +837,22 @@ impl LayoutEngine {
             };
             let effective_margin_left = margin_left + line_indent;
 
+            // [Task #489] Picture/Shape Square wrap (어울림) 시 LINE_SEG.cs/sw 적용.
+            // 한컴이 인코딩한 정답값을 그대로 사용 (휴리스틱 없음).
+            // 표 Square wrap 케이스는 caller 가 col_area 를 이미 wrap_area 로 좁혀
+            // 호출하므로 segment_width ≈ col_area_w_hu → 조건 미발동 (회귀 차단).
+            // 200 HU 임계값은 paragraph_layout 의 multi-col filter 와 동일 (페이지네이션 노이즈 제거).
+            let (effective_col_x, effective_col_w) = if has_picture_shape_square_wrap
+                && comp_line.segment_width > 0
+                && comp_line.segment_width < col_area_w_hu - 200
+            {
+                let cs_px = hwpunit_to_px(comp_line.column_start, self.dpi);
+                let sw_px = hwpunit_to_px(comp_line.segment_width, self.dpi);
+                (col_area.x + cs_px, sw_px)
+            } else {
+                (col_area.x, col_area.width)
+            };
+
             // 인라인 Shape가 있는 줄: 텍스트 y를 Shape 하단 baseline에 맞춤
             let text_y = if has_tac_shape && raw_lh > max_fs * 1.5 {
                 // raw_lh는 Shape 높이 포함 원본 줄 높이, line_height는 폰트 기반 보정 높이
@@ -847,9 +882,9 @@ impl LayoutEngine {
                     TextLineNode::with_para_vpos(line_height, baseline, section_index, para_index, line_idx as u32, vpos)
                 }),
                 BoundingBox::new(
-                    col_area.x + effective_margin_left,
+                    effective_col_x + effective_margin_left,
                     text_y,
-                    col_area.width - effective_margin_left - margin_right,
+                    effective_col_w - effective_margin_left - margin_right,
                     line_height,
                 ),
             );
@@ -857,7 +892,7 @@ impl LayoutEngine {
             let inline_offset = if line_idx == start_line { first_line_x_offset } else { 0.0 };
             // 번호/글머리표 마커: 모든 줄에서 마커 폭만큼 가용폭 차감 (행잉 인덴트)
             let num_offset = if numbering_width > 0.0 { numbering_width } else { 0.0 };
-            let available_width = col_area.width - effective_margin_left - margin_right - inline_offset - num_offset;
+            let available_width = effective_col_w - effective_margin_left - margin_right - inline_offset - num_offset;
 
 
             // 텍스트 정렬을 위한 전체 줄 폭 계산 (자연 폭, 추가 간격 미포함)
@@ -1164,15 +1199,15 @@ impl LayoutEngine {
             } else { 0.0 };
             let x_start = match alignment {
                 Alignment::Center => {
-                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
+                    effective_col_x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
                 }
                 Alignment::Distribute if !needs_distribute || total_char_count <= 1 => {
-                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
+                    effective_col_x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
                 }
                 Alignment::Right => {
-                    col_area.x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0)
+                    effective_col_x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0)
                 }
-                _ => col_area.x + effective_margin_left + inline_offset + num_x_offset, // Left, Justify, Split, Distribute(분배중)
+                _ => effective_col_x + effective_margin_left + inline_offset + num_x_offset, // Left, Justify, Split, Distribute(분배중)
             };
 
             // TextRun 노드 생성
@@ -1680,18 +1715,9 @@ impl LayoutEngine {
                     let mut seg_start = 0usize;
                     let mut sub_char_offset = char_offset;
 
-                    // 인라인 Shape 중 글상자(TextBox)가 있는 경우에만 텍스트 스킵
-                    // (글상자 텍스트는 table_layout에서 렌더링)
-                    // 단순 도형(사각형, 원 등)은 TextBox가 없으므로 텍스트를 여기서 렌더링
-                    let skip_text_for_inline_shape = has_tac_shape && para.map(|p| {
-                        tac_offsets_px.iter().any(|(_, _, ci)| {
-                            if let Some(Control::Shape(s)) = p.controls.get(*ci) {
-                                s.drawing().map(|d| d.text_box.is_some()).unwrap_or(false)
-                            } else {
-                                false
-                            }
-                        })
-                    }).unwrap_or(false);
+                    // [Task #455] 외부 문단 본문 텍스트는 글상자 유무와 무관하게 항상 렌더한다.
+                    // 글상자(TextBox) 자체와 그 내부 텍스트("개화" 같은)는
+                    // shape_layout 이 inline_shape_position 을 보고 별도 패스에서 렌더하므로 중복되지 않는다.
 
                     for &(tac_rel, tac_w, tac_ci) in &run_tacs {
                         // tac 앞 텍스트 세그먼트 렌더링
@@ -1706,7 +1732,7 @@ impl LayoutEngine {
                             }
                             let seg_w = estimate_text_width(&seg_text, &seg_style);
                             let seg_char_count = tac_rel - seg_start;
-                            if !skip_text_for_inline_shape {
+                            {
                                 let sub_run_id = tree.next_id();
                                 let sub_run_node = RenderNode::new(
                                     sub_run_id,
@@ -1744,6 +1770,17 @@ impl LayoutEngine {
                                     let bin_data_id = pic.image_attr.bin_data_id;
                                     let image_data = find_bin_data(bdc, bin_data_id)
                                         .map(|c| c.data.clone());
+                                    let crop = {
+                                        let c = &pic.crop;
+                                        if c.right > c.left && c.bottom > c.top
+                                            && (c.left != 0 || c.top != 0 || c.right != 0 || c.bottom != 0) {
+                                            Some((c.left, c.top, c.right, c.bottom))
+                                        } else { None }
+                                    };
+                                    let original_size_hu = if pic.shape_attr.original_width > 0
+                                        && pic.shape_attr.original_height > 0 {
+                                        Some((pic.shape_attr.original_width, pic.shape_attr.original_height))
+                                    } else { None };
                                     let img_id = tree.next_id();
                                     let img_node = RenderNode::new(
                                         img_id,
@@ -1751,6 +1788,8 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            crop,
+                                            original_size_hu,
                                             effect: pic.image_attr.effect,
                                             brightness: pic.image_attr.brightness,
                                             contrast: pic.image_attr.contrast,
@@ -1897,7 +1936,7 @@ impl LayoutEngine {
                             seg_style.tab_leaders = extract_tab_leaders_with_extended(&remaining, &positions, &seg_style, &composed.tab_extended);
                         }
                         let seg_w = estimate_text_width(&remaining, &seg_style);
-                        if !skip_text_for_inline_shape {
+                        {
                             let sub_run_id = tree.next_id();
                             let sub_run_node = RenderNode::new(
                                 sub_run_id,
@@ -2004,6 +2043,17 @@ impl LayoutEngine {
                                 let bin_data_id = pic.image_attr.bin_data_id;
                                 let image_data = find_bin_data(bdc, bin_data_id)
                                     .map(|c| c.data.clone());
+                                let crop = {
+                                    let c = &pic.crop;
+                                    if c.right > c.left && c.bottom > c.top
+                                        && (c.left != 0 || c.top != 0 || c.right != 0 || c.bottom != 0) {
+                                        Some((c.left, c.top, c.right, c.bottom))
+                                    } else { None }
+                                };
+                                let original_size_hu = if pic.shape_attr.original_width > 0
+                                    && pic.shape_attr.original_height > 0 {
+                                    Some((pic.shape_attr.original_width, pic.shape_attr.original_height))
+                                } else { None };
                                 let img_id = tree.next_id();
                                 let img_node = RenderNode::new(
                                     img_id,
@@ -2011,6 +2061,8 @@ impl LayoutEngine {
                                         section_index: Some(section_index),
                                         para_index: Some(para_index),
                                         control_index: Some(tac_ci),
+                                        crop,
+                                        original_size_hu,
                                         effect: pic.image_attr.effect,
                                         brightness: pic.image_attr.brightness,
                                         contrast: pic.image_attr.contrast,
@@ -2080,15 +2132,37 @@ impl LayoutEngine {
                             }
                             _ => 0.0, // Left, Justify
                         };
-                        let mut img_x = col_area.x + effective_margin_left + align_offset;
+                        let mut img_x = effective_col_x + effective_margin_left + align_offset;
                         for &(_, tac_w, tac_ci) in &tac_offsets_px {
                             if let Some(ctrl) = p.controls.get(tac_ci) {
+                                // [Issue #476] 빈 문단 + 인라인 Shape: inline_pos 등록 후 shape_layout 이 그리도록 위임.
+                                // 등록하지 않으면 layout_shape 가 inline_pos=None 으로 받아 fallback 위치에 그리거나,
+                                // #476 의 fallback 차단 분기로 박스가 누락된다.
+                                if let Control::Shape(shape) = ctrl {
+                                    let common = shape.common();
+                                    let shape_h = hwpunit_to_px(common.height as i32, self.dpi);
+                                    let shape_y = (y + baseline - shape_h).max(y);
+                                    tree.set_inline_shape_position(section_index, para_index, tac_ci, img_x, shape_y);
+                                    img_x += tac_w;
+                                    continue;
+                                }
                                 if let Control::Picture(pic) = ctrl {
                                     let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
                                     let img_y = (y + baseline - pic_h).max(y);
                                     let bin_data_id = pic.image_attr.bin_data_id;
                                     let image_data = find_bin_data(bdc, bin_data_id)
                                         .map(|c| c.data.clone());
+                                    let crop = {
+                                        let c = &pic.crop;
+                                        if c.right > c.left && c.bottom > c.top
+                                            && (c.left != 0 || c.top != 0 || c.right != 0 || c.bottom != 0) {
+                                            Some((c.left, c.top, c.right, c.bottom))
+                                        } else { None }
+                                    };
+                                    let original_size_hu = if pic.shape_attr.original_width > 0
+                                        && pic.shape_attr.original_height > 0 {
+                                        Some((pic.shape_attr.original_width, pic.shape_attr.original_height))
+                                    } else { None };
                                     let img_id = tree.next_id();
                                     let img_node = RenderNode::new(
                                         img_id,
@@ -2096,6 +2170,8 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            crop,
+                                            original_size_hu,
                                             effect: pic.image_attr.effect,
                                             brightness: pic.image_attr.brightness,
                                             contrast: pic.image_attr.contrast,
@@ -2153,7 +2229,25 @@ impl LayoutEngine {
                 let line_end_char = composed.lines.get(line_idx + 1)
                     .map(|l| l.char_start)
                     .unwrap_or(usize::MAX);
-                let mut inline_x = col_area.x + effective_margin_left;
+                // [Task #490] paragraph alignment 적용. 셀에 텍스트 없이 수식만 있을 때
+                // (text_len=0 + ctrls=1+) 정렬이 무시되어 좌측 고정되던 결함 수정.
+                // exam_science p1 3번 표 (이온 결합 화합물) 셀 7/11 의 28/36 수식이
+                // 좌측 정렬 → 셀 ParaShape align 따라 중앙/우측 정렬 적용.
+                // [Task #489] effective_col_x 적용 (Picture+Square wrap LINE_SEG cs/sw 좁은 영역).
+                let line_tac_width: f64 = tac_offsets_px.iter()
+                    .filter(|(pos, _, _)| *pos >= line_start_char && *pos < line_end_char)
+                    .map(|(_, w, _)| *w)
+                    .sum();
+                let align_offset = match alignment {
+                    Alignment::Center | Alignment::Distribute => {
+                        (available_width - line_tac_width).max(0.0) / 2.0
+                    }
+                    Alignment::Right => {
+                        (available_width - line_tac_width).max(0.0)
+                    }
+                    _ => 0.0,
+                };
+                let mut inline_x = effective_col_x + effective_margin_left + align_offset;
                 for &(tac_pos, tac_w, tac_ci) in &tac_offsets_px {
                     if tac_pos < line_start_char || tac_pos >= line_end_char {
                         continue;
@@ -2504,15 +2598,15 @@ impl LayoutEngine {
             }
 
             col_node.children.push(line_node);
-            // 줄간격 적용 — typeset 의 height_for_fit 모델과 정합:
-            //   - 셀 내 마지막 문단의 마지막 줄: 기존대로 trailing 제외
-            //   - 일반 문단의 마지막 visible 줄(=문단 전체 마지막 줄): trailing 제외 (Task #332)
-            //   - partial 문단(split 된 경우)의 마지막 visible 줄: trailing 유지 (다음 단의 첫 줄과의 간격)
+            // 줄간격 적용:
+            //   - 셀 내 마지막 문단의 마지막 줄: trailing line_spacing 제외
+            //     (셀 높이 모델은 trailing 미포함, 셀 내부와 정합)
+            //   - 그 외 모든 줄(본문 단락의 마지막 줄 포함): trailing line_spacing 가산
+            //     pagination/engine.rs 의 current_height 누적(para_height = sum(lh+ls))
+            //     과 정합. (Task #452: 이전 #332 의 layout-only trailing 제외 →
+            //     pagination 과 1 ls drift 발생 → 회복)
             let is_cell_last_line = is_last_cell_para && line_idx + 1 >= end;
-            let is_para_last_line = cell_ctx.is_none()
-                && line_idx + 1 == end
-                && end == composed.lines.len();
-            if (is_cell_last_line && cell_ctx.is_some()) || is_para_last_line {
+            if is_cell_last_line && cell_ctx.is_some() {
                 y += line_height;
             } else {
                 let line_spacing_px = hwpunit_to_px(comp_line.line_spacing, self.dpi);
@@ -2521,8 +2615,11 @@ impl LayoutEngine {
         }
 
         // 문단 테두리/배경 범위 수집 (build_single_column에서 연속 그룹으로 병합 렌더링)
-        // margin_left/margin_right를 반영하여 박스 위치·폭 조정
-        if para_border_fill_id > 0 {
+        // margin_left/margin_right를 반영하여 박스 위치·폭 조정.
+        // Task #463: 셀 안 단락은 본문 큐에 leakage 하지 않도록 cell_ctx 게이팅.
+        // 셀 외곽선은 별도 경로(table_layout/border_rendering)에서 처리되므로
+        // 본문 단락의 연속 외곽선 merge 가 셀 단락 좌표/시그니처에 의해 깨지지 않게 한다.
+        if para_border_fill_id > 0 && cell_ctx.is_none() {
             let bg_height = y - bg_y_start;
             if bg_height > 0.0 {
                 // margin_left/margin_right는 이미 px 단위 (style_resolver에서 변환됨)
@@ -2532,8 +2629,19 @@ impl LayoutEngine {
                 // 컬럼/페이지 wrap 시 inner edge 미렌더링용 partial 플래그
                 let is_partial_start = start_line > 0;
                 let is_partial_end = end < composed.lines.len();
+                // Task #463: wrap=Square 호스트 문단의 텍스트는 좁은 wrap_area 에서
+                // 렌더링되지만 외곽선은 원래 col_area 너비로 그려야 floating 표를
+                // 박스가 둘러쌈. layout_wrap_around_paras 가 override 를 설정.
+                // override 가 활성된 경우(wrap host), 박스 우측은 floating 표의 끝
+                // 까지 확장된 width 그대로 사용 — margin_right 차감하지 않는다
+                // (그렇지 않으면 표가 박스 밖으로 다시 튀어나옴).
+                let (box_x, box_w) = if let Some((ox, ow)) = self.border_box_override.get() {
+                    (ox + box_margin_left, ow - box_margin_left)
+                } else {
+                    (col_area.x + box_margin_left, col_area.width - box_margin_left - box_margin_right)
+                };
                 self.para_border_ranges.borrow_mut().push(
-                    (para_border_fill_id, col_area.x + box_margin_left, bg_y_start, col_area.width - box_margin_left - box_margin_right, y, top_inset, bottom_inset, is_partial_start, is_partial_end)
+                    (para_border_fill_id, box_x, bg_y_start, box_w, y, top_inset, bottom_inset, is_partial_start, is_partial_end, para_index)
                 );
             }
         }

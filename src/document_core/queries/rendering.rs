@@ -133,6 +133,13 @@ impl DocumentCore {
 
     /// Canvas 렌더링 (네이티브 에러 타입)
     pub fn render_page_canvas_native(&self, page_num: u32) -> Result<u32, HwpError> {
+        let tree = self.build_page_layer_tree(page_num)?;
+        let mut renderer = CanvasRenderer::new();
+        renderer.render_page(&tree)?;
+        Ok(renderer.command_count() as u32)
+    }
+
+    pub fn render_page_canvas_legacy_native(&self, page_num: u32) -> Result<u32, HwpError> {
         let tree = self.build_page_tree(page_num)?;
         let _overflows = self.layout_engine.take_overflows();
         let mut renderer = CanvasRenderer::new();
@@ -1008,9 +1015,26 @@ impl DocumentCore {
                                 master_page_index: replace_idx,
                             });
                         }
-                        // 겹침형 확장은 extra로 추가
-                        if !overlap_exts.is_empty() {
-                            page.extra_master_pages = overlap_exts.iter()
+                        // 겹침형 확장:
+                        // - apply_to 가 active 와 동일: 같은 위치(헤더/푸터/배경) 컨텐츠가 충돌 → active 대체
+                        //   (HWP 작성자가 마지막 쪽 전용 헤더로 의도. 한컴 PDF 출력 동작과 일치)
+                        // - apply_to 가 다름(예: active=Odd, 확장=Both): 보조 컨텐츠 추가 → extra
+                        let active_apply = page.active_master_page.as_ref()
+                            .and_then(|mp_ref| mps.get(mp_ref.master_page_index))
+                            .map(|m| m.apply_to);
+                        let mut remaining_overlap_exts: Vec<usize> = Vec::new();
+                        for &i in &overlap_exts {
+                            if Some(mps[i].apply_to) == active_apply {
+                                page.active_master_page = Some(MasterPageRef {
+                                    section_index: idx,
+                                    master_page_index: i,
+                                });
+                            } else {
+                                remaining_overlap_exts.push(i);
+                            }
+                        }
+                        if !remaining_overlap_exts.is_empty() {
+                            page.extra_master_pages = remaining_overlap_exts.iter()
                                 .map(|&mi| MasterPageRef { section_index: idx, master_page_index: mi })
                                 .collect();
                         }
@@ -1405,7 +1429,8 @@ impl DocumentCore {
                                 out.push_str(&format!("    Table          pi={} ci={}  {}  {}\n",
                                     para_index, control_index, table_info, vpos_info));
                             }
-                            PageItem::PartialTable { para_index, control_index, start_row, end_row, is_continuation, .. } => {
+                            PageItem::PartialTable { para_index, control_index, start_row, end_row, is_continuation,
+                                                     split_start_content_offset, split_end_content_limit } => {
                                 let table_info = paragraphs.get(*para_index)
                                     .and_then(|p| p.controls.get(*control_index))
                                     .map(|c| {
@@ -1415,8 +1440,14 @@ impl DocumentCore {
                                     })
                                     .unwrap_or_default();
                                 let vpos_info = format_vpos_range(paragraphs.get(*para_index), None, None);
-                                out.push_str(&format!("    PartialTable   pi={} ci={}  rows={}..{}  cont={}  {}  {}\n",
-                                    para_index, control_index, start_row, end_row, is_continuation, table_info, vpos_info));
+                                // [Task #431] 분할 표 진단 정보 — split_start/end 가 0 이 아니면 셀 내 분할
+                                let split_info = if *split_start_content_offset > 0.0 || *split_end_content_limit > 0.0 {
+                                    format!("  split_start={:.1} split_end={:.1}", split_start_content_offset, split_end_content_limit)
+                                } else {
+                                    String::new()
+                                };
+                                out.push_str(&format!("    PartialTable   pi={} ci={}  rows={}..{}  cont={}  {}  {}{}\n",
+                                    para_index, control_index, start_row, end_row, is_continuation, table_info, vpos_info, split_info));
                             }
                             PageItem::Shape { para_index, control_index } => {
                                 let shape_info = paragraphs.get(*para_index)

@@ -411,8 +411,18 @@ impl TypesetEngine {
                 let curr_first_vpos = para.line_segs.first().map(|s| s.vertical_pos);
                 let prev_last_vpos = prev_para.line_segs.last().map(|s| s.vertical_pos);
                 if let (Some(cv), Some(pv)) = (curr_first_vpos, prev_last_vpos) {
-                    // 현재 문단의 vpos가 0 이고 직전 문단의 마지막 vpos가 의미있게 큰 경우 (5000 HU ≈ 1.76mm)
-                    if cv == 0 && pv > 5000 {
+                    // 현재 문단의 vpos가 직전 문단의 마지막 vpos보다 작은 경우 — 컬럼/페이지 reset 시그널.
+                    // - 단일 단: cv == 0 만 인정 (Task #321 보수적 기준 유지).
+                    //   단일 단에서 cv != 0 의 cv < pv 는 partial-table split 의 LAYOUT 잔재로
+                    //   해석되어야 함 (issue #418 / hwpspec pi=78→pi=79).
+                    // - 다단: cv != 0 도 인정 (Task #470). 컬럼 헤더 오프셋 (cv=9014 등) 으로
+                    //   시작하는 새 컬럼의 reset 을 감지.
+                    let trigger = if st.col_count > 1 {
+                        cv < pv && pv > 5000
+                    } else {
+                        cv == 0 && pv > 5000
+                    };
+                    if trigger {
                         st.advance_column_or_new_page();
                     }
                 }
@@ -436,7 +446,11 @@ impl TypesetEngine {
                 } else {
                     let next_first_vpos = next_para.line_segs.first().map(|s| s.vertical_pos);
                     let curr_last_vpos = para.line_segs.last().map(|s| s.vertical_pos);
-                    matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl)) if nv == 0 && cl > 5000)
+                    // [Task #470] 다단 섹션에서는 nv == 0 → nv < cl 로 완화 (컬럼 헤더 오프셋).
+                    // 단일 단에서는 partial-table split 회귀 (issue #418) 회피 위해 nv == 0 유지.
+                    let multi_col = st.col_count > 1;
+                    matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl))
+                        if (if multi_col { nv < cl } else { nv == 0 }) && cl > 5000)
                 }
             } else { false };
 
@@ -623,10 +637,39 @@ impl TypesetEngine {
                 match ctrl {
                     Control::Shape(_) | Control::Picture(_) | Control::Equation(_) => {
                         if !has_table {
-                            st.current_items.push(PageItem::Shape {
+                            // [Issue #476] treat_as_char Shape 는 박스가 속한 line 이 라우팅된
+                            // 페이지/단에 등록. paragraph 가 페이지 분할되면 이 시점의
+                            // st.current_items 는 마지막 페이지 상태이므로, 그대로 push 하면
+                            // 박스가 잘못된 페이지에 떠 있게 된다.
+                            let is_tac_shape = matches!(ctrl,
+                                Control::Shape(s) if s.common().treat_as_char);
+                            let routed = if is_tac_shape {
+                                crate::renderer::pagination::find_inline_control_target_page(
+                                    &st.pages, &st.current_items, para_idx, ctrl_idx, para,
+                                )
+                            } else {
+                                None
+                            };
+                            let item = PageItem::Shape {
                                 para_index: para_idx,
                                 control_index: ctrl_idx,
-                            });
+                            };
+                            match routed {
+                                Some((page_idx, col_idx)) => {
+                                    if let Some(page) = st.pages.get_mut(page_idx) {
+                                        if let Some(col) = page.column_contents.get_mut(col_idx) {
+                                            col.items.push(item);
+                                        } else {
+                                            st.current_items.push(item);
+                                        }
+                                    } else {
+                                        st.current_items.push(item);
+                                    }
+                                }
+                                None => {
+                                    st.current_items.push(item);
+                                }
+                            }
                             // Task #409 v2: 비-TAC TopAndBottom + vert=Para Picture/Shape 는
                             // layout 에서 picture_footnote.rs:356 의 `y_offset + total_height`
                             // 패턴으로 후속 콘텐츠를 개체 높이만큼 밀어냄. 하지만 paragraph
@@ -853,7 +896,9 @@ impl TypesetEngine {
         }
 
         // 다단 레이아웃에서 문단 내 단 경계 감지
-        let col_breaks = if st.col_count > 1 && st.current_column == 0 && st.on_first_multicolumn_page {
+        // [Task #459] on_first_multicolumn_page 가드 제거: 다단 구역이 여러 페이지에 걸칠 때
+        // 후속 페이지에서도 LINE_SEG vpos-reset 으로 인코딩된 단 경계를 인식해야 함.
+        let col_breaks = if st.col_count > 1 && st.current_column == 0 {
             Self::detect_column_breaks_in_paragraph(para)
         } else {
             vec![0]
@@ -1415,25 +1460,45 @@ impl TypesetEngine {
             0
         };
 
+        // [Task #439] Square wrap (어울림) 표 식별.
+        // 어울림 표는 호스트 문단 텍스트와 같은 수직 영역에 배치되므로
+        // current_height 누적은 max(host_text, v_off + table) 한 번만.
+        // engine.rs:1328 와 동일 시멘틱.
+        let is_wrap_around_table = !table.common.treat_as_char
+            && matches!(table.common.text_wrap, crate::model::shape::TextWrap::Square);
+
         // pre-table 텍스트 (첫 번째 표에서만)
         let is_first_table = !para.controls.iter().take(ctrl_idx)
             .any(|c| matches!(c, Control::Table(_)));
-        if pre_table_end_line > 0 && is_first_table {
-            let pre_height: f64 = fmt.line_advances_sum(0..pre_table_end_line);
+        let pre_height: f64 = if pre_table_end_line > 0 && is_first_table {
+            let h = fmt.line_advances_sum(0..pre_table_end_line);
             st.current_items.push(PageItem::PartialParagraph {
                 para_index: para_idx,
                 start_line: 0,
                 end_line: pre_table_end_line,
             });
-            st.current_height += pre_height;
-        }
+            h
+        } else {
+            0.0
+        };
 
         // 표 배치
         st.current_items.push(PageItem::Table {
             para_index: para_idx,
             control_index: ctrl_idx,
         });
-        st.current_height += table_total_height;
+
+        // [Task #439] 누적 정책:
+        // - Square wrap (어울림): max(pre_height, v_off + table_total)
+        //     호스트 텍스트와 표가 같은 y 영역을 공유하므로 더 큰 쪽만 누적.
+        // - 그 외 (TopAndBottom 등): pre_height + table_total 합산 (기존 동작).
+        if is_wrap_around_table && pre_height > 0.0 {
+            let v_off_px = crate::renderer::hwpunit_to_px(vertical_offset as i32, self.dpi);
+            let table_bottom = v_off_px + table_total_height;
+            st.current_height += pre_height.max(table_bottom);
+        } else {
+            st.current_height += pre_height + table_total_height;
+        }
 
         // post-table 텍스트
         let is_last_table = !para.controls.iter().skip(ctrl_idx + 1)
@@ -1566,7 +1631,10 @@ impl TypesetEngine {
         } else { (0, 0, 0.0) };
         let first_block_size = first_block_end.saturating_sub(first_block_start);
         let first_block_is_single_row = first_block_size == 1;
-        let first_block_protected = first_block_size >= 2 && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+        // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+        let first_block_protected = !mt.allows_row_break_split()
+            && first_block_size >= 2
+            && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
         // Task #398 v2: 보호 블록(2~3 rows)만 블록 전체 높이로 판정. 큰 rowspan(>3)은 행 단위 분할.
         let split_unit_h = if first_block_protected {
             first_block_h
@@ -1670,7 +1738,10 @@ impl TypesetEngine {
                 let (cur_b_start, cur_b_end, _) = mt.row_block_for(cursor_row);
                 let cur_block_size = cur_b_end.saturating_sub(cur_b_start);
                 let cur_block_single = cur_block_size == 1;
-                let cur_block_protected = cur_block_size >= 2 && cur_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+                let cur_block_protected = !mt.allows_row_break_split()
+                    && cur_block_size >= 2
+                    && cur_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
                 let cur_can_intra_split = (cur_block_single || !cur_block_protected) && can_intra_split;
 
                 if approx_end <= cursor_row {
@@ -1719,7 +1790,10 @@ impl TypesetEngine {
                     let (next_b_start, next_b_end, _) = mt.row_block_for(r);
                     let next_block_size = next_b_end.saturating_sub(next_b_start);
                     let next_block_single = next_block_size == 1;
-                    let next_block_protected = next_block_size >= 2 && next_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                    // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+                    let next_block_protected = !mt.allows_row_break_split()
+                        && next_block_size >= 2
+                        && next_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
                     let next_can_intra_split = (next_block_single || !next_block_protected) && can_intra_split;
                     if next_can_intra_split && mt.is_row_splittable(r) {
                         let row_cs = cs;
@@ -2144,26 +2218,34 @@ fn compute_body_wide_top_reserve_for_para(
         if !matches!(common.text_wrap, TextWrap::TopAndBottom) || common.treat_as_char {
             continue;
         }
-        // Paper 기준 도형: 본문과 겹치지 않을 때(=머리말 영역만 점유)만 제외.
-        if matches!(common.vert_rel_to, VertRelTo::Paper) {
-            let shape_top_abs = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
-            let shape_bottom_abs = shape_top_abs
-                + crate::renderer::hwpunit_to_px(common.height as i32, dpi);
-            if shape_bottom_abs <= body_top {
-                continue;
-            }
-        }
         let shape_w = crate::renderer::hwpunit_to_px(common.width as i32, dpi);
         if shape_w < body_w * 0.8 {
             continue;
         }
         let shape_h = crate::renderer::hwpunit_to_px(common.height as i32, dpi);
-        let shape_y_offset = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
-        if shape_y_offset > body_h / 3.0 {
+        let raw_v_offset = crate::renderer::hwpunit_to_px(common.vertical_offset as i32, dpi);
+
+        // body-rel 기준 시작/끝 y 계산.
+        // - VertRelTo::Paper: vertical_offset 이 용지 상단(= 0) 기준 → body_top 차감.
+        //   본문과 전혀 겹치지 않으면(머리말만 점유) 제외.
+        //   본문 위쪽으로 일부 빠져나가면(shape_top_abs < body_top) 본문 침범 영역만 reserve.
+        // - VertRelTo::Page / Para: vertical_offset 이 본문/단 top 기준 → body-rel 그대로.
+        let (body_y, body_bottom) = if matches!(common.vert_rel_to, VertRelTo::Paper) {
+            let shape_top_abs = raw_v_offset;
+            let shape_bottom_abs = shape_top_abs + shape_h;
+            if shape_bottom_abs <= body_top {
+                continue;
+            }
+            ((shape_top_abs - body_top).max(0.0), shape_bottom_abs - body_top)
+        } else {
+            (raw_v_offset, raw_v_offset + shape_h)
+        };
+
+        if body_y > body_h / 3.0 {
             continue;
         }
         let outer_bottom = crate::renderer::hwpunit_to_px(common.margin.bottom as i32, dpi);
-        let bottom = shape_y_offset + shape_h + outer_bottom;
+        let bottom = body_bottom + outer_bottom;
         if bottom > max_bottom {
             max_bottom = bottom;
         }
