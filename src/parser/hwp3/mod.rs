@@ -240,6 +240,7 @@ pub(crate) fn parse_paragraph_list(
                     30 | 31 => {
                         let mut buf = [0u8; 2];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        if i < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i] = utf16_len; }
                         i += 1;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -248,6 +249,7 @@ pub(crate) fn parse_paragraph_list(
                     24 | 25 => {
                         let mut buf = [0u8; 4];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        for k in 0..2usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 2;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -261,6 +263,7 @@ pub(crate) fn parse_paragraph_list(
                     18..=21 => {
                         let mut buf = [0u8; 6];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        for k in 0..3usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 3;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -337,6 +340,7 @@ pub(crate) fn parse_paragraph_list(
                     7 | 8 => {
                         let mut buf = [0u8; 6];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        for k in 0..3usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 3;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -347,6 +351,7 @@ pub(crate) fn parse_paragraph_list(
                     23 => {
                         let mut buf = [0u8; 8];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        for k in 0..4usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 4;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -361,6 +366,7 @@ pub(crate) fn parse_paragraph_list(
                     22 => {
                         let mut buf = [0u8; 22];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        for k in 0..11usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 11;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -376,6 +382,7 @@ pub(crate) fn parse_paragraph_list(
                     26 => {
                         let mut buf = [0u8; 244];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        for k in 0..122usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 122;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -397,6 +404,7 @@ pub(crate) fn parse_paragraph_list(
                     28 => {
                         let mut buf = [0u8; 62];
                         if let Err(_) = body_cursor.read_exact(&mut buf) { break; }
+                        for k in 0..31usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 31;
                         char_offsets.push(utf16_len);
                         utf16_len += 1;
@@ -423,6 +431,7 @@ pub(crate) fn parse_paragraph_list(
                             Err(_) => break,
                         };
                         
+                        for k in 0..3usize { if i + k < hwp3_char_to_utf16_pos.len() { hwp3_char_to_utf16_pos[i + k] = utf16_len; } }
                         i += 3; // 8바이트 헤더는 char_count에서 4개의 hchar를 차지합니다 (여기서 1개 읽고 3개 건너뜀)
                         
                         let mut nested_paragraphs = Vec::new();
