@@ -2880,6 +2880,16 @@ impl LayoutEngine {
                                 bin_data_content, styles, alignment, pic_y,
                                 page_content.section_index, para_index, control_index,
                             );
+                            // Square wrap + Para-relative: 그림 높이로 column y를 밀지 않는다.
+                            // 텍스트는 그림 옆에 segment_width로 제어되어 흐르므로
+                            // 후속 문단은 앵커 단락 직후(shape item y_offset)부터 시작해야 한다.
+                            // layout_body_picture의 y_offset은 pic_y(=단락 시작 y)이므로
+                            // 반환값이 para_start_y로 거슬러 올라감 — 이를 shape item y로 복원.
+                            if matches!(pic.common.text_wrap, crate::model::shape::TextWrap::Square)
+                                && matches!(pic.common.vert_rel_to, crate::model::shape::VertRelTo::Para)
+                            {
+                                result_y = y_offset;
+                            }
                         }
                     }
                 }
