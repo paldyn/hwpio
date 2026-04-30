@@ -706,13 +706,22 @@ impl LayoutEngine {
                                     if !will_render_inline {
                                         // 단독 이미지(텍스트 없는 문단): 직접 렌더링
                                         let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
+                                        // [Task #477] 셀 폭 초과 시 비율 유지 클램프
+                                        let clamped_w = pic_w.min(inner_area.width);
+                                        let clamped_h = if pic_w > 0.0 {
+                                            pic_h * (clamped_w / pic_w)
+                                        } else {
+                                            pic_h
+                                        };
                                         let pic_area = LayoutRect {
                                             x: inline_x,
                                             y: para_y_before_compose,
-                                            width: pic_w,
-                                            height: pic_h,
+                                            width: clamped_w,
+                                            height: clamped_h,
                                         };
                                         self.layout_picture(tree, &mut cell_node, pic, &pic_area, bin_data_content, Alignment::Left, None, None, None);
+                                        inline_x += clamped_w;
+                                        continue;
                                     }
                                     inline_x += pic_w;
                                 } else {

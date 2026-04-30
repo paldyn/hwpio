@@ -252,7 +252,8 @@ fn test_brightness_contrast_filter_clamp_out_of_range() {
 
 #[test]
 fn test_compute_image_crop_src_exam_kor_header() {
-    // exam_kor.hwp bin_id=27: 원본 174000×26580 HU(=2320×354 px @ 75 HU/px),
+    // [Task #477] HWP 표준 75 HU/px 룰 적용.
+    // exam_kor.hwp bin_id=27: image 픽셀 2320×354 (= 174000/75 × 26580/75 HU),
     // crop=(0, 0, 102366, 26580) → 좌측 1364.88px × 354px (= "국어 영역")
     let (sx, sy, sw, sh) = compute_image_crop_src(
         (0, 0, 102366, 26580),
@@ -261,8 +262,10 @@ fn test_compute_image_crop_src_exam_kor_header() {
     );
     assert!((sx - 0.0).abs() < 0.01);
     assert!((sy - 0.0).abs() < 0.01);
+    // 102366 / 75 = 1364.88
     assert!((sw - 1364.88).abs() < 0.01);
-    assert!((sh - 354.0).abs() < 0.01);
+    // 26580 / 75 = 354.4 (≈ 354 image height)
+    assert!((sh - 354.4).abs() < 0.01);
 }
 
 #[test]
@@ -275,8 +278,9 @@ fn test_compute_image_crop_src_no_crop_full_image() {
     );
     assert!((sx - 0.0).abs() < 0.01);
     assert!((sy - 0.0).abs() < 0.01);
+    // 174000 / 75 = 2320 (= image width)
     assert!((sw - 2320.0).abs() < 0.01);
-    assert!((sh - 354.0).abs() < 0.01);
+    assert!((sh - 354.4).abs() < 0.01);
 }
 
 #[test]
@@ -287,26 +291,44 @@ fn test_compute_image_crop_src_offset_top_left() {
         Some((4000, 2500)),
         400.0, 250.0,
     );
-    // scale_x = 4000/400 = 10 HU/px, scale_y = 2500/250 = 10 HU/px
-    assert!((sx - 100.0).abs() < 0.01);   // 1000/10
-    assert!((sy - 50.0).abs() < 0.01);    // 500/10
-    assert!((sw - 300.0).abs() < 0.01);   // 3000/10
-    assert!((sh - 200.0).abs() < 0.01);   // 2000/10
+    // [Task #477] 75 HU/px 룰
+    // src_x = 1000/75 = 13.33, src_y = 500/75 = 6.67
+    // src_w = 3000/75 = 40, src_h = 2000/75 = 26.67
+    assert!((sx - 13.333).abs() < 0.01);
+    assert!((sy - 6.667).abs() < 0.01);
+    assert!((sw - 40.0).abs() < 0.01);
+    assert!((sh - 26.667).abs() < 0.01);
+}
+
+#[test]
+fn test_compute_image_crop_src_kwater_pi31() {
+    // [Task #477] k-water-rfp.hwp pi=31 케이스 (회귀 정정 검증):
+    // PNG (169 × 93 px) 가 이미 crop 적용 후 image — viewBox 가 image 전체와
+    // 매칭해야 (좌측 일부만 보이는 결함 정정).
+    // crop=(0, 0, 12660, 6960), original 14119×7766 HU.
+    let (sx, sy, sw, sh) = compute_image_crop_src(
+        (0, 0, 12660, 6960),
+        Some((14119, 7766)),
+        169.0, 93.0,
+    );
+    assert!((sx - 0.0).abs() < 0.01);
+    assert!((sy - 0.0).abs() < 0.01);
+    // 12660 / 75 = 168.8 (≈ image width 169)
+    assert!((sw - 168.8).abs() < 0.01);
+    // 6960 / 75 = 92.8 (≈ image height 93)
+    assert!((sh - 92.8).abs() < 0.01);
 }
 
 #[test]
 fn test_compute_image_crop_src_fallback_when_original_size_missing() {
-    // original_size_hu가 None이면 폴백 (cr/img_w 스케일)
-    // 이 폴백은 항상 src_w == img_w 가 되는 과거 동작과 동일
+    // original_size_hu가 None 이어도 [Task #477] 75 HU/px 룰을 동일하게 적용.
     let (sx, sy, sw, sh) = compute_image_crop_src(
         (0, 0, 102366, 26580),
         None,
         2320.0, 354.0,
     );
-    // 폴백 스케일 = 102366/2320 = 44.12 HU/px (X·Y 동일)
     assert!((sx - 0.0).abs() < 0.01);
     assert!((sy - 0.0).abs() < 0.01);
-    assert!((sw - 2320.0).abs() < 0.01); // (cr-cl)/scale = cr/(cr/img_w) = img_w
-    // 폴백 src_h는 src_w와 같은 비율이라 정확하지 않음 — 호환성 유지일 뿐
-    assert!(sh > 0.0);
+    assert!((sw - 1364.88).abs() < 0.01);
+    assert!((sh - 354.4).abs() < 0.01);
 }

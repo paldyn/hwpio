@@ -2377,25 +2377,27 @@ pub(crate) fn detect_image_mime_type(data: &[u8]) -> &'static str {
 }
 
 /// 이미지 데이터에서 픽셀 크기(width, height)를 파싱한다.
-/// HWP `pic.crop` (HWPUNIT) 와 원본 이미지 크기(HU/px)로부터 SVG `viewBox` 에 쓸
-/// 원본 픽셀 단위 source rect (x, y, w, h)를 계산한다.
+/// HWP `pic.crop` (HWPUNIT) 로부터 SVG `viewBox` 에 쓸 원본 픽셀 단위
+/// source rect (x, y, w, h) 를 계산한다.
 ///
-/// `original_size_hu = Some((ow, oh))` 가 주어지면 정확한 HU/px 스케일을 사용한다.
-/// 그렇지 않으면 `crop.right / img_w_px` 를 폴백 스케일로 사용한다(과거 동작 호환).
+/// [Task #477] HWP 표준 룰: 1 inch = 7200 HU = 96 px → **75 HU/px** (DPI 96).
+/// 한컴이 BinData 에 저장하는 image 의 표준 DPI 이며, crop 좌표 (HU) 와 image
+/// 픽셀의 변환은 이 표준 scale 로 항상 정합한다.
+///
+/// `original_size_hu` 인자는 라운드트립 보존 메타로만 유지하며 계산에는 사용하지
+/// 않는다 (Task #430 이 도입했던 `orig/img_w` scale 은 일부 케이스에서 결함을
+/// 유발 — k-water-rfp pi=31 등에서 image 좌측만 표시되는 회귀).
 pub(crate) fn compute_image_crop_src(
     crop_hu: (i32, i32, i32, i32),
-    original_size_hu: Option<(u32, u32)>,
-    img_w_px: f64,
-    img_h_px: f64,
+    _original_size_hu: Option<(u32, u32)>,
+    _img_w_px: f64,
+    _img_h_px: f64,
 ) -> (f64, f64, f64, f64) {
     let (cl, ct, cr, cb) = crop_hu;
-    let (scale_x, scale_y) = match original_size_hu {
-        Some((ow, oh)) if ow > 0 && oh > 0 => (ow as f64 / img_w_px, oh as f64 / img_h_px),
-        _ => {
-            let s = cr as f64 / img_w_px;
-            (s, s)
-        }
-    };
+    // HWP 표준 DPI 96 = 75 HU/px
+    const HU_PER_PX: f64 = 75.0;
+    let scale_x = HU_PER_PX;
+    let scale_y = HU_PER_PX;
     let src_x = cl as f64 / scale_x;
     let src_y = ct as f64 / scale_y;
     let src_w = (cr - cl) as f64 / scale_x;
