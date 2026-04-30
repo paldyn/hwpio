@@ -537,16 +537,20 @@ impl DocumentParser for HwpxParser {
     }
 }
 
+/// HWP 3.0 파서
+pub struct Hwp3Parser;
+
+impl DocumentParser for Hwp3Parser {
+    fn parse(&self, data: &[u8]) -> Result<Document, ParseError> {
+        hwp3::parse_hwp3(data).map_err(ParseError::from)
+    }
+}
+
 /// 포맷 자동 감지 후 적절한 파서로 파싱
 pub fn parse_document(data: &[u8]) -> Result<Document, ParseError> {
     match detect_format(data) {
         FileFormat::Hwpx => HwpxParser.parse(data),
-        FileFormat::Hwp3 => {
-            let mut doc = hwp3::parse_hwp3(data).map_err(ParseError::from)?;
-            assign_auto_numbers(&mut doc);
-            hwp3::fixup_hwp3_picture_numbers(&mut doc);
-            Ok(doc)
-        },
+        FileFormat::Hwp3 => Hwp3Parser.parse(data),
         _ => HwpParser.parse(data),
     }
 }
