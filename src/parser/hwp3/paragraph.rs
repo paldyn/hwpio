@@ -12,7 +12,9 @@ pub struct Hwp3LineInfo {
     pub start_pos: u16,
     pub space_correction: i16,
     pub line_height: u16,
-    pub reserved: [u8; 6],
+    pub pgy: u16,   // 한글97이 계산한 줄 Y 좌표 (1/1800인치 단위). pgy 감소 시 새 페이지.
+    pub sx: u16,
+    pub psx: u16,
     pub break_flag: u16,
 }
 
@@ -21,16 +23,18 @@ impl Hwp3LineInfo {
         let start_pos = reader.read_u16::<LittleEndian>()?;
         let space_correction = reader.read_i16::<LittleEndian>()?;
         let line_height = reader.read_u16::<LittleEndian>()?;
-        let mut reserved = [0u8; 6];
-        reader.read_exact(&mut reserved)?;
+        let pgy = reader.read_u16::<LittleEndian>()?;
+        let sx = reader.read_u16::<LittleEndian>()?;
+        let psx = reader.read_u16::<LittleEndian>()?;
         let break_flag = reader.read_u16::<LittleEndian>()?;
-        
 
         Ok(Hwp3LineInfo {
             start_pos,
             space_correction,
             line_height,
-            reserved,
+            pgy,
+            sx,
+            psx,
             break_flag,
         })
     }

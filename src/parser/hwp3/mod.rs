@@ -178,7 +178,8 @@ pub(crate) fn parse_paragraph_list(
     
     let mut paragraphs = Vec::new();
     let mut current_para_shape_id = 0u16;
-    let mut last_page_boundary_idx: Option<usize> = None;
+    let mut prev_para_had_flags_break: bool = false;
+    let mut prev_last_pgy: u16 = 0;
 
     loop {
         let para_start_pos = body_cursor.position();
@@ -1292,7 +1293,9 @@ pub(crate) fn parse_paragraph_list(
             }
         }
         let char_count = para.text.chars().count();
-        if line_segs.len() == 1 && !para.text.contains('\n') && char_count > 40 {
+        // line_infos가 있으면 한글97 저장 레이아웃을 신뢰하여 reflow 생략.
+        // line_infos가 없을 때만 폴백으로 글자 수 기반 reflow를 수행한다.
+        if line_infos.is_empty() && line_segs.len() == 1 && !para.text.contains('\n') && char_count > 40 {
             let base_seg = line_segs.remove(0);
             let mut reflowed_segs = Vec::new();
             let mut last_break_utf16 = 0;
@@ -1401,48 +1404,26 @@ pub(crate) fn parse_paragraph_list(
             }
         }
 
-        // Fix 2: 단일 LINE_SEG 비-TAC TopAndBottom 그림 문단 → 새 페이지 시작
-        // HWP3 non-TAC TopAndBottom 그림의 vpos 레이아웃은 typeset.rs pushdown_h와 충돌.
-        // 단일 LINE_SEG 문단은 텍스트 높이(21px)만으로 배치 결정 → pushdown_h로 OVERFLOW 발생.
-        // 파서에서 column_type=Page를 설정해 TypesetEngine이 새 페이지에서 시작하게 한다.
-        {
-            let has_non_tac_float_pic = para.controls.iter().any(|c| {
-                if let crate::model::control::Control::Picture(pic) = c {
-                    !pic.common.treat_as_char
-                        && matches!(pic.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
-                } else {
-                    false
-                }
-            });
-            if has_non_tac_float_pic && para.line_segs.len() == 1 {
-                para.column_type = crate::model::paragraph::ColumnBreakType::Page;
-            }
+        // pgy 기반 페이지 경계 검출: LineInfo에 한글97이 저장한 줄 Y좌표.
+        // 현재 문단 첫 줄의 pgy < 이전 문단 마지막 줄의 pgy → 새 페이지 시작.
+        // page break 후 prev_last_pgy를 현재 값으로 리셋해야 연속 오탐을 막을 수 있다.
+        let first_pgy = line_infos.first().map(|l| l.pgy).unwrap_or(0);
+        let last_pgy = line_infos.last().map(|l| l.pgy).unwrap_or(0);
+        if prev_last_pgy > 0 && first_pgy < prev_last_pgy {
+            para.column_type = crate::model::paragraph::ColumnBreakType::Page;
+            prev_last_pgy = last_pgy;
+        } else if last_pgy > 0 {
+            prev_last_pgy = last_pgy;
         }
 
-        // HWP3 LINE_SEG break_flag: bit 15=정보유효, bit 0=페이지경계.
-        // 한컴이 파일에 직접 인코딩한 페이지 경계를 추적한다.
-        // 전체 적용 시 rhwp 텍스트 리플로우와 충돌해 빈 페이지가 생기므로,
-        // 파싱 완료 후 마지막 경계 문단에만 적용한다 (아래 post-processing 참조).
-        if let Some(first_linfo) = line_infos.first() {
-            if (first_linfo.break_flag & 0x8001) == 0x8001
-                && para.column_type == crate::model::paragraph::ColumnBreakType::None
-            {
-                last_page_boundary_idx = Some(paragraphs.len());
-            }
+        // para_info.flags bit 1 = 명시적 페이지나눔: 이전 문단에 이 플래그가 있으면
+        // 현재 문단이 새 페이지에서 시작한다.
+        if prev_para_had_flags_break {
+            para.column_type = crate::model::paragraph::ColumnBreakType::Page;
         }
+        prev_para_had_flags_break = para_info.flags & 0x02 != 0;
 
         paragraphs.push(para);
-    }
-
-    // Post-processing: 마지막 break_flag 페이지 경계 문단에만 page break 적용.
-    // 전체 적용 시 rhwp 텍스트 리플로우와 충돌해 빈 페이지가 생기므로,
-    // 마지막 경계(예: "참조" pi=193)에만 적용하여 섹션 시작 분리를 재현한다.
-    if let Some(idx) = last_page_boundary_idx {
-        if let Some(para) = paragraphs.get_mut(idx) {
-            if para.column_type == crate::model::paragraph::ColumnBreakType::None {
-                para.column_type = crate::model::paragraph::ColumnBreakType::Page;
-            }
-        }
     }
 
     Ok(paragraphs)
@@ -1715,7 +1696,9 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
         margin_left: (doc_info.left_margin as u32) * 4,
         margin_right: (doc_info.right_margin as u32) * 4,
         margin_top: (doc_info.top_margin as u32) * 4,
-        margin_bottom: (doc_info.bottom_margin as u32) * 4,
+        // HWP3 last-line tolerance: 한글97은 마지막 줄이 본문 영역을 약간 넘어도 해당 페이지에 배치한다.
+        // 1600 HWPUNIT(= 한 빈 줄 높이)만큼 하단 여백을 줄여 이 동작을 근사한다.
+        margin_bottom: ((doc_info.bottom_margin as u32) * 4).saturating_sub(1600),
         margin_header: (doc_info.header_length as u32) * 4,
         margin_footer: (doc_info.footer_length as u32) * 4,
         margin_gutter: (doc_info.binding_margin as u32) * 4,
