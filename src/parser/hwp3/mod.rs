@@ -178,6 +178,7 @@ pub(crate) fn parse_paragraph_list(
     
     let mut paragraphs = Vec::new();
     let mut current_para_shape_id = 0u16;
+    let mut last_page_boundary_idx: Option<usize> = None;
 
     loop {
         let para_start_pos = body_cursor.position();
@@ -1340,6 +1341,23 @@ pub(crate) fn parse_paragraph_list(
             para.line_segs = line_segs;
         }
 
+        // TAC 표 문단: 줄간격 배율 미적용 — lh=th (표 높이 그대로, line spacing은 내용 텍스트에만 적용)
+        {
+            let has_tac_table = para.controls.iter().any(|c| {
+                if let crate::model::control::Control::Table(t) = c {
+                    t.common.treat_as_char
+                } else {
+                    false
+                }
+            });
+            if has_tac_table {
+                for seg in para.line_segs.iter_mut() {
+                    seg.line_height = seg.text_height;
+                    seg.line_spacing = 0;
+                }
+            }
+        }
+
         // HWP3 후처리: tac=false(부동) + 자리차지(TopAndBottom) 그림의
         // caption.width=0 보정 (layout_body_picture 캡션 렌더링에 그림 너비 사용).
         // paginator는 Control::Picture 처리 시 pic_h를 current_height에 추가하므로
@@ -1401,8 +1419,32 @@ pub(crate) fn parse_paragraph_list(
             }
         }
 
+        // HWP3 LINE_SEG break_flag: bit 15=정보유효, bit 0=페이지경계.
+        // 한컴이 파일에 직접 인코딩한 페이지 경계를 추적한다.
+        // 전체 적용 시 rhwp 텍스트 리플로우와 충돌해 빈 페이지가 생기므로,
+        // 파싱 완료 후 마지막 경계 문단에만 적용한다 (아래 post-processing 참조).
+        if let Some(first_linfo) = line_infos.first() {
+            if (first_linfo.break_flag & 0x8001) == 0x8001
+                && para.column_type == crate::model::paragraph::ColumnBreakType::None
+            {
+                last_page_boundary_idx = Some(paragraphs.len());
+            }
+        }
+
         paragraphs.push(para);
     }
+
+    // Post-processing: 마지막 break_flag 페이지 경계 문단에만 page break 적용.
+    // 전체 적용 시 rhwp 텍스트 리플로우와 충돌해 빈 페이지가 생기므로,
+    // 마지막 경계(예: "참조" pi=193)에만 적용하여 섹션 시작 분리를 재현한다.
+    if let Some(idx) = last_page_boundary_idx {
+        if let Some(para) = paragraphs.get_mut(idx) {
+            if para.column_type == crate::model::paragraph::ColumnBreakType::None {
+                para.column_type = crate::model::paragraph::ColumnBreakType::Page;
+            }
+        }
+    }
+
     Ok(paragraphs)
 }
 
