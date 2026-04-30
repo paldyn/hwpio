@@ -531,9 +531,7 @@ pub struct HwpxParser;
 
 impl DocumentParser for HwpxParser {
     fn parse(&self, data: &[u8]) -> Result<Document, ParseError> {
-        let mut doc = hwpx::parse_hwpx(data).map_err(ParseError::from)?;
-        assign_auto_numbers(&mut doc);
-        Ok(doc)
+        hwpx::parse_hwpx(data).map_err(ParseError::from)
     }
 }
 
