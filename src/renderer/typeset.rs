@@ -411,8 +411,18 @@ impl TypesetEngine {
                 let curr_first_vpos = para.line_segs.first().map(|s| s.vertical_pos);
                 let prev_last_vpos = prev_para.line_segs.last().map(|s| s.vertical_pos);
                 if let (Some(cv), Some(pv)) = (curr_first_vpos, prev_last_vpos) {
-                    // 현재 문단의 vpos가 0 이고 직전 문단의 마지막 vpos가 의미있게 큰 경우 (5000 HU ≈ 1.76mm)
-                    if cv == 0 && pv > 5000 {
+                    // 현재 문단의 vpos가 직전 문단의 마지막 vpos보다 작은 경우 — 컬럼/페이지 reset 시그널.
+                    // - 단일 단: cv == 0 만 인정 (Task #321 보수적 기준 유지).
+                    //   단일 단에서 cv != 0 의 cv < pv 는 partial-table split 의 LAYOUT 잔재로
+                    //   해석되어야 함 (issue #418 / hwpspec pi=78→pi=79).
+                    // - 다단: cv != 0 도 인정 (Task #470). 컬럼 헤더 오프셋 (cv=9014 등) 으로
+                    //   시작하는 새 컬럼의 reset 을 감지.
+                    let trigger = if st.col_count > 1 {
+                        cv < pv && pv > 5000
+                    } else {
+                        cv == 0 && pv > 5000
+                    };
+                    if trigger {
                         st.advance_column_or_new_page();
                     }
                 }
@@ -436,7 +446,11 @@ impl TypesetEngine {
                 } else {
                     let next_first_vpos = next_para.line_segs.first().map(|s| s.vertical_pos);
                     let curr_last_vpos = para.line_segs.last().map(|s| s.vertical_pos);
-                    matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl)) if nv == 0 && cl > 5000)
+                    // [Task #470] 다단 섹션에서는 nv == 0 → nv < cl 로 완화 (컬럼 헤더 오프셋).
+                    // 단일 단에서는 partial-table split 회귀 (issue #418) 회피 위해 nv == 0 유지.
+                    let multi_col = st.col_count > 1;
+                    matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl))
+                        if (if multi_col { nv < cl } else { nv == 0 }) && cl > 5000)
                 }
             } else { false };
 
@@ -1588,7 +1602,10 @@ impl TypesetEngine {
         } else { (0, 0, 0.0) };
         let first_block_size = first_block_end.saturating_sub(first_block_start);
         let first_block_is_single_row = first_block_size == 1;
-        let first_block_protected = first_block_size >= 2 && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+        // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+        let first_block_protected = !mt.allows_row_break_split()
+            && first_block_size >= 2
+            && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
         // Task #398 v2: 보호 블록(2~3 rows)만 블록 전체 높이로 판정. 큰 rowspan(>3)은 행 단위 분할.
         let split_unit_h = if first_block_protected {
             first_block_h
@@ -1692,7 +1709,10 @@ impl TypesetEngine {
                 let (cur_b_start, cur_b_end, _) = mt.row_block_for(cursor_row);
                 let cur_block_size = cur_b_end.saturating_sub(cur_b_start);
                 let cur_block_single = cur_block_size == 1;
-                let cur_block_protected = cur_block_size >= 2 && cur_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+                let cur_block_protected = !mt.allows_row_break_split()
+                    && cur_block_size >= 2
+                    && cur_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
                 let cur_can_intra_split = (cur_block_single || !cur_block_protected) && can_intra_split;
 
                 if approx_end <= cursor_row {
@@ -1741,7 +1761,10 @@ impl TypesetEngine {
                     let (next_b_start, next_b_end, _) = mt.row_block_for(r);
                     let next_block_size = next_b_end.saturating_sub(next_b_start);
                     let next_block_single = next_block_size == 1;
-                    let next_block_protected = next_block_size >= 2 && next_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                    // [Task #474] RowBreak 표는 보호 블록 정책 비적용
+                    let next_block_protected = !mt.allows_row_break_split()
+                        && next_block_size >= 2
+                        && next_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
                     let next_can_intra_split = (next_block_single || !next_block_protected) && can_intra_split;
                     if next_can_intra_split && mt.is_row_splittable(r) {
                         let row_cs = cs;
