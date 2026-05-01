@@ -73,6 +73,11 @@ rhwp-vscode/media/rhwp_bg.wasm
 
 # rhwp-chrome 빌드 산출물
 rhwp-chrome/dist/
+rhwp-chrome/*.zip
+
+# rhwp-firefox 빌드 산출물
+rhwp-firefox/dist/
+rhwp-firefox/*.zip
 
 # rhwp-safari 빌드 산출물
 rhwp-safari/dist/
