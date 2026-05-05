@@ -15,7 +15,7 @@ use super::render_tree::*;
 use super::page_layout::{LayoutRect, PageLayoutInfo};
 use super::pagination::{ColumnContent, PageContent, PageItem, FootnoteRef, FootnoteSource};
 use super::height_measurer::MeasuredTable;
-use super::composer::{ComposedParagraph, compose_paragraph};
+use super::composer::{ComposedParagraph, compose_paragraph, effective_text_for_metrics};
 use super::style_resolver::ResolvedStyleSet;
 use super::font_metrics_data;
 use super::{TextStyle, ShapeStyle, LineStyle, PathCommand, StrokeDash, ArrowStyle, hwpunit_to_px, DEFAULT_DPI, AutoNumberCounter, format_number, NumberFormat as NumFmt};
@@ -475,6 +475,11 @@ impl LayoutEngine {
             }
             for child in &body_node.children {
                 expand_clip(&mut clip, child);
+            }
+            let body_bottom = body_bbox.y + body_bbox.height;
+            let max_bottom = body_bottom + 10.0;
+            if clip.y + clip.height > max_bottom {
+                clip.height = max_bottom - clip.y;
             }
             body_node.node_type = RenderNodeType::Body {
                 clip_rect: Some(clip),
@@ -1400,6 +1405,15 @@ impl LayoutEngine {
                         p.controls.iter().any(|c| match c {
                             Control::Shape(s) => {
                                 let cm = s.common();
+                                // [Task #539] tac=true Shape 는 paragraph 의 LINE_SEG vpos 에
+                                // 통합되어 누적되므로, overlay 가 vpos 에 별도 영향을 주지 않는다.
+                                // 따라서 prev_has_overlay_shape 가드 제외 — 그렇지 않으면
+                                // tac=true InFrontOfText/BehindText 글박스 호스트 paragraph
+                                // 직후의 vpos correction 이 skipped 되어 trailing-ls drift
+                                // 716 HU 가 잔존 (#539: 21_언어_기출 7p pi=146, 9p pi=182).
+                                if cm.treat_as_char {
+                                    return false;
+                                }
                                 matches!(cm.text_wrap, TextWrap::InFrontOfText | TextWrap::BehindText)
                                     || (matches!(cm.text_wrap, TextWrap::TopAndBottom)
                                         && matches!(cm.vert_rel_to, VertRelTo::Para)
@@ -1449,7 +1463,20 @@ impl LayoutEngine {
                                 } else {
                                     // 지연 보정: 첫 보정 시점에서 기준점 산출
                                     // sequential y_offset에서 역산하여 기준 vpos 결정
-                                    let y_delta_hu = ((y_offset - col_area.y) / self.dpi * 7200.0).round() as i32;
+                                    //
+                                    // [Task #537] trailing-ls 보정:
+                                    // paragraph_layout 의 마지막 줄은 trailing line_spacing 을
+                                    // 제외하여 y 를 advance 한다 (Task #479, lh_sum + (n-1)*ls 정책).
+                                    // 그 결과 sequential y_offset 은 IR vpos 누적보다
+                                    // prev_pi 의 last seg ls 만큼 부족해진다.
+                                    // 이 부족분을 y_delta_hu 에 더해야 lazy_base 가
+                                    // IR 절대 좌표와 일치한다 (drift 가 base 에 동결되는 것을 방지).
+                                    let trailing_ls_hu = paragraphs.get(prev_pi)
+                                        .and_then(|p| p.line_segs.last())
+                                        .map(|s| s.line_spacing.max(0))
+                                        .unwrap_or(0);
+                                    let y_delta_hu = ((y_offset - col_area.y) / self.dpi * 7200.0).round() as i32
+                                        + trailing_ls_hu;
                                     let lazy_base = prev_vpos_end - y_delta_hu;
                                     // lazy_base가 음수이면 자리차지 표 등으로 y_offset이
                                     // vpos 누적보다 크게 밀린 것 → 역산 무효
@@ -1941,7 +1968,20 @@ impl LayoutEngine {
                         .any(|c| matches!(c, Control::Table(t) if t.common.treat_as_char
                             && crate::renderer::height_measurer::is_tac_table_inline(t, seg_width, &para.text, &para.controls)));
 
-                    if has_inline_tables {
+                    // [Task #565] 인라인 표 + 다른 인라인 컨트롤(수식/treat_as_char Picture/Shape)
+                    // 이 같이 있는 문단은 layout_inline_table_paragraph 가 인라인 수식 등을
+                    // 처리하지 않아 shape_layout fallback (col_area.x, para_y) 으로 9개 수식이
+                    // 동일 좌표에 겹친다 (exam_science.hwp 12/15/18/19번). 일반
+                    // layout_paragraph 로 보내 인라인 표 + 인라인 수식이 같은 line/x 체계
+                    // (run_tacs / inline_x) 로 정상 배치되도록 한다.
+                    let has_other_inline_ctrls = para.controls.iter().any(|c| match c {
+                        Control::Equation(_) => true,
+                        Control::Picture(p) => p.common.treat_as_char,
+                        Control::Shape(s) => s.common().treat_as_char,
+                        _ => false,
+                    });
+
+                    if has_inline_tables && !has_other_inline_ctrls {
                         // 인라인 표 문단도 번호 카운터 전진 필요
                         self.apply_paragraph_numbering(
                             composed.get(*para_index), para, styles, outline_numbering_id,
@@ -2255,10 +2295,11 @@ impl LayoutEngine {
                 };
                 let tbl_inline_x = if let Some((ix, _)) = inline_pos {
                     Some(ix)
-                } else if !is_tac && tbl_is_square {
-                    // [Issue #480] Square wrap 표는 paragraph 영역 (col_area + margin) 기준으로 정렬.
-                    // 이전 동작(col_area 기준)은 paragraph margin/indent 가 있는 경우 표가
-                    // 단 사이 갭으로 떨어지는 문제 발생 (예: 페이지 14 [A] 박스).
+                } else if !is_tac && tbl_is_square
+                    && matches!(t.common.horz_rel_to, crate::model::shape::HorzRelTo::Para) {
+                    // [Issue #480 / #590] horz_rel_to=Para 인 Square wrap 표만 paragraph 영역
+                    // (col_area + margin) 기준으로 정렬. horz_rel_to=Column/Page/Paper 는
+                    // compute_table_x_position 의 기본 분기에서 명세대로 처리한다.
                     // (Task #295: halign=Right 표가 좌측에 잘못 배치되는 문제 수정)
                     let tbl_w = hwpunit_to_px(t.common.width as i32, self.dpi);
                     let area_x = col_area.x + effective_margin;
@@ -2466,6 +2507,17 @@ impl LayoutEngine {
                         y_offset += ps.spacing_after;
                     }
                 }
+                // [Task #521] TAC 표 outer_margin_bottom 적용 (한컴 명세 정합).
+                // layout_partial_table_item:2642-2647 와 동일 처리. lh = cell_h +
+                // outer_margin_bottom 으로 한컴이 정의하므로, layout_table 가
+                // cell_h 만 advance 한 후 outer_margin_bottom 을 별도 적용해야
+                // 다음 paragraph 가 정합 (exam_eng p2 18번 ① 위치 -8 px shortfall).
+                let outer_margin_bottom_px = if let Some(Control::Table(t)) = para.controls.get(control_index) {
+                    hwpunit_to_px(t.outer_margin_bottom as i32, self.dpi)
+                } else { 0.0 };
+                if outer_margin_bottom_px > 0.0 {
+                    y_offset += outer_margin_bottom_px;
+                }
                 return (y_offset, true);
             }
             // ── 같은 문단의 인라인 TAC 표 렌더링 ──
@@ -2668,7 +2720,7 @@ impl LayoutEngine {
     ) -> f64 {
         let ColumnItemCtx {
             page_content, paragraphs, composed, styles, bin_data_content,
-            layout, col_area, ..
+            layout, col_area, wrap_around_paras, ..
         } = ctx;
         // Task #402: 같은 paragraph 안에 TAC 컨트롤(표/그림/도형) 2개 이상이 서로 다른 line에
         // 배치된 경우, 두 번째 이후의 그림은 paragraph 시작 y가 아니라 진행된 y_offset
@@ -2710,11 +2762,45 @@ impl LayoutEngine {
                         // Task #347: 첫 줄 effective_margin (hanging indent: indent<0 → first-line은 margin_left만 적용)
                         let para_margin_left = para_style_ref.map(|s| s.margin_left).unwrap_or(0.0);
                         let para_indent = para_style_ref.map(|s| s.indent).unwrap_or(0.0);
-                        let effective_margin_left = if para_indent > 0.0 {
-                            para_margin_left + para_indent
+                        // [Task #534] paragraph_layout 의 effective_margin_left 정합:
+                        // visible stroke 보유 + border_spacing[0,1]=0 인 paragraph 는
+                        // box_margin_left 를 inner padding 으로 추가 가산 (paragraph_layout.rs
+                        // line 711-716 와 동일). wrap_host (Square wrap 표 보유) paragraph 는
+                        // paragraph_layout 미호출되어 본 경로만 emit → inner_pad 누락 시
+                        // 위치 결함 (예: exam_kor p18 pi=50/56 의 [A]/[B] 표시기 옆 그림).
+                        let para_border_fill_id_pre = para_style_ref.map(|s| s.border_fill_id).unwrap_or(0);
+                        let has_visible_stroke = if para_border_fill_id_pre > 0 {
+                            let idx = (para_border_fill_id_pre as usize).saturating_sub(1);
+                            styles.border_styles.get(idx)
+                                .map(|bs| bs.borders.iter().any(|b|
+                                    !matches!(b.line_type, crate::model::style::BorderLineType::None) && b.width > 0))
+                                .unwrap_or(false)
                         } else {
-                            para_margin_left
+                            false
                         };
+                        let bs_left_px = para_style_ref.map(|s| s.border_spacing[0]).unwrap_or(0.0);
+                        let bs_right_px = para_style_ref.map(|s| s.border_spacing[1]).unwrap_or(0.0);
+                        let inner_pad_left = if has_visible_stroke && bs_left_px == 0.0 && bs_right_px == 0.0 {
+                            para_margin_left
+                        } else {
+                            0.0
+                        };
+                        let mut effective_margin_left = if para_indent > 0.0 {
+                            para_margin_left + para_indent + inner_pad_left
+                        } else {
+                            para_margin_left + inner_pad_left
+                        };
+                        // [Task #534 v2] LINE_SEG.column_start 는 Square wrap 인라인 표/그림이
+                        // 좌측에 floating 시 표 영역 이후 텍스트 시작 위치를 HWP IR 가 인코딩.
+                        // layout_shape_item 은 col_area.x 그대로 사용 → picture (TAC) 가 표
+                        // 영역 위에 겹쳐 표시되는 결함 (예: exam_kor p18 pi=50/56 [A]/[B]
+                        // 표시기 + 그림). cs 가 effective_margin_left 보다 크면 cs 우선.
+                        let line_seg_cs_px = para.line_segs.first()
+                            .map(|s| hwpunit_to_px(s.column_start, self.dpi))
+                            .unwrap_or(0.0);
+                        if line_seg_cs_px > effective_margin_left {
+                            effective_margin_left = line_seg_cs_px;
+                        }
                         let para_margin_right = para_style_ref.map(|s| s.margin_right).unwrap_or(0.0);
                         let avail_w = (col_area.width - effective_margin_left - para_margin_right).max(pic_w);
                         let pic_x = match para_alignment {
@@ -2879,6 +2965,22 @@ impl LayoutEngine {
                                 bin_data_content, styles, alignment, pic_y,
                                 page_content.section_index, para_index, control_index,
                             );
+                            // Square wrap + Para-relative: 그림 높이로 column y를 밀지 않는다.
+                            // 텍스트는 그림 옆에 segment_width로 제어되어 흐르므로
+                            // 후속 문단은 앵커 단락 직후(shape item y_offset)부터 시작해야 한다.
+                            // layout_body_picture의 y_offset은 pic_y(=단락 시작 y)이므로
+                            // 반환값이 para_start_y로 거슬러 올라감 — 이를 shape item y로 복원.
+                            if matches!(pic.common.text_wrap, crate::model::shape::TextWrap::Square)
+                                && matches!(pic.common.vert_rel_to, crate::model::shape::VertRelTo::Para)
+                            {
+                                result_y = y_offset;
+                            }
+                            // [Task #525] Picture Square wrap 의 호스트 paragraph 텍스트는
+                            // 정상 PageItem::FullParagraph 경로 (layout_composed_paragraph 의
+                            // has_picture_shape_square_wrap 분기, paragraph_layout.rs:822/973)
+                            // 가 LINE_SEG.cs/sw 기반으로 그림 옆 (좁은) + 그림 아래 (넓은)
+                            // 모두 처리. Task #460 보완6의 wrap_precomputed IR 플래그로
+                            // FullParagraph path가 cs offset을 정확히 적용하므로 별도 호출 불필요.
                         }
                     }
                 }
@@ -3060,12 +3162,10 @@ impl LayoutEngine {
             if wp.has_text {
                 // 텍스트 문단: composed paragraph를 사용하여 어울림 영역에 렌더링
                 let comp = composed.get(wp.para_index);
-                // 다중 LINE_SEG: wrap 영역에 해당하는 첫 줄만 렌더링
-                let end_line = if comp.map(|c| c.lines.len()).unwrap_or(1) > 1 {
-                    1
-                } else {
-                    comp.map(|c| c.lines.len()).unwrap_or(1)
-                };
+                // 어울림 문단의 전체 줄 렌더링.
+                // 표 어울림: 각 WrapAroundPara가 별도 1-줄 문단이므로 all_lines=1.
+                // 그림 어울림: 하나의 WrapAroundPara에 여러 줄이 포함될 수 있어 전체 렌더링.
+                let end_line = comp.map(|c| c.lines.len()).unwrap_or(1);
                 self.layout_partial_paragraph(
                     tree, col_node, para, comp, styles,
                     &wrap_area, para_y, 0, end_line,
@@ -3263,6 +3363,12 @@ impl LayoutEngine {
                     &overflow_map,
                 );
             }
+            // [Task #525] 비-TAC Picture/Shape Square wrap 의 어울림 문단 렌더링은
+            // layout_shape_item:3106 (PageItem::Shape 처리 시) 에서 수행. 본 패스에서
+            // 별도 호출은 동일 paragraph 의 wrap-around 텍스트가 두 다른 col_w 정렬로
+            // distinct x 위치에 중복 emit 되어 (광범위 시각 결함, 7 샘플 37 페이지 영향)
+            // 제거. Task #460 보완6의 wrap_precomputed IR 플래그로 FullParagraph path가
+            // cs offset을 정확히 적용하므로 별도 호출 불필요.
         }
     }
 
@@ -3358,7 +3464,14 @@ impl LayoutEngine {
                     );
                     est_x = tp;
                 } else {
-                    est_x += estimate_text_width(&ch.to_string(), &ts);
+                    // [Task #555] PUA 옛한글 char 은 자모 시퀀스 폭으로 측정.
+                    use super::pua_oldhangul::map_pua_old_hangul;
+                    let metric_str: String = if let Some(jamos) = map_pua_old_hangul(ch) {
+                        jamos.iter().copied().collect()
+                    } else {
+                        ch.to_string()
+                    };
+                    est_x += estimate_text_width(&metric_str, &ts);
                 }
                 char_idx += 1;
             }
@@ -3422,21 +3535,32 @@ fn compute_tac_leading_width(
     for run in &first_line.runs {
         let run_len = run.text.chars().count();
         let style = resolved_to_text_style(styles, run.char_style_id, run.lang_index);
+        // [Task #555] PUA 옛한글 변환 후 폰트 매트릭스는 자모 시퀀스 기준.
+        let effective_full = effective_text_for_metrics(run);
         match tac_pos_opt {
             Some(tac_pos) if char_pos + run_len <= tac_pos => {
-                width += estimate_text_width(&run.text, &style);
+                width += estimate_text_width(effective_full, &style);
                 char_pos += run_len;
             }
             Some(tac_pos) if char_pos < tac_pos => {
                 let partial_len = tac_pos - char_pos;
+                // partial 추출은 run.text 기준 (인덱싱 불변성). 이후 PUA 변환 적용.
                 let partial: String = run.text.chars().take(partial_len).collect();
-                width += estimate_text_width(&partial, &style);
+                let partial_display: String = partial.chars().flat_map(|ch| {
+                    use super::pua_oldhangul::map_pua_old_hangul;
+                    if let Some(jamos) = map_pua_old_hangul(ch) {
+                        jamos.iter().copied().collect::<Vec<_>>()
+                    } else {
+                        vec![ch]
+                    }
+                }).collect();
+                width += estimate_text_width(&partial_display, &style);
                 break;
             }
             Some(_) => break,
             None => {
                 // block 취급 TAC: 전체 run 합산
-                width += estimate_text_width(&run.text, &style);
+                width += estimate_text_width(effective_full, &style);
                 char_pos += run_len;
             }
         }

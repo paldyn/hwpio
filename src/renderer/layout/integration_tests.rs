@@ -524,4 +524,699 @@ mod tests {
             "layer SVG는 표 샘플에서 legacy SVG와 동일해야 함"
         );
     }
+
+    /// Task #537: TAC `<보기>` 표 직후 첫 답안(①) → 다음 답안(②) gap 이
+    /// IR `LINE_SEG.vpos` delta 와 일치해야 한다.
+    ///
+    /// 21_언어_기출_편집가능본.hwp 페이지 2 의 3번 문제 답안:
+    ///   pi=37 = TAC <보기> 표
+    ///   pi=38 = ① 답 (3 라인, lh=1100, ls=716)
+    ///   pi=39 = ② 답 (3 라인, lh=1100, ls=716)
+    ///   pi=40 = ③ 답 (2 라인)
+    ///
+    /// IR vpos delta:
+    ///   pi=38→pi=39: 5448 HU = 72.64 px (= 3*(lh+ls))
+    ///   pi=39→pi=40: 5448 HU = 72.64 px
+    ///
+    /// 버그(수정 전): lazy_base 가 sequential drift(trailing-ls 제외) 를
+    /// 동결시켜 pi=39 부터 IR_vpos − 716 HU 위치에 배치 →
+    /// ①→② gap 이 63.09 px (4732 HU, 1 ls 부족) 으로 좁아짐.
+    /// 수정 후: ①→② gap == ②→③ gap == 72.64 px.
+    #[test]
+    fn test_537_first_answer_after_tac_table_line_spacing() {
+        let Some(core) = load_document("samples/21_언어_기출_편집가능본.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(1).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 2 SVG 가 비어있음");
+
+        // SVG 에서 ① ② ③ 의 baseline y 추출.
+        // 형식: <text transform="translate(X,Y) ...">①</text>
+        // X 는 단 0 시작 부근 (좌측 단 답안 마커 위치).
+        let extract_y = |needle: char| -> Option<f64> {
+            for chunk in svg.split("<text ") {
+                if let Some(pos) = chunk.rfind(&format!(">{}</text>", needle)) {
+                    // 같은 chunk 의 transform 에서 두 번째 숫자(=y) 파싱
+                    let attrs = &chunk[..pos];
+                    let tr = attrs.find("translate(")?;
+                    let after = &attrs[tr + "translate(".len()..];
+                    let close = after.find(')')?;
+                    let inside = &after[..close];
+                    let mut parts = inside.split(',');
+                    let _x = parts.next()?.trim();
+                    let y = parts.next()?.trim().parse::<f64>().ok()?;
+                    return Some(y);
+                }
+            }
+            None
+        };
+
+        let y1 = extract_y('①').expect("① not found in page 2 SVG");
+        let y2 = extract_y('②').expect("② not found in page 2 SVG");
+        let y3 = extract_y('③').expect("③ not found in page 2 SVG");
+
+        let gap_12 = y2 - y1;
+        let gap_23 = y3 - y2;
+
+        // pi=38 (3 라인), pi=39 (3 라인) 동일 ParaShape → 두 gap 이 같아야 함.
+        // IR vpos delta 5448 HU = 72.64 px. 부동소수 톨러런스 0.5 px.
+        assert!(
+            (gap_12 - gap_23).abs() < 0.5,
+            "①→② gap({:.2}) 와 ②→③ gap({:.2}) 가 일치해야 함. \
+             y1={:.2}, y2={:.2}, y3={:.2}. \
+             버그(수정 전): gap_12=63.09, gap_23=72.64.",
+            gap_12, gap_23, y1, y2, y3
+        );
+
+        // IR delta 정합 검증: 5448 HU = 72.64 px.
+        let expected_gap = (5448.0_f64 * 96.0 / 7200.0_f64);
+        assert!(
+            (gap_12 - expected_gap).abs() < 0.5,
+            "①→② gap({:.2}) 가 IR vpos delta({:.2}) 와 일치해야 함",
+            gap_12, expected_gap
+        );
+    }
+
+    /// Task #539: InFrontOfText + treat_as_char Shape 호스트 paragraph 직후
+    /// 다음 paragraph 의 줄간격이 IR vpos delta 와 일치해야 한다.
+    ///
+    /// 21_언어_기출_편집가능본.hwp 페이지 7:
+    ///   pi=145 = "68혁명 이후..." (controls=1: InFrontOfText tac=true Shape, 글박스)
+    ///   pi=146 = "르포르는 1789년..."
+    ///
+    /// IR vpos delta (pi=145 last seg → pi=146 first seg):
+    ///   pi=145 last seg vpos≈24969+1100+716 = 26785 = pi=146 first seg vpos. delta = 1816 HU = 24.21 px.
+    ///
+    /// 버그(수정 전): pi=145 의 InFrontOfText Shape 가 `prev_has_overlay_shape`
+    /// 가드를 발동시켜 pi=146 의 vpos correction 자체를 skip → drift 716 HU(=9.55 px)
+    /// 잔존하여 pi=145 마지막 line(y=555) → pi=146 첫 line(y=569.81) gap = 14.67 px.
+    /// 수정 후: gap = 24.21 px (IR delta 정확).
+    #[test]
+    fn test_539_paragraph_after_overlay_shape_host() {
+        let Some(core) = load_document("samples/21_언어_기출_편집가능본.hwp") else {
+            return;
+        };
+
+        // 페이지 7 SVG 에서 col 0 영역의 '르' 첫 등장 (pi=146 첫 글자)
+        // 과 그 이전 줄의 글자 baseline y 추출
+        let svg = core.render_page_svg_native(6).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 7 SVG 가 비어있음");
+
+        // col 0 (x≈140-200) 의 글자별 (y, x, char) 수집
+        let mut points: Vec<(f64, f64, String)> = Vec::new();
+        for chunk in svg.split("<text ") {
+            if let Some(close) = chunk.find("</text>") {
+                let attrs_and_content = &chunk[..close];
+                if let Some(gt) = attrs_and_content.find('>') {
+                    let attrs = &attrs_and_content[..gt];
+                    let content = &attrs_and_content[gt + 1..];
+                    if content.chars().count() != 1 { continue; }
+                    let tr = match attrs.find("translate(") {
+                        Some(p) => p + "translate(".len(),
+                        None => continue,
+                    };
+                    let close_paren = match attrs[tr..].find(')') {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let inside = &attrs[tr..tr + close_paren];
+                    let mut parts = inside.split(',');
+                    let x = parts.next().and_then(|s| s.trim().parse::<f64>().ok());
+                    let y = parts.next().and_then(|s| s.trim().parse::<f64>().ok());
+                    if let (Some(x), Some(y)) = (x, y) {
+                        if (130.0..=200.0).contains(&x) && (500.0..=700.0).contains(&y) {
+                            points.push((y, x, content.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        // '르' 의 첫 등장 (pi=146 의 첫 글자) y
+        let leporeut_y = points.iter()
+            .find(|(_, _, c)| c == "르")
+            .map(|(y, _, _)| *y)
+            .expect("페이지 7 col 0 에서 '르' 를 찾을 수 없음");
+
+        // '르' 직전 line 의 글자 y 찾기 (gap 측정용)
+        let prev_line_y = points.iter()
+            .filter(|(y, _, _)| *y < leporeut_y - 0.5)
+            .last()
+            .map(|(y, _, _)| *y)
+            .expect("'르' 직전 line 을 찾을 수 없음");
+
+        let gap = leporeut_y - prev_line_y;
+        let expected_gap = 1816.0_f64 * 96.0 / 7200.0;  // 24.21 px
+
+        assert!(
+            (gap - expected_gap).abs() < 0.5,
+            "pi=145 last line(y={:.2}) → pi=146 first line '르'(y={:.2}) gap({:.2}) 가 \
+             IR vpos delta({:.2} px = 1816 HU) 와 일치해야 함. \
+             버그(수정 전): gap=14.67 (1 ls=716 HU 부족, prev_has_overlay_shape 가드로 \
+             vpos correction skipped).",
+            prev_line_y, leporeut_y, gap, expected_gap
+        );
+    }
+
+    /// Task #539: 페이지 9 의 PartialParagraph + InFrontOfText Shape 호스트 케이스.
+    ///
+    /// 21_언어_기출_편집가능본.hwp 페이지 9 col 0:
+    ///   pi=181 (lines 8..13) = PartialParagraph (controls=1: InFrontOfText tac=true Shape)
+    ///   pi=182 = "더불어 수피즘의 의식에..."
+    ///
+    /// IR vpos delta:
+    ///   pi=181 line 12 vpos=7264, pi=182 line 0 vpos=9080. delta = 1816 HU = 24.21 px.
+    ///
+    /// 버그(수정 전): pi=181 의 InFrontOfText Shape 로 인해 pi=182 의 vpos correction
+    /// skipped → gap = 14.67 px (1 ls 부족).
+    #[test]
+    fn test_539_partial_paragraph_after_overlay_shape() {
+        let Some(core) = load_document("samples/21_언어_기출_편집가능본.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(8).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 9 SVG 가 비어있음");
+
+        // col 0 영역 (x≈140-540) y 분포 (페이지 9 col 0 상단)
+        let mut points: Vec<(f64, f64, String)> = Vec::new();
+        for chunk in svg.split("<text ") {
+            if let Some(close) = chunk.find("</text>") {
+                let attrs_and_content = &chunk[..close];
+                if let Some(gt) = attrs_and_content.find('>') {
+                    let attrs = &attrs_and_content[..gt];
+                    let content = &attrs_and_content[gt + 1..];
+                    if content.chars().count() != 1 { continue; }
+                    let tr = match attrs.find("translate(") {
+                        Some(p) => p + "translate(".len(),
+                        None => continue,
+                    };
+                    let close_paren = match attrs[tr..].find(')') {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let inside = &attrs[tr..tr + close_paren];
+                    let mut parts = inside.split(',');
+                    let x = parts.next().and_then(|s| s.trim().parse::<f64>().ok());
+                    let y = parts.next().and_then(|s| s.trim().parse::<f64>().ok());
+                    if let (Some(x), Some(y)) = (x, y) {
+                        if (140.0..=540.0).contains(&x) && (250.0..=400.0).contains(&y) {
+                            points.push((y, x, content.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+        // '더' 의 첫 등장 (pi=182 의 첫 글자)
+        let deobureo_y = points.iter()
+            .find(|(_, _, c)| c == "더")
+            .map(|(y, _, _)| *y)
+            .expect("페이지 9 col 0 에서 '더' 를 찾을 수 없음");
+
+        let prev_line_y = points.iter()
+            .filter(|(y, _, _)| *y < deobureo_y - 0.5)
+            .last()
+            .map(|(y, _, _)| *y)
+            .expect("'더' 직전 line 을 찾을 수 없음");
+
+        let gap = deobureo_y - prev_line_y;
+        let expected_gap = 1816.0_f64 * 96.0 / 7200.0;  // 24.21 px
+
+        assert!(
+            (gap - expected_gap).abs() < 0.5,
+            "pi=181 last line(y={:.2}) → pi=182 first line '더'(y={:.2}) gap({:.2}) 가 \
+             IR vpos delta({:.2} px = 1816 HU) 와 일치해야 함. \
+             버그(수정 전): gap=14.67 (PartialParagraph 의 overlay Shape 가드로 skipped).",
+            prev_line_y, deobureo_y, gap, expected_gap
+        );
+    }
+
+    /// Task #552: Task #479 회귀 정정 — paragraph border 시작 직전 trailing ls 보존.
+    ///
+    /// 페이지 2 우측 단 [4~6] passage 박스 top y 와 [4~6] header text 간 gap 검증.
+    ///
+    /// pi=44 ([4~6] header, 본문 paragraph, no border) 의 마지막 줄 trailing ls 716 HU
+    /// = 9.54 px 가 박스 top 위치를 결정. Task #479 가 본문 paragraph 마지막 줄에서
+    /// trailing ls 제거하여 박스 top 이 header 텍스트 바로 아래에 붙는 회귀.
+    ///
+    /// PDF 한컴 2010: gap = 175.36 - 168.81 = 6.55 pt = 8.73 px (96 dpi 환산)
+    /// pre-#479 baseline: gap = 9.54 px (PDF 정합 ±2 px)
+    /// post-#479 (수정 전): gap = 0.0 px (회귀)
+    ///
+    /// 본 테스트: header 텍스트 baseline + ascent 와 박스 top horizontal line 간 gap
+    /// 이 6 px 이상 (회귀 검출).
+    #[test]
+    #[ignore]
+    fn test_552_passage_box_top_gap_p2_4_6() {
+        let Some(core) = load_document("samples/21_언어_기출_편집가능본.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(1).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 2 SVG 가 비어있음");
+
+        // 1. [4~6] header text "[" 의 y 좌표 (우측 단 = x ≥ 575)
+        // SVG <text transform="translate(X,Y)">[</text> 형식
+        let mut header_y: Option<f64> = None;
+        for chunk in svg.split("<text ").skip(1) {
+            let close = match chunk.find('>') { Some(p) => p, None => continue };
+            let attrs = &chunk[..close];
+            let key = "transform=\"translate(";
+            let p = match attrs.find(key) { Some(p) => p + key.len(), None => continue };
+            let q = match attrs[p..].find(')') { Some(q) => q, None => continue };
+            let coords = &attrs[p..p+q];
+            let parts: Vec<&str> = coords.split(',').collect();
+            if parts.len() != 2 { continue; }
+            let x: f64 = match parts[0].trim().parse() { Ok(v) => v, Err(_) => continue };
+            let y: f64 = match parts[1].trim().parse() { Ok(v) => v, Err(_) => continue };
+            // Body content
+            let body_start = close + 1;
+            let body_end = chunk[body_start..].find("</text>").map(|i| body_start + i).unwrap_or(close);
+            let body = &chunk[body_start..body_end];
+            // 우측 단 (x >= 575) y in [215, 230] [4~6] header
+            if x >= 575.0 && x < 590.0 && y > 215.0 && y < 230.0 && body == "[" {
+                header_y = Some(y);
+                break;
+            }
+        }
+        let header_y = header_y.expect("페이지 2 우측 단 [4~6] header \"[\" 텍스트를 찾지 못함");
+
+        // 2. 박스 top horizontal line: y > header_y, x1 ≈ 591 (col 1 box left)
+        let mut box_top_y: Option<f64> = None;
+        for chunk in svg.split("<line ").skip(1) {
+            let end = chunk.find("/>").or_else(|| chunk.find('>')).unwrap_or(chunk.len());
+            let attrs = &chunk[..end];
+            let parse_attr = |name: &str| -> Option<f64> {
+                let pat = format!("{}=\"", name);
+                let i = attrs.find(&pat)? + pat.len();
+                let j = i + attrs[i..].find('"')?;
+                attrs[i..j].parse::<f64>().ok()
+            };
+            let (x1, y1, x2, y2) = match (parse_attr("x1"), parse_attr("y1"), parse_attr("x2"), parse_attr("y2")) {
+                (Some(a), Some(b), Some(c), Some(d)) => (a, b, c, d),
+                _ => continue,
+            };
+            // horizontal line (y1 == y2), 우측 단 (x1 >= 575), header 아래
+            if (y1 - y2).abs() < 0.5
+                && x1 >= 575.0 && x2 >= 575.0
+                && y1 > header_y && y1 < header_y + 30.0
+            {
+                box_top_y = Some(y1);
+                break;
+            }
+        }
+        let box_top_y = box_top_y.expect(
+            "페이지 2 우측 단 [4~6] 박스 top horizontal line 을 찾지 못함");
+
+        // 3. gap 검증: header bottom (≈ header_y + ascent) → box top
+        // header text font-size 14.67, scale 0.95 → ascent ≈ font * 0.15 = 2.20
+        // header bottom = header_y + 2.20 ≈ 224.43
+        // PDF 정합: gap = 8.73 px. tolerance ±2 px → gap 검증 ≥ 6.0 px.
+        let header_bottom = header_y + 2.20;
+        let gap = box_top_y - header_bottom;
+
+        assert!(
+            gap >= 6.0,
+            "[4~6] 박스 top y={:.2} 가 header bottom y={:.2} 와 충분한 gap 을 \
+             가져야 함. gap={:.2} px (PDF 기대 8.73 px ±2 px). \
+             버그(수정 전): gap=0.0 (Task #479 가 본문 paragraph 마지막 줄 \
+             trailing ls 제외 → border-start paragraph 가 9.54 px 위로 이동). \
+             pre-#479 baseline: gap=9.54 (PDF 정합).",
+            box_top_y, header_bottom, gap
+        );
+    }
+
+    /// Task #544: 페이지 4 [7~9] passage 박스 좌표 PDF 정합 검증.
+    ///
+    /// 한컴 2010 PDF 기준 (페이지 4 col 0 박스):
+    ///   - 박스 top y = 233.8 px (= body_area.y + pi=80 IR vpos end)
+    ///   - 박스 left x ≈ 117.0 px (= col_area.x = body_area.x)
+    ///   - 박스 width ≈ 425.1 px (= col_width 전체, paragraph margin 미적용)
+    ///
+    /// 현재 rhwp SVG (수정 전):
+    ///   - 박스 top y = 224.4 (-9.4 px, pi=80 trailing-ls 716 HU 누락)
+    ///   - 박스 left x = 128.5 (+11.5 px, ParaShape margin_left 적용)
+    ///   - 박스 width = 402.5 (-22.6 px, margin_left+right 차감)
+    ///
+    /// 본 테스트는 fix 적용 전 RED, fix 적용 후 GREEN.
+    #[test]
+    fn test_544_passage_box_coords_match_pdf_p4() {
+        let Some(core) = load_document("samples/21_언어_기출_편집가능본.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(3).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 4 SVG 가 비어있음");
+
+        // SVG <line> 좌표 추출, col 0 (x in 100~545) horizontal 라인 중 박스 top 식별.
+        let mut top_horizontals: Vec<(f64, f64, f64)> = Vec::new();
+        for chunk in svg.split("<line ") {
+            if !chunk.starts_with("x") { continue; }
+            let close = match chunk.find("/>") { Some(p) => p, None => continue };
+            let attrs = &chunk[..close];
+            let parse_attr = |name: &str| -> Option<f64> {
+                let key = format!("{}=\"", name);
+                let p = attrs.find(&key)? + key.len();
+                let q = attrs[p..].find('"')?;
+                attrs[p..p+q].parse::<f64>().ok()
+            };
+            let x1 = match parse_attr("x1") { Some(v) => v, None => continue };
+            let y1 = match parse_attr("y1") { Some(v) => v, None => continue };
+            let x2 = match parse_attr("x2") { Some(v) => v, None => continue };
+            let y2 = match parse_attr("y2") { Some(v) => v, None => continue };
+            let x_min = x1.min(x2);
+            let x_max = x1.max(x2);
+            // 박스 top horizontal: y1≈y2, 길이 > 100 px, x in 100~545 (col 0)
+            if (y1 - y2).abs() < 0.5
+                && (x_max - x_min) > 100.0
+                && x_min >= 100.0 && x_max <= 545.0
+            {
+                top_horizontals.push((x_min, x_max, y1));
+            }
+        }
+        assert!(!top_horizontals.is_empty(),
+            "페이지 4 col 0 에서 박스 horizontal line 을 찾지 못함");
+
+        // 가장 위쪽의 horizontal = passage 박스 top
+        // body_area.y = 209.76 직후 영역 ([7~9] 첫줄 직후)
+        top_horizontals.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap());
+        let (box_left_x, box_right_x, box_top_y) = top_horizontals.iter()
+            .find(|(_, _, y)| *y > 220.0)  // [7~9] line baseline 보다 아래
+            .copied()
+            .expect("페이지 4 col 0 [7~9] 박스 top horizontal 을 찾지 못함");
+        let box_width = box_right_x - box_left_x;
+
+        // PDF 기준 (한컴 2010)
+        let pdf_box_top_y: f64 = 233.8;
+        let pdf_box_left_x: f64 = 117.0;
+        let pdf_box_width: f64 = 425.1;
+
+        assert!(
+            (box_top_y - pdf_box_top_y).abs() < 2.0,
+            "[7~9] 박스 top y={:.2} 가 PDF 기대값 {:.2} (±2 px) 와 일치해야 함. \
+             버그(수정 전): box_top_y=224.4 (-9.4 px, pi=80 trailing-ls 716 HU 누락).",
+            box_top_y, pdf_box_top_y
+        );
+        assert!(
+            (box_left_x - pdf_box_left_x).abs() < 2.0,
+            "[7~9] 박스 left x={:.2} 가 PDF 기대값 {:.2} (±2 px) 와 일치해야 함. \
+             버그(수정 전): box_left_x=128.5 (+11.5 px, ParaShape margin_left 적용).",
+            box_left_x, pdf_box_left_x
+        );
+        assert!(
+            (box_width - pdf_box_width).abs() < 2.0,
+            "[7~9] 박스 width={:.2} 가 PDF 기대값 {:.2} (±2 px) 와 일치해야 함. \
+             버그(수정 전): box_width=402.5 (-22.6 px, margin_left+right 차감).",
+            box_width, pdf_box_width
+        );
+    }
+
+    /// Task #547: 페이지 4 [7~9] passage 박스 안 본문 텍스트 좌측 inset PDF 정합 검증.
+    ///
+    /// 박스 outline 은 Task #544 에서 col_area 로 정정되었으나, 박스 안 본문 텍스트의
+    /// 좌측 inset 이 paragraph margin_left (1704 HU = 11.36 px) 를 두 번 더해 22.66 px
+    /// 가 됨. PDF (한컴 2010) 는 박스 안 좌측 여백 ≈ 11.33 px (margin 한 번만).
+    ///
+    /// pi=82 (passage 본문) ParaShape:
+    ///   - margin_left=1704 HU → 11.36 px
+    ///   - indent=1984 HU → 13.23 px (첫줄만 적용)
+    ///   - border_fill_id=4 (paragraph border with stroke)
+    ///   - border_spacing[0]=[1]=0
+    ///
+    /// 두 번째+ 줄 (line_indent=0) 의 텍스트 x 좌표:
+    ///   - 현재 (수정 전): col_area.x + 11.36 + 11.36 = 139.89 px (inner_pad 중복)
+    ///   - 정정 후: col_area.x + 11.36 = 128.53 px (margin 한 번만)
+    ///   - PDF 기대: ≈ 128.5 px (±2 px)
+    ///
+    /// 본 테스트는 fix 적용 전 RED, fix 적용 후 GREEN.
+    #[test]
+    fn test_547_passage_text_inset_match_pdf_p4() {
+        let Some(core) = load_document("samples/21_언어_기출_편집가능본.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(3).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 4 SVG 가 비어있음");
+
+        // SVG <text> 요소 추출. transform="translate(x,y) ..." 형식 파싱.
+        // col 0 (x in 100~545), 박스 안 (y > 240) 영역만.
+        let mut text_xs: Vec<(f64, f64)> = Vec::new();  // (x, y)
+        for chunk in svg.split("<text ") {
+            let close = match chunk.find(">") { Some(p) => p, None => continue };
+            let attrs = &chunk[..close];
+            // transform="translate(X,Y) scale(...)"
+            let key = "transform=\"translate(";
+            let p = match attrs.find(key) { Some(p) => p + key.len(), None => continue };
+            let q = match attrs[p..].find(')') { Some(q) => q, None => continue };
+            let coords = &attrs[p..p+q];
+            let parts: Vec<&str> = coords.split(',').collect();
+            if parts.len() != 2 { continue; }
+            let x: f64 = match parts[0].trim().parse() { Ok(v) => v, Err(_) => continue };
+            let y: f64 = match parts[1].trim().parse() { Ok(v) => v, Err(_) => continue };
+            // [7~9] 박스 영역: col 0 (x < 545), y > 240 (박스 top 직후, 첫줄+),
+            // y < 360 (박스 안 본문 처음 몇 줄만 — 다음 박스 회피)
+            if x >= 100.0 && x <= 545.0 && y > 240.0 && y < 360.0 {
+                text_xs.push((x, y));
+            }
+        }
+        assert!(!text_xs.is_empty(),
+            "페이지 4 col 0 [7~9] 박스 안에서 <text> 요소를 찾지 못함");
+
+        // 박스 안 텍스트의 최소 x 좌표 = 줄 시작 x (line_indent=0 인 두 번째+ 줄)
+        // pi=82 첫줄은 indent=13.23 px 추가되므로 더 큼. 둘째+ 줄이 최소.
+        let min_x = text_xs.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+
+        let pdf_text_min_x: f64 = 128.5;
+
+        assert!(
+            (min_x - pdf_text_min_x).abs() < 2.0,
+            "[7~9] 박스 안 본문 텍스트 최소 x={:.2} 가 PDF 기대값 {:.2} (±2 px) 와 \
+             일치해야 함. 버그(수정 전): min_x=139.89 (+11.4 px, inner_pad_left=margin_left \
+             중복 적용).",
+            min_x, pdf_text_min_x
+        );
+    }
+
+    /// Task #548: 셀 내부 paragraph 첫줄 inline TAC Shape 의 좌측 위치 PDF 정합 검증.
+    ///
+    /// 페이지 8 보기 표 (pi=167) 셀 5 (3-col 병합 본문 셀) 의 첫 줄 시작에 있는
+    /// [푸코] inline rectangle Shape (treat_as_char=true).
+    ///
+    /// ps_id=19 ParaShape:
+    ///   - margin_left=1704 HU → 11.36 px
+    ///   - indent=+1980 HU → +13.20 px (positive first-line indent)
+    ///   - border_fill_id=1, alignment=Justify
+    ///
+    /// 기대 위치 (paragraph_layout 텍스트 경로와 일치):
+    ///   - cell_x (131.04) + margin_left (11.36) + indent (13.20) = 155.60 px
+    ///   - PDF (한컴 2010) 측정: ≈155.6 px ±2 px
+    ///
+    /// 현재 (수정 전):
+    ///   - inline_x = inner_area.x = 131.04 (margin/indent 미적용)
+    ///   - 텍스트 "는" 은 paragraph_layout 경로로 정확히 185.83 위치
+    ///   - shape rect 만 131.04 위치 (불일치)
+    ///
+    /// 본 테스트는 fix 적용 전 RED, fix 적용 후 GREEN.
+    #[test]
+    fn test_548_cell_inline_shape_first_line_indent_p8() {
+        let Some(core) = load_document("samples/21_언어_기출_편집가능본.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(7).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 8 SVG 가 비어있음");
+
+        // 페이지 8 셀 5 line 0 [푸코] rect 찾기:
+        //   - y in [685, 690] (셀 5 첫줄, vpos=0 + 작은 offset)
+        //   - width ≈ 30.23 (푸코 box width = curr_w 2267 HU)
+        //   - height ≈ 18.89 (푸코 box height = curr_h 1417 HU)
+        let mut puko_x: Option<f64> = None;
+        for chunk in svg.split("<rect ") {
+            let close = match chunk.find("/>") { Some(p) => p, None => continue };
+            let attrs = &chunk[..close];
+            let parse_attr = |name: &str| -> Option<f64> {
+                let key = format!("{}=\"", name);
+                let p = attrs.find(&key)? + key.len();
+                let q = attrs[p..].find('"')?;
+                attrs[p..p+q].parse::<f64>().ok()
+            };
+            let x = match parse_attr("x") { Some(v) => v, None => continue };
+            let y = match parse_attr("y") { Some(v) => v, None => continue };
+            let w = match parse_attr("width") { Some(v) => v, None => continue };
+            let h = match parse_attr("height") { Some(v) => v, None => continue };
+            // 본 devel 의 #479 미적용 trailing-ls 모델로 셀 y 위치가 컨트리뷰터 fork
+            // (y≈685-690) 대비 다름. 본 devel 측정 y≈698.43 → 범위 [690, 710] 으로 조정.
+            if (w - 30.23).abs() < 0.5
+                && (h - 18.89).abs() < 0.5
+                && y > 690.0 && y < 710.0
+            {
+                puko_x = Some(x);
+                break;
+            }
+        }
+        let puko_x = puko_x.expect("페이지 8 셀 5 line 0 [푸코] rect 를 찾지 못함");
+
+        // PDF (한컴 2010) 기대값
+        let pdf_puko_x: f64 = 155.6;
+
+        assert!(
+            (puko_x - pdf_puko_x).abs() < 2.0,
+            "셀 5 line 0 [푸코] box left x={:.2} 가 PDF 기대값 {:.2} (±2 px) 와 \
+             일치해야 함. 버그(수정 전): puko_x=131.04 (-24.6 px, table_layout \
+             inline_x 가 effective_margin_left + first_line_indent 미적용).",
+            puko_x, pdf_puko_x
+        );
+    }
+
+    /// Task #521: exam_eng p2 18번 박스 (TAC 표) 하단 ↔ ① 첫 답안 gap 정합 검증.
+    ///
+    /// 페이지 2 우측 단 18번 문제 (pi=104) 의 TAC 표 (1×1, 이메일 박스, h=76.2mm,
+    /// outer_margin_bottom=2.1mm=600 HU) 직후 ① 첫 답안 (pi=105) 위치.
+    ///
+    /// HWP IR ls[0] lh=22207 = cell h (21607) + outer_margin_bottom (600) 으로
+    /// lh 정의. layout_table_item TAC after-spacing 분기 (layout.rs:2491-2497) 가
+    /// outer_margin_bottom 미적용 → 다음 paragraph 가 8 px 위로 시프트.
+    ///
+    /// PDF 한컴 2010: 박스 bottom → ① 첫 답안 gap ≈ 20 px
+    /// 수정 전: gap = 12.27 px (-7.7 px shortfall)
+    /// 수정 후: gap = 20.27 px (PDF ±2 px 정합)
+    #[test]
+    fn test_521_tac_table_outer_margin_bottom_p2() {
+        let Some(core) = load_document("samples/exam_eng.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(1).unwrap_or_default();
+        assert!(!svg.is_empty(), "페이지 2 SVG 가 비어있음");
+
+        // 박스 (table border rect) bottom y 찾기
+        // 우측 단 (x ≈ 597), top y ≈ 244, height ≈ 288 → bottom ≈ 532
+        let mut box_bottom: Option<f64> = None;
+        for chunk in svg.split("<rect ").skip(1) {
+            let close = match chunk.find("/>") { Some(p) => p, None => continue };
+            let attrs = &chunk[..close];
+            let parse_attr = |name: &str| -> Option<f64> {
+                let key = format!("{}=\"", name);
+                let p = attrs.find(&key)? + key.len();
+                let q = attrs[p..].find('"')?;
+                attrs[p..p+q].parse::<f64>().ok()
+            };
+            let x = match parse_attr("x") { Some(v) => v, None => continue };
+            let y = match parse_attr("y") { Some(v) => v, None => continue };
+            let h = match parse_attr("height") { Some(v) => v, None => continue };
+            // 박스: x ≈ 597 (col 1), y in [240, 250], h in [285, 290]
+            if x > 595.0 && x < 600.0 && y > 240.0 && y < 250.0 && h > 285.0 && h < 290.0 {
+                box_bottom = Some(y + h);
+                break;
+            }
+        }
+        let box_bottom = box_bottom.expect("페이지 2 우측 단 18번 박스 (TAC 표) rect 를 찾지 못함");
+
+        // ① 첫 답안 baseline y 찾기 (우측 단, box bottom 직후)
+        let mut answer_y: Option<f64> = None;
+        for chunk in svg.split("<text ").skip(1) {
+            let close = match chunk.find('>') { Some(p) => p, None => continue };
+            let attrs = &chunk[..close];
+            let key = "transform=\"translate(";
+            let p = match attrs.find(key) { Some(p) => p + key.len(), None => continue };
+            let q = match attrs[p..].find(')') { Some(q) => q, None => continue };
+            let coords = &attrs[p..p+q];
+            let parts: Vec<&str> = coords.split(',').collect();
+            if parts.len() != 2 { continue; }
+            let x: f64 = match parts[0].trim().parse() { Ok(v) => v, Err(_) => continue };
+            let y: f64 = match parts[1].trim().parse() { Ok(v) => v, Err(_) => continue };
+            let body_start = close + 1;
+            let body_end = chunk[body_start..].find("</text>").map(|i| body_start + i).unwrap_or(close);
+            let body = &chunk[body_start..body_end];
+            // 우측 단 (x > 580), box bottom 직후 (y > box_bottom + 5), '①' 문자
+            if x > 580.0 && y > box_bottom + 5.0 && y < box_bottom + 30.0 && body == "①" {
+                answer_y = Some(y);
+                break;
+            }
+        }
+        let answer_y = answer_y.expect("페이지 2 우측 단 18번 ① 첫 답안을 찾지 못함");
+
+        // gap 검증
+        let gap = answer_y - box_bottom;
+        let pdf_expected_gap: f64 = 20.0;
+
+        assert!(
+            (gap - pdf_expected_gap).abs() < 2.0,
+            "박스 bottom y={:.2} → ① y={:.2} gap={:.2} 가 PDF 기대값 {:.2} (±2 px) 와 \
+             일치해야 함. 버그(수정 전): gap=12.27 (-7.7 px shortfall, \
+             layout_table_item TAC after-spacing 의 outer_margin_bottom 미적용).",
+            box_bottom, answer_y, gap, pdf_expected_gap
+        );
+    }
+
+    /// Task #574: exam_science.hwp 페이지 1 쪽번호 "1" 이 CharShape.bold=false 인데도
+    /// SVG 에서 font-weight="bold" 강제 적용되는 결함 정정 검증.
+    ///
+    /// 본질: `is_heavy_display_face` (`src/renderer/style_resolver.rs:601`) 의 hardcoded
+    /// list 에 HY견명조 가 잘못 포함됨. HY견명조 는 한컴 일반 두께 명조 폰트이며,
+    /// HY헤드라인M / HY견고딕 같은 진짜 heavy display face 와 다름.
+    ///
+    /// 케이스: 본문 [6] 표 셀 paragraph[0] Shape (사각형, InFrontOfText) TextBox
+    /// 내부 literal text "1". CharShape cs_id=0 (size=3300, bold=false, color=#000000,
+    /// ratio=90%, font_id[0]=8 → HY견명조).
+    ///
+    /// 수정 전: SVG `<text font-size="44" font-weight="bold" fill="#000000">1</text>`.
+    /// 수정 후: `font-weight="bold"` 미적용 — CharShape.bold=false 권위 회복.
+    #[test]
+    fn test_574_page_number_not_force_bold_for_hy_kyun_myeongjo() {
+        let Some(core) = load_document("samples/exam_science.hwp") else {
+            return;
+        };
+        let svg = core.render_page_svg_native(0).unwrap_or_default();
+        assert!(!svg.is_empty(), "exam_science 페이지 1 SVG 가 비어있음");
+
+        // 페이지 우상단 (x≈924, y≈115) 의 font-size=44 + HY견명조 텍스트 "1" 식별.
+        // 해당 텍스트는 CharShape.bold=false 이므로 font-weight="bold" 가 없어야 한다.
+        let mut found_page_number = false;
+        for chunk in svg.split("<text").skip(1) {
+            let close = match chunk.find('>') { Some(p) => p, None => continue };
+            let header = &chunk[..close];
+            let body_end = chunk.find("</text>").unwrap_or(chunk.len());
+            let body = &chunk[close + 1..body_end];
+
+            // 본 페이지의 쪽번호 "1" 식별 조건:
+            // (1) 텍스트 = "1"
+            // (2) font-size=44 (33pt)
+            // (3) HY견명조 폰트 패밀리 체인
+            // (4) translate(x≈924, y≈115)
+            if body.trim() != "1" { continue; }
+            if !header.contains("font-size=\"44\"") { continue; }
+            if !header.contains("HY견명조") { continue; }
+
+            let trans_pat = "transform=\"translate(";
+            let Some(tp) = header.find(trans_pat) else { continue };
+            let trans_args_start = tp + trans_pat.len();
+            let trans_rest = &header[trans_args_start..];
+            let Some(close_paren) = trans_rest.find(')') else { continue };
+            let trans_args = &trans_rest[..close_paren];
+            let mut parts = trans_args.split(',');
+            let x: f64 = match parts.next().and_then(|s| s.trim().parse().ok()) {
+                Some(v) => v, None => continue,
+            };
+            let y: f64 = match parts.next().and_then(|s| s.trim().parse().ok()) {
+                Some(v) => v, None => continue,
+            };
+
+            // 우상단 영역 가드 (페이지 1 측정값 기준)
+            if !(900.0..=950.0).contains(&x) || !(100.0..=130.0).contains(&y) { continue; }
+
+            found_page_number = true;
+            assert!(
+                !header.contains("font-weight=\"bold\""),
+                "Task #574: 쪽번호 '1' (x={:.1}, y={:.1}, HY견명조, font-size=44) 가 \
+                 font-weight=\"bold\" 강제 적용됨. CharShape cs_id=0 의 bold=false \
+                 가 무시되는 is_heavy_display_face 결함. header=[{}]",
+                x, y, header,
+            );
+            break;
+        }
+
+        assert!(
+            found_page_number,
+            "Task #574: 페이지 1 우상단 쪽번호 '1' (font-size=44, HY견명조, x≈924, y≈115) \
+             SVG 요소를 찾지 못함 — 식별 가드 갱신 필요"
+        );
+    }
 }

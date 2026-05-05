@@ -9,6 +9,7 @@ fn main() {
         Some("--help") | Some("-h") => print_help(),
         Some("--version") | Some("-V") => println!("rhwp v{}", rhwp::version()),
         Some("export-svg") => export_svg(&args[2..]),
+        Some("export-png") => export_png(&args[2..]),
         Some("export-pdf") => export_pdf(&args[2..]),
         Some("export-text") => export_text(&args[2..]),
         Some("export-markdown") => export_markdown(&args[2..]),
@@ -21,6 +22,7 @@ fn main() {
         Some("test-shape") => test_shape_roundtrip(&args[2..]),
         Some("test-caption") => test_caption(&args[2..]),
         Some("gen-table") => gen_table(&args[2..]),
+        Some("gen-pua") => gen_pua_test(&args[2..]),
         Some("test-field") => test_field_roundtrip(&args[2..]),
         Some("ir-diff") => ir_diff(&args[2..]),
         Some("thumbnail") => extract_thumbnail(&args[2..]),
@@ -52,6 +54,20 @@ fn print_help() {
     println!("      --embed-fonts           폰트 서브셋 임베딩 (사용 글자만 base64)");
     println!("      --embed-fonts=full      폰트 전체 임베딩 (base64)");
     println!("      --font-path <경로>      폰트 파일 탐색 경로 (여러 번 지정 가능)");
+    println!();
+    println!("  export-png <파일.hwp> [옵션]   (native-skia feature 필요)");
+    println!("      HWP 파일을 PNG로 내보내기 (Skia raster backend, AI 파이프라인 + VLM 연동)");
+    println!();
+    println!("      -o, --output <폴더>     출력 폴더 (기본: output/)");
+    println!("      -p, --page <번호>       특정 페이지만 내보내기 (0부터 시작)");
+    println!("      --font-path <경로>      폰트 파일 탐색 경로 (여러 번 지정 가능)");
+    println!("                              한컴 전용 폰트 (HY견명조 등) 가 시스템에 없을 때 ttfs 디렉토리 지정");
+    println!("      --scale <배율>          렌더링 배율 (기본: 1.0)");
+    println!("      --max-dimension <픽셀>  한 변 최대 픽셀 (longest edge). VLM 입력 한도용.");
+    println!("                              명시 --scale 이 없으면 자동 scale 계산 (페이지 → 한도 안)");
+    println!("      --vlm-target <프리셋>   VLM 입력 프리셋 (현재: claude)");
+    println!("                              claude: 1568 px / 1.15 MP (Claude Vision 정합)");
+    println!("                              다른 VLM (gpt4v/gemini/qwen-vl/llava) 은 이슈 #613 후속");
     println!();
     println!("  export-text <파일.hwp> [옵션]");
     println!("      페이지별 텍스트를 TXT로 내보내기");
@@ -359,6 +375,218 @@ fn extract_attr_f64(svg: &str, attr: &str) -> Option<f64> {
         }
     }
     None
+}
+
+#[cfg(not(feature = "native-skia"))]
+fn export_png(_args: &[String]) {
+    eprintln!("오류: export-png 명령은 native-skia feature 가 활성화되어야 합니다.");
+    eprintln!("       cargo build --release --features native-skia");
+}
+
+#[cfg(feature = "native-skia")]
+fn export_png(args: &[String]) {
+    use rhwp::document_core::queries::rendering::{PngExportOptions, VlmTarget};
+
+    if args.is_empty() {
+        eprintln!("오류: HWP 파일 경로를 지정해주세요.");
+        eprintln!("사용법: rhwp export-png <파일.hwp> [옵션] (rhwp --help 참조)");
+        return;
+    }
+
+    let file_path = &args[0];
+    let mut output_dir = "output".to_string();
+    let mut target_page: Option<u32> = None;
+    let mut font_paths: Vec<std::path::PathBuf> = Vec::new();
+    let mut scale: Option<f64> = None;
+    let mut max_dimension: Option<i32> = None;
+    let mut vlm_target: Option<VlmTarget> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--output" | "-o" => {
+                if i + 1 < args.len() {
+                    output_dir = args[i + 1].clone();
+                    i += 2;
+                } else {
+                    eprintln!("오류: --output 뒤에 폴더 경로가 필요합니다.");
+                    return;
+                }
+            }
+            "--page" | "-p" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<u32>() {
+                        Ok(n) => target_page = Some(n),
+                        Err(_) => {
+                            eprintln!("오류: 페이지 번호가 올바르지 않습니다.");
+                            return;
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("오류: --page 뒤에 페이지 번호가 필요합니다.");
+                    return;
+                }
+            }
+            "--font-path" => {
+                if i + 1 < args.len() {
+                    font_paths.push(std::path::PathBuf::from(&args[i + 1]));
+                    i += 2;
+                } else {
+                    eprintln!("오류: --font-path 뒤에 경로가 필요합니다.");
+                    return;
+                }
+            }
+            "--scale" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<f64>() {
+                        Ok(s) if s.is_finite() && s > 0.0 => scale = Some(s),
+                        _ => {
+                            eprintln!("오류: --scale 값이 올바르지 않습니다 (양수 실수 필요).");
+                            return;
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("오류: --scale 뒤에 배율 값이 필요합니다.");
+                    return;
+                }
+            }
+            "--max-dimension" => {
+                if i + 1 < args.len() {
+                    match args[i + 1].parse::<i32>() {
+                        Ok(n) if n > 0 => max_dimension = Some(n),
+                        _ => {
+                            eprintln!("오류: --max-dimension 값이 올바르지 않습니다 (양수 정수 필요).");
+                            return;
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("오류: --max-dimension 뒤에 픽셀 값이 필요합니다.");
+                    return;
+                }
+            }
+            "--vlm-target" => {
+                if i + 1 < args.len() {
+                    match VlmTarget::from_str(&args[i + 1]) {
+                        Some(t) => vlm_target = Some(t),
+                        None => {
+                            eprintln!("오류: --vlm-target 값이 올바르지 않습니다 (지원: claude).");
+                            eprintln!("       다른 VLM 프리셋 (gpt4v / gemini / qwen-vl / llava) 은 이슈 #613 후속 task.");
+                            return;
+                        }
+                    }
+                    i += 2;
+                } else {
+                    eprintln!("오류: --vlm-target 뒤에 프리셋 이름이 필요합니다.");
+                    return;
+                }
+            }
+            _ => {
+                eprintln!("알 수 없는 옵션: {}", args[i]);
+                i += 1;
+            }
+        }
+    }
+
+    let png_options = PngExportOptions {
+        scale,
+        max_dimension,
+        vlm_target,
+        font_paths: font_paths.clone(),
+    };
+
+    let data = match fs::read(file_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("오류: 파일을 읽을 수 없습니다 - {}: {}", file_path, e);
+            return;
+        }
+    };
+
+    let core = match rhwp::document_core::DocumentCore::from_bytes(&data) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("오류: HWP 파싱 실패 - {:?}", e);
+            return;
+        }
+    };
+
+    let page_count = core.page_count();
+    println!("문서 로드 완료: {} ({}페이지)", file_path, page_count);
+
+    let output_path = Path::new(&output_dir);
+    if !output_path.exists() {
+        if let Err(e) = fs::create_dir_all(output_path) {
+            eprintln!("오류: 출력 폴더를 생성할 수 없습니다 - {}: {}", output_dir, e);
+            return;
+        }
+    }
+
+    let pages: Vec<u32> = match target_page {
+        Some(p) => {
+            if p >= page_count as u32 {
+                eprintln!("오류: 페이지 번호가 범위를 벗어났습니다 (0~{})", page_count - 1);
+                return;
+            }
+            vec![p]
+        }
+        None => (0..page_count as u32).collect(),
+    };
+
+    let file_stem = Path::new(file_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("page");
+
+    let total_pages = pages.len();
+    let mut success = 0;
+    let mut total_bytes = 0usize;
+
+    for page_num in &pages {
+        let has_options = png_options.scale.is_some()
+            || png_options.max_dimension.is_some()
+            || png_options.vlm_target.is_some();
+        let result = if has_options {
+            core.render_page_png_native_with_export_options(*page_num, &png_options)
+        } else if !font_paths.is_empty() {
+            core.render_page_png_native_with_fonts(*page_num, &font_paths)
+        } else {
+            core.render_page_png_native(*page_num)
+        };
+        match result {
+            Ok(png_bytes) => {
+                let png_filename = if total_pages == 1 {
+                    format!("{}.png", file_stem)
+                } else {
+                    format!("{}_{:03}.png", file_stem, page_num + 1)
+                };
+                let png_path = output_path.join(&png_filename);
+                if let Err(e) = fs::write(&png_path, &png_bytes) {
+                    eprintln!("오류: 페이지 {} PNG 저장 실패 - {}", page_num + 1, e);
+                    continue;
+                }
+                println!(
+                    "  → {} ({} bytes)",
+                    png_path.display(),
+                    png_bytes.len()
+                );
+                total_bytes += png_bytes.len();
+                success += 1;
+            }
+            Err(e) => {
+                eprintln!("오류: 페이지 {} 렌더링 실패 - {:?}", page_num + 1, e);
+            }
+        }
+    }
+
+    println!(
+        "내보내기 완료: {}개 PNG 파일 → {}/ ({:.1} MB)",
+        success,
+        output_dir,
+        total_bytes as f64 / 1024.0 / 1024.0
+    );
 }
 
 fn export_pdf(args: &[String]) {
@@ -947,6 +1175,27 @@ fn show_info(args: &[String]) {
     let total_paras: usize = document.sections.iter().map(|s| s.paragraphs.len()).sum();
     println!("총 문단 수: {}", total_paras);
 
+    // [Task #554] HWP3 → HWP5 변환본 식별 휴리스틱 정보
+    // 한컴이 HWP3 → HWP5 변환 시 ParaShape/CharShape 를 거의 재사용하지 않고 매우 적은
+    // 수만 생성한다. 직접 작성본은 작성자가 다양한 스타일을 사용하므로 비율이 paragraph
+    // 와 비슷하거나 더 높다. 임계값 < 0.05 / < 0.15 로 27 fixture 100% 분류 (Stage 1).
+    let ps_count = document.doc_info.para_shapes.len();
+    let cs_count = document.doc_info.char_shapes.len();
+    if total_paras > 0 {
+        let ps_ratio = ps_count as f64 / total_paras as f64;
+        let cs_ratio = cs_count as f64 / total_paras as f64;
+        let origin = if total_paras > 50 && ps_ratio < 0.05 && cs_ratio < 0.15 {
+            "HWP3 변환본 추정 (margin_bottom -1600 HU 보정 적용)"
+        } else if total_paras <= 50 {
+            "판정 불가 (문단 수 ≤ 50, 비율 왜곡 회피)"
+        } else {
+            "한컴 한글 직접 작성 추정"
+        };
+        println!("ParaShape: {} (PS/문단 = {:.3})", ps_count, ps_ratio);
+        println!("CharShape: {} (CS/문단 = {:.3})", cs_count, cs_ratio);
+        println!("Origin 추정: {}", origin);
+    }
+
     // BinData 정보
     if !document.doc_info.bin_data_list.is_empty() {
         println!("BinData:");
@@ -1426,7 +1675,10 @@ fn dump_controls(args: &[String]) {
                                 }
                                 desc
                             }
-                            Control::Picture(p) => format!("그림(bin_id={}, w={}, h={}, tac={})", p.image_attr.bin_data_id, p.common.width, p.common.height, p.common.treat_as_char),
+                            Control::Picture(p) => {
+                                let wm = p.image_attr.watermark_preset().map(|s| format!(", watermark={}", s)).unwrap_or_default();
+                                format!("그림(bin_id={}, w={}, h={}, tac={}{})", p.image_attr.bin_data_id, p.common.width, p.common.height, p.common.treat_as_char, wm)
+                            },
                             Control::Header(_) => "머리말".to_string(),
                             Control::Footer(_) => "꼬리말".to_string(),
                             _ => format!("{:?}", std::mem::discriminant(ctrl)),
@@ -1651,6 +1903,9 @@ fn dump_controls(args: &[String]) {
                                                     p.shape_attr.original_width, p.shape_attr.original_height,
                                                     p.shape_attr.current_width, p.shape_attr.current_height,
                                                     p.crop.left, p.crop.top, p.crop.right, p.crop.bottom);
+                                                println!("{}      [image_attr] effect={:?} brightness={} contrast={} watermark={}",
+                                                    indent, p.image_attr.effect, p.image_attr.brightness, p.image_attr.contrast,
+                                                    p.image_attr.watermark_preset().unwrap_or("none"));
                                             }
                                             Control::Shape(s) => {
                                                 println!("{}    ctrl[{}] {}: tac={}, wrap={:?}",
@@ -1691,6 +1946,9 @@ fn dump_controls(args: &[String]) {
                             sa.current_width, sa.current_height,
                             sa.current_width as f64 / 7200.0 * 25.4, sa.current_height as f64 / 7200.0 * 25.4,
                             pic.common.treat_as_char);
+                        println!("{}  [image_attr] effect={:?} brightness={} contrast={} watermark={}",
+                            prefix, pic.image_attr.effect, pic.image_attr.brightness, pic.image_attr.contrast,
+                            pic.image_attr.watermark_preset().unwrap_or("none"));
                         println!("{}  border_x={:?} border_y={:?} border_color=#{:06X} border_width={} ({:.2}mm) border_attr={:?}",
                             prefix, pic.border_x, pic.border_y,
                             pic.border_color, pic.border_width, pic.border_width as f64 / 7200.0 * 25.4,
@@ -2259,6 +2517,98 @@ fn gen_table(args: &[String]) {
     }
     fs::write(out_path, bytes).expect("파일 저장 실패");
     println!("저장 완료: {} ({}행 × {}열)", output, rows, cols);
+}
+
+/// PUA (Private Use Area) 문자 셋트를 입력한 HWP 테스트 문서 생성.
+///
+/// Task #509 (PUA 회귀 정정) 의 한컴 정답지 확보용. 본 라이브러리가 발견한
+/// 14 샘플 광범위 PUA 코드포인트 18 종을 한 문서에 입력 → 한컴 편집기로 PDF
+/// 출력 + rhwp SVG 출력 시각 비교.
+///
+/// 사용:
+///   rhwp gen-pua [output_path]
+///   기본 출력: output/pua-test.hwp
+fn gen_pua_test(args: &[String]) {
+    let output = args.first().map(|s| s.as_str()).unwrap_or("output/pua-test.hwp");
+
+    println!("PUA 문자 셋트 입력 HWP 문서 생성 중...");
+
+    let mut core = rhwp::document_core::DocumentCore::new_empty();
+    core.create_blank_document_native().expect("빈 문서 생성 실패");
+
+    // PUA 코드포인트 셋트 (Task #509 Stage 1 의 14 샘플 광범위 통계 정합)
+    // (codepoint, 영역 분류, 사용 샘플, 본 라이브러리 현재 매핑)
+    let pua_set: &[(u32, &str, &str, &str)] = &[
+        // ── Basic PUA (0xF020~0xF0FF) — 매핑 표 적용 영역 ──
+        (0x0F076, "Basic",      "mel-001",      "❖ U+2756"),
+        (0x0F09F, "Basic",      "biz_plan",     "• U+2022"),
+        (0x0F0A0, "Basic",      "synam-001",    "▪ U+25AA"),
+        (0x0F0A7, "Basic",      "kps-ai",       "▪ U+25AA"),
+        (0x0F0E8, "Basic",      "kps-ai",       "(미정의)"),
+        (0x0F0F2, "Basic",      "KTX",          "⇩ U+21E9 (의도 정정 후보)"),
+        (0x0F0FE, "Basic",      "k-water-rfp",  "☑ U+2611"),
+        // ── Basic PUA — 매핑 표 외 영역 ──
+        (0x0F53A, "Basic-out",  "hwpspec",      "(매핑 표 외)"),
+        // ── Supplementary PUA-A (0xF0000~0xFFFFD) — 매핑 표 미지원 영역 ──
+        (0xF02B1, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B2, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B3, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B4, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B5, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B6, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B7, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B8, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02B9, "Suppl-A",    "mel-001",      "(매핑 표 외)"),
+        (0xF02EF, "Suppl-A",    "KTX (회귀)",   "(매핑 표 외) ★"),
+    ];
+
+    println!("  PUA 코드포인트 {} 종 입력", pua_set.len());
+
+    core.begin_batch_native().expect("배치 시작 실패");
+
+    // 첫 paragraph (0번) 에 제목 입력
+    let title = "[PUA 회귀 검증 — Task #509]";
+    core.insert_text_native(0, 0, 0, title).expect("제목 입력 실패");
+
+    // 각 PUA 글자별로 paragraph 추가:
+    // "U+0F0F2 (Basic, KTX): {char}    ← 한컴 정답지 / rhwp 비교"
+    // 빈 paragraph 추가 + 텍스트 입력 패턴
+    for (i, &(cp, area, sample, mapping)) in pua_set.iter().enumerate() {
+        let pi = i + 1; // 0번은 제목, 1번부터 PUA paragraphs
+
+        // 새 paragraph 추가 (pi 위치에 새 문단 삽입)
+        core.insert_paragraph_native(0, pi)
+            .unwrap_or_else(|e| panic!("paragraph 추가 실패 (pi={}): {:?}", pi, e));
+
+        // PUA 글자 char 변환 (i32 unsafe 회피)
+        let pua_char = char::from_u32(cp)
+            .unwrap_or_else(|| panic!("invalid codepoint U+{:05X}", cp));
+
+        // 텍스트: "U+0F0F2 (Basic, KTX, ⇩ U+21E9 매핑): " + PUA + "  ← 한컴 PDF 글리프 정답지"
+        let text = format!(
+            "U+{:05X} ({}, {}, {}): {}  ← 한컴 PDF 정답지",
+            cp, area, sample, mapping, pua_char
+        );
+
+        core.insert_text_native(0, pi, 0, &text)
+            .unwrap_or_else(|e| panic!("텍스트 입력 실패 (pi={}): {:?}", pi, e));
+    }
+
+    core.end_batch_native().expect("배치 종료 실패");
+
+    // 저장
+    let bytes = core.export_hwp_native().expect("HWP 내보내기 실패");
+    let out_path = Path::new(output);
+    if let Some(parent) = out_path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    fs::write(out_path, bytes).expect("파일 저장 실패");
+    println!("저장 완료: {} ({} 종 PUA)", output, pua_set.len());
+    println!();
+    println!("다음 단계:");
+    println!("  1. 한컴 2022 편집기에서 본 파일 열기 → PDF 출력 (정답지)");
+    println!("  2. rhwp export-svg {} → SVG 출력 비교", output);
+    println!("  3. 시각 비교로 매핑 정합 확정");
 }
 
 fn test_field_roundtrip(args: &[String]) {

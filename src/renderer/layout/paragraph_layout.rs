@@ -188,7 +188,7 @@ impl LayoutEngine {
                     .find(|cs| cs.start_pos <= utf16_pos)
                     .map(|cs| cs.char_shape_id as u32)
                     .unwrap_or(char_style_id);
-                let ch = text_chars[ch_idx];
+                let ch = map_pua_bullet_char(text_chars[ch_idx]);
                 let lang = super::super::style_resolver::detect_lang_category(ch);
                 let ts = resolved_to_text_style(styles, cs_id, lang);
                 total += estimate_text_width(&ch.to_string(), &ts);
@@ -661,31 +661,14 @@ impl LayoutEngine {
         let box_margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
         let indent = para_style.map(|s| s.indent).unwrap_or(0.0);
 
-        // 문단에 시각적 테두리(stroke 있는 border)가 있고 border_spacing 좌/우가 0인
-        // 파일의 경우, 한컴은 paragraph margin 값을 inner padding으로도 사용하여
-        // 텍스트가 테두리에 붙지 않도록 한다. rhwp는 동일 효과를 내기 위해 텍스트
-        // 위치 계산에 사용하는 margin 값에만 inner padding을 더하고, 박스(테두리)
-        // 위치는 원래 margin 값을 그대로 사용한다.
-        // 배경(fill)만 있는 문단은 영향 받지 않도록 stroke 유무를 확인한다.
-        let para_border_fill_id_pre = para_style.map(|s| s.border_fill_id).unwrap_or(0);
-        let has_visible_stroke = if para_border_fill_id_pre > 0 {
-            let idx = (para_border_fill_id_pre as usize).saturating_sub(1);
-            styles.border_styles.get(idx)
-                .map(|bs| bs.borders.iter().any(|b|
-                    !matches!(b.line_type, crate::model::style::BorderLineType::None) && b.width > 0))
-                .unwrap_or(false)
-        } else {
-            false
-        };
-        let bs_left_px = para_style.map(|s| s.border_spacing[0]).unwrap_or(0.0);
-        let bs_right_px = para_style.map(|s| s.border_spacing[1]).unwrap_or(0.0);
-        let (inner_pad_left, inner_pad_right) = if has_visible_stroke && bs_left_px == 0.0 && bs_right_px == 0.0 {
-            (box_margin_left, box_margin_right)
-        } else {
-            (0.0, 0.0)
-        };
-        let margin_left = box_margin_left + inner_pad_left;
-        let margin_right = box_margin_right + inner_pad_right;
+        // [Task #547] paragraph margin_left/right 는 텍스트 좌/우 inset 으로 한 번만
+        // 적용. Task #544 후 box outline = col_area (margin 미적용) 이므로 박스 안
+        // 좌측 여백 = box_margin_left (PDF 한컴 2010 정합).
+        // 이전 코드는 paragraph border + border_spacing=0 인 경우 inner_pad_left =
+        // box_margin_left 로 한 번 더 더해 이중 inset 부작용 발생 (Task #544 전 박스도
+        // margin 적용했을 때만 의미가 있던 분기).
+        let margin_left = box_margin_left;
+        let margin_right = box_margin_right;
         let alignment = para_style.map(|s| s.alignment).unwrap_or(Alignment::Justify);
         let spacing_before = para_style.map(|s| s.spacing_before).unwrap_or(0.0);
         let spacing_after = para_style.map(|s| s.spacing_after).unwrap_or(0.0);
@@ -842,9 +825,32 @@ impl LayoutEngine {
             // 표 Square wrap 케이스는 caller 가 col_area 를 이미 wrap_area 로 좁혀
             // 호출하므로 segment_width ≈ col_area_w_hu → 조건 미발동 (회귀 차단).
             // 200 HU 임계값은 paragraph_layout 의 multi-col filter 와 동일 (페이지네이션 노이즈 제거).
-            let (effective_col_x, effective_col_w) = if has_picture_shape_square_wrap
+            //
+            // [Task #568] 인라인 TAC 표(treat_as_char=true) 가 있는 줄도 동일 처리.
+            // HWP 는 인라인 TAC 표가 있는 줄의 segment_width 를 표 폭 + 잔여로 좁게
+            // 인코딩한다 (wrap=TopAndBottom 영향). col_area.width 로 잡으면
+            // Justify slack 이 과대 산출되어 선두 공백이 80 px/space 로 부풀어 표를
+            // 우측으로 민다 (exam_science.hwp pi=61 12번 응답: +175 px 편위).
+            let line_has_inline_tac_table = !tac_offsets_px.is_empty() && para.map(|p| {
+                let line_start = comp_line.char_start;
+                let line_end = line_start + comp_line.runs.iter()
+                    .map(|r| r.text.chars().count()).sum::<usize>();
+                tac_offsets_px.iter().any(|(pos, _, ci)| {
+                    *pos >= line_start && *pos <= line_end
+                        && matches!(p.controls.get(*ci),
+                            Some(Control::Table(t)) if t.common.treat_as_char)
+                })
+            }).unwrap_or(false);
+
+            // [Task #568] 임계값에 column_start 포함 — 실제 가용 line 폭은 (sw + cs).
+            // 단락 들여쓰기를 LINE_SEG.column_start 로 인코딩한 paragraph 의
+            // 정상 라인은 (sw + cs) ≈ col_w_hu 이므로 새 분기 미진입.
+            // Picture/Shape Square wrap 은 cs=0 이라 기존 동작과 동일.
+            let line_avail_hu = comp_line.segment_width.saturating_add(comp_line.column_start);
+            let (effective_col_x, effective_col_w) = if (has_picture_shape_square_wrap
+                || line_has_inline_tac_table)
                 && comp_line.segment_width > 0
-                && comp_line.segment_width < col_area_w_hu - 200
+                && line_avail_hu < col_area_w_hu - 200
             {
                 let cs_px = hwpunit_to_px(comp_line.column_start, self.dpi);
                 let sw_px = hwpunit_to_px(comp_line.segment_width, self.dpi);
@@ -874,6 +880,19 @@ impl LayoutEngine {
                     text_y + line_height, col_bottom, text_y + line_height - col_bottom,
                 );
             }
+            // wrap_precomputed: 파서가 LineSeg cs/sw를 사전 계산한 문단.
+            // 각 라인의 LineSeg cs(column_start)를 x 오프셋으로, sw(segment_width)를 너비로 적용.
+            let (line_cs_offset, line_avail_w_override) = if para.map(|p| p.wrap_precomputed).unwrap_or(false) {
+                let seg = para.and_then(|p| p.line_segs.get(line_idx));
+                let cs = seg.map(|s| s.column_start as i32).unwrap_or(0);
+                let sw = seg.map(|s| s.segment_width as i32).unwrap_or(0);
+                let cs_px = crate::renderer::hwpunit_to_px(cs, self.dpi);
+                let sw_px = if sw > 0 { Some(crate::renderer::hwpunit_to_px(sw, self.dpi)) } else { None };
+                (cs_px, sw_px)
+            } else {
+                (0.0, None)
+            };
+
             let line_id = tree.next_id();
             let mut line_node = RenderNode::new(
                 line_id,
@@ -882,9 +901,16 @@ impl LayoutEngine {
                     TextLineNode::with_para_vpos(line_height, baseline, section_index, para_index, line_idx as u32, vpos)
                 }),
                 BoundingBox::new(
-                    effective_col_x + effective_margin_left,
+                    // Task #460 보완6: wrap_precomputed면 line_cs_offset 사용 (col_area.x 기준),
+                    // 아니면 Task #489 effective_col_x 사용. 두 경로 중복 적용 방지.
+                    if para.map(|p| p.wrap_precomputed).unwrap_or(false) {
+                        col_area.x + effective_margin_left + line_cs_offset
+                    } else {
+                        effective_col_x + effective_margin_left
+                    },
                     text_y,
-                    effective_col_w - effective_margin_left - margin_right,
+                    line_avail_w_override
+                        .unwrap_or(effective_col_w - effective_margin_left - margin_right),
                     line_height,
                 ),
             );
@@ -892,12 +918,15 @@ impl LayoutEngine {
             let inline_offset = if line_idx == start_line { first_line_x_offset } else { 0.0 };
             // 번호/글머리표 마커: 모든 줄에서 마커 폭만큼 가용폭 차감 (행잉 인덴트)
             let num_offset = if numbering_width > 0.0 { numbering_width } else { 0.0 };
-            let available_width = effective_col_w - effective_margin_left - margin_right - inline_offset - num_offset;
+            let available_width = line_avail_w_override
+                .map(|w| w - inline_offset - num_offset)
+                .unwrap_or(effective_col_w - effective_margin_left - margin_right - inline_offset - num_offset);
 
 
             // 텍스트 정렬을 위한 전체 줄 폭 계산 (자연 폭, 추가 간격 미포함)
             // treat_as_char 이미지 폭도 포함하여 정확한 폭 산출
-            let mut est_x = effective_margin_left + inline_offset;
+            // wrap_precomputed: line_cs_offset을 est_x 기준점에 포함 (line_x_offset은 col_area.x 기준 상대좌표)
+            let mut est_x = effective_margin_left + line_cs_offset + inline_offset;
             let est_x_start = est_x;
             let mut pending_right_tab_est: Option<(f64, u8, u8)> = None;
             let mut run_char_pos_est = comp_line.char_start;
@@ -1197,17 +1226,24 @@ impl LayoutEngine {
             let num_x_offset = if num_offset > 0.0 && !(line_idx == start_line && start_line == 0) {
                 num_offset
             } else { 0.0 };
+            // Task #460 보완6: wrap_precomputed면 col_area.x + line_cs_offset 기준,
+            // 아니면 effective_col_x (Task #489) 기준
+            let x_base = if para.map(|p| p.wrap_precomputed).unwrap_or(false) {
+                col_area.x + effective_margin_left + line_cs_offset
+            } else {
+                effective_col_x + effective_margin_left
+            };
             let x_start = match alignment {
                 Alignment::Center => {
-                    effective_col_x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
+                    x_base + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
                 }
                 Alignment::Distribute if !needs_distribute || total_char_count <= 1 => {
-                    effective_col_x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
+                    x_base + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0) / 2.0
                 }
                 Alignment::Right => {
-                    effective_col_x + effective_margin_left + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0)
+                    x_base + inline_offset + num_x_offset + (available_width - effective_text_width).max(0.0)
                 }
-                _ => effective_col_x + effective_margin_left + inline_offset + num_x_offset, // Left, Justify, Split, Distribute(분배중)
+                _ => x_base + inline_offset + num_x_offset, // Left, Justify, Split, Distribute(분배중)
             };
 
             // TextRun 노드 생성
@@ -1793,6 +1829,7 @@ impl LayoutEngine {
                                             effect: pic.image_attr.effect,
                                             brightness: pic.image_attr.brightness,
                                             contrast: pic.image_attr.contrast,
+                                            text_wrap: Some(pic.common.text_wrap),
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -2066,6 +2103,7 @@ impl LayoutEngine {
                                         effect: pic.image_attr.effect,
                                         brightness: pic.image_attr.brightness,
                                         contrast: pic.image_attr.contrast,
+                                        text_wrap: Some(pic.common.text_wrap),
                                         ..ImageNode::new(bin_data_id, image_data)
                                     }),
                                     BoundingBox::new(x, img_y, tac_w, pic_h),
@@ -2175,6 +2213,7 @@ impl LayoutEngine {
                                             effect: pic.image_attr.effect,
                                             brightness: pic.image_attr.brightness,
                                             contrast: pic.image_attr.contrast,
+                                            text_wrap: Some(pic.common.text_wrap),
                                             ..ImageNode::new(bin_data_id, image_data)
                                         }),
                                         BoundingBox::new(img_x, img_y, tac_w, pic_h),
@@ -2635,10 +2674,14 @@ impl LayoutEngine {
                 // override 가 활성된 경우(wrap host), 박스 우측은 floating 표의 끝
                 // 까지 확장된 width 그대로 사용 — margin_right 차감하지 않는다
                 // (그렇지 않으면 표가 박스 밖으로 다시 튀어나옴).
+                // [Task #544] paragraph margin_left/right 는 텍스트 inset 으로만 사용,
+                // 박스 outline 좌표는 col_area 전체 (PDF 정합). wrap=Square 호스트
+                // (border_box_override) 케이스는 layout_wrap_around_paras 가 설정한
+                // override 좌표 그대로 사용 (margin 미적용).
                 let (box_x, box_w) = if let Some((ox, ow)) = self.border_box_override.get() {
-                    (ox + box_margin_left, ow - box_margin_left)
+                    (ox, ow)
                 } else {
-                    (col_area.x + box_margin_left, col_area.width - box_margin_left - box_margin_right)
+                    (col_area.x, col_area.width)
                 };
                 self.para_border_ranges.borrow_mut().push(
                     (para_border_fill_id, box_x, bg_y_start, box_w, y, top_inset, bottom_inset, is_partial_start, is_partial_end, para_index)
@@ -2888,13 +2931,13 @@ impl LayoutEngine {
                     num_str
                 };
 
-                // 각 줄의 텍스트에서 연속된 두 공백("  ")을 찾아 번호로 대체
-                // HWP/HWPX 모두 AutoNumber 위치에 공백 placeholder 삽입
+                // 각 줄의 텍스트에서 AutoNumber 위치를 찾아 번호로 대체
+                // HWP5/HWPX/HWP3 공통: 공백 두 개("  ") 패턴 탐색
                 for line in &mut composed.lines {
                     for run in &mut line.runs {
                         if let Some(pos) = run.text.find("  ") {
                             run.text = format!("{}{}{}", &run.text[..pos+1], num_str, &run.text[pos+1..]);
-                            return; // 첫 번째 발견 시 처리 완료
+                            return;
                         }
                     }
                 }
@@ -2903,11 +2946,79 @@ impl LayoutEngine {
     }
 }
 
-/// HWP PUA 문자(0xF000~0xF0FF)를 표준 Unicode로 매핑
-/// 기준: Wingdings 폰트 → Unicode 매핑 (alanwood.net/demos/wingdings.html)
-/// HWP 글머리표는 Wingdings 폰트 문자를 PUA(0xF000+code)로 저장
+/// HWP PUA 문자를 표준 Unicode 로 매핑.
+///
+/// 두 영역 분기 — Task #509 정답지 매핑 표 정합:
+///
+/// **Basic PUA (0xF020~0xF0FF)** — Wingdings 폰트 PUA 영역.
+///   기준: Wingdings 폰트 → Unicode 매핑 (alanwood.net/demos/wingdings.html).
+///   HWP 글머리표는 Wingdings 폰트 문자를 PUA(0xF000+code)로 저장.
+///
+/// **Supplementary PUA-A (0xF02B0~0xF02FF)** — 한컴 자체 PUA 영역.
+///   원문자 (①~⑳, U+2460~U+2473) 와 · (U+00B7) 등을 본 영역에 저장.
+///   Task #509 의 한컴 PDF 정답지 시각 검증으로 매핑 확정.
+///
+/// **Supplementary PUA-A 저영역 (0xF0000~0xF00CF)** — 한컴 자체 PUA 저영역.
+///   요약형 문항 화살표 등 시각 마커. Task #588 의 한컴 PDF 임베디드 폰트
+///   글리프 외곽 분석 + 정답지 시각 검증으로 매핑 확정.
 pub(crate) fn map_pua_bullet_char(ch: char) -> char {
     let code = ch as u32;
+
+    // Supplementary PUA-A 저영역 — 한컴 자체 영역 (Task #588 한컴 정답지 정합)
+    if (0xF0000..=0xF00CF).contains(&code) {
+        return match code {
+            // exam_eng.hwp p7 #40 요약형 문항 글상자 사이 화살표.
+            // 한컴 PDF (HCRBatang 임베디드 폰트) 글리프 외곽 분석:
+            //   stem 35% × arrowhead 100% × solid filled (1 contour, 7 pts) → ↓
+            0xF003B => '\u{2193}', // ↓ DOWNWARDS ARROW
+            _ => ch,
+        };
+    }
+
+    // Supplementary PUA-A — 한컴 자체 영역 (Task #509 한컴 정답지 정합)
+    if (0xF02B0..=0xF02FF).contains(&code) {
+        return match code {
+            // 원문자 ①~⑳ (mel-001 / kps-ai 사용 영역, 한컴 PDF 시각 검증)
+            0xF02B1 => '\u{2460}', // ①
+            0xF02B2 => '\u{2461}', // ②
+            0xF02B3 => '\u{2462}', // ③
+            0xF02B4 => '\u{2463}', // ④
+            0xF02B5 => '\u{2464}', // ⑤
+            0xF02B6 => '\u{2465}', // ⑥
+            0xF02B7 => '\u{2466}', // ⑦
+            0xF02B8 => '\u{2467}', // ⑧
+            0xF02B9 => '\u{2468}', // ⑨
+            0xF02BA => '\u{2469}', // ⑩
+            0xF02BB => '\u{246A}', // ⑪
+            0xF02BC => '\u{246B}', // ⑫
+            0xF02BD => '\u{246C}', // ⑬
+            0xF02BE => '\u{246D}', // ⑭
+            0xF02BF => '\u{246E}', // ⑮
+            0xF02C0 => '\u{246F}', // ⑯
+            0xF02C1 => '\u{2470}', // ⑰
+            0xF02C2 => '\u{2471}', // ⑱
+            0xF02C3 => '\u{2472}', // ⑲
+            0xF02C4 => '\u{2473}', // ⑳
+            // KTX 회귀 origin — 한컴 PDF 시각 = · (Middle dot), ★ 아님
+            // (작업지시자 정정 — 이전 ★ U+2605 매핑은 잘못)
+            0xF02EF => '\u{00B7}', // · Middle dot
+            _ => ch,
+        };
+    }
+
+    // Supplementary PUA-A — 한컴 책괄호 / 예시 마커 (Task #528 exam_kor p17)
+    // exam_kor p17 측정: F0854/F0855 각 33회 (책 제목 둘러싸기), F00DA 2회
+    if (0xF00D0..=0xF09FF).contains(&code) {
+        return match code {
+            // 책괄호 (한국어 도서 제목) — 용비어천가, 석보상절, 월인천강지곡 등
+            0xF0854 => '\u{300A}', // 《 LEFT DOUBLE ANGLE BRACKET
+            0xF0855 => '\u{300B}', // 》 RIGHT DOUBLE ANGLE BRACKET
+            // 예시 마커 — `(F00DA 단풍 철 : 철 성분)` 패턴 — 한컴 PDF 시각 검증 필요
+            0xF00DA => '\u{25B8}', // ▸ BLACK SMALL TRIANGLE (잠정, 시각 판정 후 정정)
+            _ => ch,
+        };
+    }
+
     if !(0xF020..=0xF0FF).contains(&code) {
         return ch;
     }
@@ -2929,7 +3040,9 @@ pub(crate) fn map_pua_bullet_char(ch: char) -> char {
         // 체크/별/점 (0x9E~0xAF)
         0x9E => '\u{00B7}', // · Middle dot
         0x9F => '\u{2022}', // • Bullet
-        0xA0 => '\u{25AA}', // ▪ Black small square
+        // [Task #509] 0xA0 → · U+00B7 (Middle dot) — 한컴 PDF 정답지 시각 정합.
+        // ▪ U+25AA (Black small square) 영역 아님 (synam-001 사용 영역).
+        0xA0 => '\u{00B7}', // · Middle dot
         0xA1 => '\u{26AA}', // ⚪ Medium white circle
         0xA2 => '\u{25CB}', // ○ (Heavy large circle → 근사값)
         0xA3 => '\u{25CB}', // ○ (Very heavy white circle → 근사값)
@@ -2953,6 +3066,10 @@ pub(crate) fn map_pua_bullet_char(ch: char) -> char {
         0xFD => '\u{2612}', // ☒ Ballot box with X (근사값)
         0xFE => '\u{2611}', // ☑ Ballot box with check (근사값)
         // 화살표 (0xEF~0xF8)
+        // [Task #509] 0xE8 → ➔ U+2794 (Heavy wide-headed rightwards arrow) —
+        // 한컴 PDF 정답지 시각 정합. ➤ U+27A4 (Black rightwards) 와 글리프 형태
+        // 차이 — 한컴은 wide-headed arrow 영역.
+        0xE8 => '\u{2794}', // ➔ Heavy wide-headed rightwards arrow
         0xEF => '\u{21E6}', // ⇦ Leftwards white arrow
         0xF0 => '\u{21E8}', // ⇨ Rightwards white arrow
         0xF1 => '\u{21E7}', // ⇧ Upwards white arrow
@@ -2977,4 +3094,77 @@ fn form_color_to_css(color: u32) -> String {
     let g = (color >> 8) & 0xFF;
     let r = color & 0xFF;
     format!("#{:02x}{:02x}{:02x}", r, g, b)
+}
+
+#[cfg(test)]
+mod pua_mapping_tests {
+    use super::map_pua_bullet_char;
+
+    #[test]
+    fn supplementary_pua_a_maps_circled_digits() {
+        // U+F02B1~F02C4 → U+2460~U+2473 (원문자 ①~⑳)
+        assert_eq!(map_pua_bullet_char('\u{F02B1}'), '\u{2460}', "①");
+        assert_eq!(map_pua_bullet_char('\u{F02B2}'), '\u{2461}', "②");
+        assert_eq!(map_pua_bullet_char('\u{F02B3}'), '\u{2462}', "③");
+        assert_eq!(map_pua_bullet_char('\u{F02B4}'), '\u{2463}', "④");
+        assert_eq!(map_pua_bullet_char('\u{F02B5}'), '\u{2464}', "⑤");
+        assert_eq!(map_pua_bullet_char('\u{F02B6}'), '\u{2465}', "⑥");
+        assert_eq!(map_pua_bullet_char('\u{F02B7}'), '\u{2466}', "⑦");
+        assert_eq!(map_pua_bullet_char('\u{F02B8}'), '\u{2467}', "⑧");
+        assert_eq!(map_pua_bullet_char('\u{F02B9}'), '\u{2468}', "⑨");
+        assert_eq!(map_pua_bullet_char('\u{F02BA}'), '\u{2469}', "⑩");
+        assert_eq!(map_pua_bullet_char('\u{F02BB}'), '\u{246A}', "⑪");
+        assert_eq!(map_pua_bullet_char('\u{F02BC}'), '\u{246B}', "⑫");
+        assert_eq!(map_pua_bullet_char('\u{F02BD}'), '\u{246C}', "⑬");
+        assert_eq!(map_pua_bullet_char('\u{F02BE}'), '\u{246D}', "⑭");
+        assert_eq!(map_pua_bullet_char('\u{F02BF}'), '\u{246E}', "⑮");
+        assert_eq!(map_pua_bullet_char('\u{F02C0}'), '\u{246F}', "⑯");
+        assert_eq!(map_pua_bullet_char('\u{F02C1}'), '\u{2470}', "⑰");
+        assert_eq!(map_pua_bullet_char('\u{F02C2}'), '\u{2471}', "⑱");
+        assert_eq!(map_pua_bullet_char('\u{F02C3}'), '\u{2472}', "⑲");
+        assert_eq!(map_pua_bullet_char('\u{F02C4}'), '\u{2473}', "⑳");
+    }
+
+    #[test]
+    fn supplementary_pua_a_maps_middle_dot() {
+        // [Task #509] U+F02EF → U+00B7 · Middle dot (KTX p10 표 회귀 origin)
+        // 한컴 PDF 시각 정답지: dot (·) — ★ 가 아님 (작업지시자 정정)
+        assert_eq!(map_pua_bullet_char('\u{F02EF}'), '\u{00B7}');
+    }
+
+    #[test]
+    fn basic_pua_arrow_e8() {
+        // [Task #509] U+0F0E8 → U+2794 ➔ (Heavy wide-headed rightwards arrow,
+        // 한컴 PDF 정답지 시각 정합)
+        assert_eq!(map_pua_bullet_char('\u{F0E8}'), '\u{2794}');
+    }
+
+    #[test]
+    fn supplementary_pua_a_unmapped_returns_original() {
+        // 매핑 표 외 영역은 원본 유지
+        assert_eq!(map_pua_bullet_char('\u{F0500}'), '\u{F0500}');
+    }
+
+    #[test]
+    fn basic_pua_outside_range_returns_original() {
+        // 0xF020~0xF0FF 외 Basic PUA 는 원본 유지 (예: U+0F53A 한글 "흔")
+        assert_eq!(map_pua_bullet_char('\u{F53A}'), '\u{F53A}');
+    }
+
+    #[test]
+    fn supplementary_pua_a_low_range_maps_down_arrow() {
+        // [Task #588] U+F003B → U+2193 ↓ (DOWNWARDS ARROW)
+        // exam_eng.hwp p7 #40 요약형 문항 글상자 사이 화살표.
+        // 한컴 PDF (HCRBatang) 임베디드 폰트 글리프 외곽 분석으로 확정.
+        assert_eq!(map_pua_bullet_char('\u{F003B}'), '\u{2193}');
+    }
+
+    #[test]
+    fn supplementary_pua_a_low_range_unmapped_returns_original() {
+        // [Task #588] 0xF0000~0xF00CF 영역의 매핑 표 외 코드포인트는 원본 유지
+        // (예: U+F0090 — img-start-001.hwp 1건, 별도 task 후보)
+        assert_eq!(map_pua_bullet_char('\u{F0090}'), '\u{F0090}');
+        assert_eq!(map_pua_bullet_char('\u{F0000}'), '\u{F0000}');
+        assert_eq!(map_pua_bullet_char('\u{F00CF}'), '\u{F00CF}');
+    }
 }
