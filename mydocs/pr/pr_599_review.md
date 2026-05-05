@@ -155,14 +155,71 @@ PR 본문 §"비목표" 명시:
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — Skia 본질 영역 격리 + commit 단위 cherry-pick 정합 + 결정적 검증 통과 + 본 환경 정체성 정합.
 
-## 10. 다음 단계 (작업지시자 승인 시)
+## 10. 옵션 A 진행 결과 (작업지시자 승인 후)
 
-1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, `--features native-skia skia`, WASM check, build --release)
-3. ⏳ 광범위 페이지네이션 sweep (Skia 영역은 기본 빌드 영향 0 이지만 회귀 0 확인)
-4. ⏳ Docker WASM 빌드 (`native-skia` feature 영향 0 확인)
-5. ⏳ 통과 시 cherry-pick + devel merge + push
-6. ⏳ PR #599 close 댓글 + 처리 보고서 (`pr_599_report.md`) 작성 + archives 이동
+### 10.1 핀셋 cherry-pick (commit 단위)
+
+| 단계 | 결과 |
+|------|------|
+| 9 commits 순차 cherry-pick | ✅ 모두 충돌 0, author seo-rii 보존 |
+| 본 사이클 처리분과 중첩 | 0 (Skia 신규 영역 완전 격리) |
+
+### 10.2 메인테이너 후속 정정 (`876d820`)
+
+PR #599 본질만으로는 한컴 fixture 가 정상 표시되지 않아 5개 영역 추가 정정:
+
+1. **Skia 한글 폰트 fallback chain** (`renderer.rs`) — Noto Sans KR / Nanum 등
+2. **`--font-path` 동적 로딩** (`with_font_paths` API) — SVG 패턴 정합
+3. **char 단위 fallback** (공백 두부 정정) — NBSP/U+2007/U+200B 방지
+4. **VLM 옵션** (AI 파이프라인 연동) — `--vlm-target claude` + `--scale` + `--max-dimension`
+5. **`export-png` CLI 명령** (`main.rs`) — native-skia feature gate
+6. **매뉴얼** (한글 + 영문 동기화)
+
+### 10.3 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1134 passed** / 0 failed / 2 ignored (회귀 0) |
+| `cargo test --features native-skia skia` | ✅ **20 passed** |
+| `cargo clippy --release --lib --features native-skia` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+| `cargo build --release --features native-skia` | ✅ Finished |
+| Docker WASM 빌드 | ✅ **4,581,465 bytes** (PR #593 baseline +0 — feature gate 정합 입증) |
+
+### 10.4 광범위 페이지네이션 sweep
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 | **1,614** |
+| Export 실패 | 0 |
+
+→ Skia feature 가 default 빌드에 미포함이라 기본 SVG 경로 영향 0 확인.
+
+### 10.5 VLM 옵션 게이트웨이 검증
+
+| 옵션 | 출력 dimension | 평가 |
+|---|---|---|
+| (기본) | 1123 × 1588 | native |
+| `--scale 2.0` | 2246 × 3175 | 정확 4배 ✓ |
+| `--scale 0.5` | 562 × 794 | 정확 1/4배 ✓ |
+| `--max-dimension 1024` | 725 × 1024 | longest=1024 ✓ |
+| `--vlm-target claude` | 898 × 1269 | **1.14 MP ≤ 1.15 MP** ✓ |
+
+### 10.6 후속 이슈 등록
+
+- [#613](https://github.com/edwardkim/rhwp/issues/613) — VLM 프리셋 확장 (GPT-4V / Gemini / Qwen-VL / LLaVA)
+- [#614](https://github.com/edwardkim/rhwp/issues/614) — DPI 메타데이터 옵션 (`--dpi`)
+
+### 10.7 다음 단계
+
+1. ✅ 본 1차 검토 보고서 작성
+2. ✅ 본 환경 결정적 재검증
+3. ✅ 광범위 페이지네이션 sweep
+4. ✅ Docker WASM 빌드
+5. ✅ 메인테이너 후속 정정 (한글 fallback + char-fallback + font-path + VLM 옵션 + CLI + 매뉴얼)
+6. ✅ 후속 이슈 #613/#614 등록
+7. ⏳ devel merge + push + PR close + 처리 보고서 + 컨트리뷰터 후속 커멘트
 
 ## 11. 메모리 정합
 
