@@ -160,14 +160,56 @@ GitHub UI 의 PR base diff 가 광범위 deletion 표시:
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + 결정적 검증 통과 + 케이스별 명시 가드 + Copilot review 응답 정합.
 
-## 10. 다음 단계 (작업지시자 승인 시)
+## 10. 옵션 A 진행 결과 (작업지시자 승인 후)
 
-1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep)
-3. ⏳ SVG 생성 — `output/svg/pr600_before/` + `output/svg/pr600_after/` (mel-001 / kps-ai / KTX / pua-test)
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick + devel merge + push
-6. ⏳ PR #600 close 댓글 (한글) + 처리 보고서 (`pr_600_report.md`) 작성 + archives 이동
+### 10.1 핀셋 cherry-pick (commit 단위)
+
+| 단계 | 결과 |
+|------|------|
+| `77986135` cherry-pick | ✅ 충돌 0 |
+| `aafe85a` cherry-pick | ✅ 충돌 0 |
+| local/devel commits | `34f8547` + `14f30e8` (author Hyunwoo Park 보존) |
+
+### 10.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1134 passed** (회귀 0) |
+| `cargo test --lib pua` | ✅ 12 passed (`supplementary_pua_a_maps_circled_digits` ⑩~⑳ GREEN) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --test issue_546/554` | ✅ 모두 통과 |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+
+### 10.3 광범위 페이지네이션 sweep
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (devel baseline) | **1,614** |
+| 총 페이지 (cherry-pick 후) | **1,614** |
+| **fixture 별 페이지 수 차이** | **0** |
+
+### 10.4 SVG byte 차이 + 원문자 정량 측정
+
+| Fixture | byte 차이 | 원문자 출현 (before/after) | 평가 |
+|---|---|---|---|
+| **pua-test** | 1/1 | **0 → 9** | ✅ PR 본문 명시 (9 SVG text) 100% 재현 |
+| **mel-001** | 15/21 | 20 → 34 (+14) | ✅ PR 본문 정정 영역 |
+| **kps-ai** | 1/80 | 32 → 34 (+2) | ✅ PR 본문 명시 정합 |
+| **KTX** | 0/27 | (변경 없음) | ✅ PR 본문 명시 (변경 없음) 정합 |
+
+→ Task #509 의 ⑩~⑳ 매핑이 CharOverlap 우선순위 결함 정정으로 SVG 에 정상 출력. 광범위 sweep 회귀 0 + 의도된 영역에만 변경 (PR 본문 100% 재현).
+
+### 10.5 다음 단계
+
+1. ✅ 본 1차 검토 보고서 작성
+2. ✅ 본 환경 결정적 재검증
+3. ✅ SVG 생성 (mel-001 / kps-ai / KTX / pua-test)
+4. ✅ 광범위 페이지네이션 sweep
+5. ⏳ **작업지시자 시각 판정** (★ 게이트, mel-001 ① 등 정상 출력 + KTX 회귀 0) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close (한글 댓글)
+7. ⏳ 처리 보고서 (`pr_600_report.md`) 작성 + archives 이동
 
 ## 11. 메모리 정합
 
