@@ -1,7 +1,8 @@
 use skia_safe::{
     font, paint, surfaces, Canvas, Color, EncodedImageFormat, Font, FontMgr, FontStyle, Paint,
-    PathBuilder, PathEffect, Rect,
+    PathBuilder, PathEffect, Rect, Typeface,
 };
+use std::collections::HashMap;
 
 use crate::error::HwpError;
 use crate::model::image::ImageEffect;
@@ -17,13 +18,49 @@ use super::image_conv::{draw_image_bytes, ImageSampling};
 
 pub struct SkiaLayerRenderer {
     font_mgr: FontMgr,
+    /// 사용자 지정 폰트 디렉토리에서 미리 로드한 폰트 캐시.
+    /// key = primary face name (Typeface::family_name), value = Typeface.
+    /// SVG 의 `--font-path` 와 같은 패턴으로 ttfs 디렉토리의 한컴 전용 폰트 (HY견명조 등) 도 사용 가능.
+    custom_typefaces: HashMap<String, Typeface>,
 }
 
 impl SkiaLayerRenderer {
     pub fn new() -> Self {
         Self {
             font_mgr: FontMgr::default(),
+            custom_typefaces: HashMap::new(),
         }
+    }
+
+    /// 사용자 지정 폰트 디렉토리 (ttfs 등) 의 폰트를 로드하여 Skia 가 직접 사용 가능하게 한다.
+    /// SVG 의 `--font-path` 와 동일한 패턴.
+    pub fn with_font_paths(mut self, font_paths: &[std::path::PathBuf]) -> Self {
+        let mut search_dirs: Vec<std::path::PathBuf> = font_paths.to_vec();
+        for dir in &["ttfs/hwp", "ttfs/windows", "ttfs"] {
+            search_dirs.push(std::path::PathBuf::from(dir));
+        }
+        for dir in &search_dirs {
+            if !dir.exists() {
+                continue;
+            }
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let ext = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase());
+                    if !matches!(ext.as_deref(), Some("ttf") | Some("otf") | Some("ttc")) {
+                        continue;
+                    }
+                    if let Ok(data) = std::fs::read(&path) {
+                        let skia_data = skia_safe::Data::new_copy(&data);
+                        if let Some(typeface) = self.font_mgr.new_from_data(&skia_data, None) {
+                            let family = typeface.family_name();
+                            self.custom_typefaces.entry(family).or_insert(typeface);
+                        }
+                    }
+                }
+            }
+        }
+        self
     }
 
     pub fn render_raster_with_options(
@@ -248,19 +285,65 @@ impl SkiaLayerRenderer {
             if !style.font_family.trim().is_empty() {
                 families.push(style.font_family.as_str());
             }
-            families.extend(["DejaVu Sans", "Arial", "sans-serif"]);
-            let typeface = families
-                .into_iter()
-                .find_map(|family| self.font_mgr.match_family_style(family, font_style))
-                .or_else(|| self.font_mgr.legacy_make_typeface(None::<&str>, font_style));
-            let mut font = if let Some(typeface) = typeface {
-                Font::new(typeface, font_size)
-            } else {
-                let mut font = Font::default();
-                font.set_size(font_size);
-                font
+            // 한글 fallback (CJK glyph 미보유 폰트로 fallback 시 사각형 방지).
+            // SVG 경로의 CSS font chain 과 동일한 한글 폴백 폰트 순서.
+            families.extend([
+                "Noto Sans KR",
+                "Noto Serif KR",
+                "Noto Sans CJK KR",
+                "Noto Serif CJK KR",
+                "Nanum Gothic",
+                "Nanum Myeongjo",
+                "Malgun Gothic",
+                "맑은 고딕",
+                "Batang",
+                "바탕",
+                "Apple SD Gothic Neo",
+                "AppleMyungjo",
+                "DejaVu Sans",
+                "Arial",
+                "sans-serif",
+            ]);
+            // 1) 사용자 지정 폰트 (--font-path) 우선 검색
+            // 2) 시스템 FontMgr 검색 (한글 fallback chain 포함)
+            // 3) 마지막 fallback (legacy_make_typeface)
+            //
+            // 모든 후보를 chain 으로 보존 — char 단위 fallback 에 사용.
+            let typeface_chain: Vec<Typeface> = {
+                let mut chain: Vec<Typeface> = Vec::new();
+                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                let mut push = |chain: &mut Vec<Typeface>,
+                                seen: &mut std::collections::HashSet<String>,
+                                tf: Typeface| {
+                    let key = tf.family_name();
+                    if seen.insert(key) {
+                        chain.push(tf);
+                    }
+                };
+                for family in &families {
+                    if let Some(tf) = self.custom_typefaces.get(*family).cloned() {
+                        push(&mut chain, &mut seen, tf);
+                    }
+                }
+                for family in &families {
+                    if let Some(tf) = self.font_mgr.match_family_style(family, font_style) {
+                        push(&mut chain, &mut seen, tf);
+                    }
+                }
+                if let Some(tf) = self.font_mgr.legacy_make_typeface(None::<&str>, font_style) {
+                    push(&mut chain, &mut seen, tf);
+                }
+                chain
             };
-            font.set_edging(font::Edging::AntiAlias);
+            let primary_typeface = typeface_chain.first().cloned();
+            let mut primary_font = if let Some(ref tf) = primary_typeface {
+                Font::new(tf.clone(), font_size)
+            } else {
+                let mut f = Font::default();
+                f.set_size(font_size);
+                f
+            };
+            primary_font.set_edging(font::Edging::AntiAlias);
             let mut paint = Paint::default();
             paint.set_anti_alias(true);
             paint.set_color(colorref_to_skia(style.color, 1.0));
@@ -281,10 +364,59 @@ impl SkiaLayerRenderer {
                             .into(),
                     ),
                 );
-                canvas.draw_str(text, (bbox.x as f32, y as f32), &font, &paint);
+            }
+            // char 단위 fallback 렌더링.
+            // primary typeface 에 글리프 미보유 (unichar_to_glyph==0) 시 chain 의 다른 typeface 시도.
+            // 모두 미보유 시 visible 글리프 렌더 skip (whitespace 류 NBSP/U+2007/U+200B 등 두부 방지).
+            // primary 가 글리프 보유 시 그대로 그림 (한컴 정합).
+            let mut cursor_x = bbox.x as f32;
+            for ch in text.chars() {
+                let codepoint = ch as i32;
+                // primary typeface 의 글리프 보유 여부
+                let primary_has = primary_typeface
+                    .as_ref()
+                    .map(|tf| tf.unichar_to_glyph(codepoint) != 0)
+                    .unwrap_or(false);
+                let chosen_font = if primary_has {
+                    &primary_font
+                } else {
+                    // chain 에서 글리프 보유한 typeface 찾기
+                    let fallback = typeface_chain
+                        .iter()
+                        .skip(1)
+                        .find(|tf| tf.unichar_to_glyph(codepoint) != 0)
+                        .cloned();
+                    if let Some(tf) = fallback {
+                        let mut f = Font::new(tf, font_size);
+                        f.set_edging(font::Edging::AntiAlias);
+                        // char 단위 임시 폰트 — 그리고 cursor 진행
+                        let s = ch.to_string();
+                        canvas.draw_str(&s, (cursor_x, y as f32), &f, &paint);
+                        let advance = f.measure_str(&s, Some(&paint)).0;
+                        cursor_x += advance;
+                        continue;
+                    } else {
+                        // 모두 미보유 — whitespace 류 (NBSP/U+2007/U+200B 등) 또는 unknown.
+                        // visible 글리프 그리지 않고 advance 만 진행.
+                        // 공백류 advance 추정: 일반 공백의 너비로 대체 (또는 font_size * 0.3).
+                        let space_advance = primary_font
+                            .measure_str(" ", Some(&paint))
+                            .0;
+                        cursor_x += if space_advance > 0.0 {
+                            space_advance
+                        } else {
+                            font_size * 0.3
+                        };
+                        continue;
+                    }
+                };
+                let s = ch.to_string();
+                canvas.draw_str(&s, (cursor_x, y as f32), chosen_font, &paint);
+                let advance = chosen_font.measure_str(&s, Some(&paint)).0;
+                cursor_x += advance;
+            }
+            if rotation != 0.0 {
                 canvas.restore();
-            } else {
-                canvas.draw_str(text, (bbox.x as f32, y as f32), &font, &paint);
             }
         };
         let open_shape_transform =
