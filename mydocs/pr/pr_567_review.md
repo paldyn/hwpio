@@ -149,14 +149,47 @@ if has_inline_tables && !has_other_inline_ctrls {
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + 결정적 검증 통과 + 케이스별 명시 가드 정합.
 
-## 10. 다음 단계 (작업지시자 승인 시)
+## 10. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 10.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| 본질 commit cherry-pick (`a35bdbed`) | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel cherry-pick commit | `466c487` |
+
+### 10.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1130 passed** / 0 failed / 2 ignored (회귀 0) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --test issue_546` | ✅ 1 passed (Task #546 회귀 0) |
+| `cargo test --test issue_554` | ✅ 12 passed |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+| Docker WASM 빌드 | ✅ **4,570,464 bytes** (1m 25s, PR #561 baseline +244 bytes — layout.rs +13/-1 LOC 정합) |
+
+### 10.3 광범위 회귀 sweep (PR 본문 측정 재현)
+
+| Fixture | 페이지 수 | byte 차이 | 평가 |
+|---------|---------|---------|------|
+| **exam_science** | 4 | **3 (page 002/003/004)** | ✅ PR 본문 100% 정합 (12/15/18/19번 본문) |
+| **exam_kor** | 20 | 0 | ✅ 회귀 0 |
+| **exam_math** | 20 | 0 | ✅ 회귀 0 |
+| **합계** | **44** | **3** | 케이스별 명시 가드 정합성 정량 입증 |
+
+→ PR 본문이 명시한 "271/274 identical + 3 의도 정정 (exam_science 002/003/004)" 가 본 환경에서도 정확히 재현. 다른 시험지에서 회귀 0 — `feedback_hancom_compat_specific_over_general` 정합 입증.
+
+### 10.4 다음 단계
 
 1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep, WASM)
-3. ⏳ SVG 생성 — `output/svg/pr567_before/exam_science/` + `output/svg/pr567_after/exam_science/` (작업지시자 시각 판정용) + 회귀 sweep 영역
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick + devel merge + push
-6. ⏳ PR #567 close 댓글 + 처리 보고서 (`pr_567_report.md`) 작성 + archives 이동
+2. ✅ 본 환경 결정적 재검증
+3. ✅ SVG 생성 + 광범위 sweep — `output/svg/pr567_before/` + `output/svg/pr567_after/`
+4. ✅ Docker WASM 빌드 완료
+5. ⏳ **작업지시자 시각 판정** (★ 게이트) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close
+7. ⏳ 처리 보고서 (`pr_567_report.md`) 작성 + archives 이동
 
 ## 11. 메모리 정합
 
