@@ -139,14 +139,47 @@
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + test_548 RED → GREEN 결정적 검증 통과 + 단일 룰 정합.
 
-## 9. 다음 단계 (작업지시자 승인 시)
+## 9. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| 본질 commits cherry-pick (`3de05051` + `a0dad0d3`) | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel cherry-pick commits | `bee0c77` + `309cfbf` |
+
+### 9.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1130 passed** / 0 failed / 2 ignored (test_548 RED → GREEN) |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo test --test issue_546` | ✅ 1 passed (Task #546 회귀 0) |
+| `cargo test --test issue_554` | ✅ 12 passed |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo build --release` | ✅ Finished (28.20s) |
+| Docker WASM 빌드 | ✅ **4,570,220 bytes** (1m 25s, PR #589 baseline +447 bytes — table_layout.rs +79 LOC 정합) |
+
+### 9.3 광범위 회귀 sweep
+
+| Fixture | 페이지 수 | byte 차이 |
+|---------|---------|---------|
+| 21_언어_기출_편집가능본 | 15 | **1** (page 8 — PR 본문 권위 영역) ✅ |
+| exam_kor | 20 | 7 (page 3, 5, 7, 9, 11, 15, 19) |
+| exam_science | 4 | 2 |
+| **합계** | **39** | **10** |
+
+→ PR 본문 명시 "6 샘플 73 페이지 13 differ" 와 근접 (본 환경 3 샘플 39 페이지 10 differ). 권위 영역 (page 8) 정합 + 회귀 검출 가능 영역 (paragraph 텍스트 위치, 일반 shape 위치) 변경 검증 필요.
+
+### 9.4 다음 단계
 
 1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep, WASM)
-3. ⏳ SVG 생성 — `output/svg/pr561_before/` + `output/svg/pr561_after/` (작업지시자 시각 판정용)
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick (옵션 A) + devel merge + push
-6. ⏳ PR #561 close 처리 댓글 + 처리 보고서 (`pr_561_report.md`) 작성 + archives 이동
+2. ✅ 본 환경 결정적 재검증
+3. ✅ SVG 생성 — `output/svg/pr561_before/` + `output/svg/pr561_after/`
+4. ✅ Docker WASM 빌드 완료
+5. ⏳ **작업지시자 시각 판정** (★ 게이트) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close
+7. ⏳ 처리 보고서 (`pr_561_report.md`) 작성 + archives 이동
 
 ## 10. 메모리 정합
 
