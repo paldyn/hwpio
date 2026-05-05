@@ -161,14 +161,62 @@ table_x = col_area.x + effective_margin + h_offset
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + MERGEABLE + 결정적 검증 통과 + 단일 줄 본질 정정 + 케이스별 명시 가드 + 명세 정합 향상.
 
-## 10. 다음 단계 (작업지시자 승인 시)
+## 10. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 10.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| 본질 commit cherry-pick (`5d3b3e2d`) | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel cherry-pick commit | `3682cff` |
+
+### 10.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1134 passed** / 0 failed / 2 ignored (회귀 0) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --test issue_546` | ✅ 1 passed (Task #546 회귀 0) |
+| `cargo test --test issue_554` | ✅ 12 passed |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+| Docker WASM 빌드 | ✅ **4,581,465 bytes** (1m 33s, PR #592 baseline -62 bytes — 가드 1줄 추가의 LLVM 최적화 효과) |
+
+### 10.3 광범위 페이지네이션 sweep (페이지 수 회귀 자동 검출)
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (devel baseline) | **1,614** |
+| 총 페이지 (cherry-pick 후) | **1,614** |
+| **fixture 별 페이지 수 차이** | **0** |
+
+→ Square wrap 표 horz_rel_to 정정이 페이지네이션에 영향 없음.
+
+### 10.4 SVG 차이 (PR 본문 100% 재현)
+
+| Fixture | 페이지 수 | byte 차이 | 평가 |
+|---|---|---|---|
+| **exam_kor** | 20 | **4 (page 14, 17, 18, 19)** | PR 본문 명시 정확 재현 |
+
+**상세:**
+- **page 17 [A]**: Left 정렬 — 151.28 → 126.61 (-24.7 px, **사용자 보고 정정**)
+- **page 18 [B] x2**: Left 정렬 — 동류 정정
+- **page 19 [B]**: Left 정렬 — 동류 정정
+- **page 14 [A] x4**: Right 정렬 — 515.60 → 508.05 (-7.55 px, **명세 정합 향상**)
+
+→ PR 본문 "32 byte-identical + 4 의도된 정정" 정확 재현. 다른 fixture (exam_eng / exam_math / exam_science / exam_social 등) 무영향 — 케이스별 명시 가드 정합 입증.
+
+### 10.5 다음 단계
 
 1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep, WASM)
-3. ⏳ SVG 생성 — `output/svg/pr593_before/exam_kor/` + `output/svg/pr593_after/exam_kor/` (작업지시자 시각 판정용) + 회귀 sweep 영역
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick + devel merge + push
-6. ⏳ PR #593 close 댓글 + 처리 보고서 (`pr_593_report.md`) 작성 + archives 이동
+2. ✅ 본 환경 결정적 재검증
+3. ✅ SVG 생성 — `output/svg/pr593_before/exam_kor/` + `output/svg/pr593_after/exam_kor/` (4 페이지 의도된 차이)
+4. ✅ Docker WASM 빌드 완료 (4,581,465 bytes)
+5. ✅ 광범위 페이지네이션 sweep — 164 fixture 1,614 페이지 / 페이지 수 회귀 0
+6. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_kor p14/p17/p18/p19 + WASM 다양한 hwp 검증) — 본 단계 대기 중
+7. ⏳ 통과 시 devel merge + push + PR close
+8. ⏳ 처리 보고서 (`pr_593_report.md`) 작성 + archives 이동
 
 ## 11. 메모리 정합
 
