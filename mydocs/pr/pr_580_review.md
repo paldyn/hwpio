@@ -136,14 +136,60 @@ let anchor_y = if matches!(pic.common.text_wrap, TextWrap::TopAndBottom)
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + 결정적 검증 통과 + 케이스별 명시 가드 + 회귀 위험 영역 좁힘 + HWP IR 정합 명시.
 
-## 9. 다음 단계 (작업지시자 승인 시)
+## 9. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| 본질 commit cherry-pick (`0acd13a6`) | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel cherry-pick commit | `50a80ab` |
+
+### 9.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1131 passed** / 0 failed / 2 ignored (회귀 0) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --test issue_546` | ✅ 1 passed (Task #546 회귀 0) |
+| `cargo test --test issue_554` | ✅ 12 passed |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+| Docker WASM 빌드 | ✅ **4,571,643 bytes** (1m 33s, PR #575 baseline +39 bytes — table_layout.rs +22/-3 LOC 정합) |
+
+### 9.3 광범위 페이지네이션 sweep (페이지 수 회귀 자동 검출)
+
+본 환경 `samples/` 폴더 전체 자동 sweep:
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (devel baseline) | **1,614** |
+| 총 페이지 (cherry-pick 후) | **1,614** |
+| **fixture 별 페이지 수 차이** | **0** |
+| Export 실패 fixture | 0 |
+
+→ **164 fixture / 1,614 페이지 / 페이지 수 회귀 0**. 케이스별 명시 가드 (`text_wrap=TopAndBottom AND vert_rel_to=Para`) 의 정합성이 광범위 sweep 으로 정량 입증.
+
+### 9.4 SVG byte 차이 (PR 본문 영역 + 회귀 검증)
+
+| Fixture | 페이지 수 | byte 차이 | 정정 영역 |
+|---|---|---|---|
+| **exam_science** | 4 | **2 (page 1, page 4)** | page 1 보기 ①~⑤ 정정 (PR 본문 권위 영역) |
+| **mel-001** | 21 | 0 | LAYOUT_OVERFLOW 8건→0건 정정이 SVG byte 단위는 무영향 (clip 영역 안으로만 이동) |
+
+→ exam_science page 1 의 정정 영역 정합 + page 4 부수 효과 영역 + mel-001 의 LAYOUT_OVERFLOW 측정 정정 (SVG byte 무변경) 확인.
+
+### 9.5 다음 단계
 
 1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep, WASM)
-3. ⏳ SVG 생성 — `output/svg/pr580_before/exam_science/` + `output/svg/pr580_after/exam_science/` (작업지시자 시각 판정용) + 회귀 sweep 영역
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick + devel merge + push
-6. ⏳ PR #580 close 댓글 + 처리 보고서 (`pr_580_report.md`) 작성 + archives 이동
+2. ✅ 본 환경 결정적 재검증
+3. ✅ SVG 생성 — `output/svg/pr580_before/{exam_science,mel-001}/` + `output/svg/pr580_after/{exam_science,mel-001}/`
+4. ✅ Docker WASM 빌드 완료 (4,571,643 bytes)
+5. ✅ 광범위 페이지네이션 sweep — 164 fixture 1,614 페이지 / 페이지 수 회귀 0
+6. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_science page 1 보기 ①~⑤ + page 4 부수 효과 + WASM 다양한 hwp 검증) — 본 단계 대기 중
+7. ⏳ 통과 시 devel merge + push + PR close
+8. ⏳ 처리 보고서 (`pr_580_report.md`) 작성 + archives 이동
 
 ## 10. 메모리 정합
 
