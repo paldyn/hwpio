@@ -140,14 +140,70 @@ PR 본문:
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + MERGEABLE + 결정적 검증 통과 + 디스조인트 설계 + PDF 글리프 직접 분석 + 단위 테스트 +2.
 
-## 9. 다음 단계 (작업지시자 승인 시)
+## 9. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| 본질 commit cherry-pick (`2788fea8`) | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel cherry-pick commit | `dd568ed` |
+
+### 9.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1134 passed** / 0 failed / 2 ignored (단위 테스트 +2) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --test issue_546` | ✅ 1 passed (Task #546 회귀 0) |
+| `cargo test --test issue_554` | ✅ 12 passed |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+| Docker WASM 빌드 | ✅ **4,581,527 bytes** (1m 34s, PR #584 baseline +29 bytes — paragraph_layout.rs +32 LOC 정합) |
+
+### 9.3 광범위 페이지네이션 sweep (페이지 수 회귀 자동 검출)
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (devel baseline) | **1,614** |
+| 총 페이지 (cherry-pick 후) | **1,614** |
+| **fixture 별 페이지 수 차이** | **0** |
+
+→ U+F003B → ↓ 매핑이 페이지네이션에 영향 없음.
+
+### 9.4 SVG 정량 측정 — U+F003B 두부 → ↓ 화살표 변경
+
+| Fixture | U+F003B before | U+F003B after | ↓ after | 평가 |
+|---|---|---|---|---|
+| **exam_eng** | **1** | **0** | **1** | ✅ PR 본문 권위 영역 (page 7 #40 화살표 정정) |
+| exam_kor | 0 | 0 | 0 | 회귀 영역 무 |
+| exam_math | 0 | 0 | 0 | 회귀 영역 무 |
+| exam_science | 0 | 0 | 0 | 회귀 영역 무 |
+
+→ exam_eng 단독 영향 (page 7 의 1건 두부 → ↓ 정확 변환). 다른 fixture 무영향.
+
+### 9.5 페이지 7 권위 케이스 검증 (PR 본문 명시 영역)
+
+`exam_eng_007.svg:4162` 정확한 1행 변경:
+
+```diff
+- <text transform="translate(796.7266666666668,1218.2666666666667) scale(1.3000,1)" font-family="HY신명조,..." font-size="15.333333333333334" fill="#000000">󰀻</text>
++ <text transform="translate(796.7266666666668,1218.2666666666667) scale(1.3000,1)" font-family="HY신명조,..." font-size="15.333333333333334" fill="#000000">↓</text>
+```
+
+→ x/y/font/size/scale/fill 모두 동일, U+F003B (`󰀻`) → U+2193 (`↓`) 만 변경. PR 본문 100% 재현.
+
+### 9.6 다음 단계
 
 1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep, WASM)
-3. ⏳ SVG 생성 — `output/svg/pr592_before/exam_eng/` + `output/svg/pr592_after/exam_eng/` (작업지시자 시각 판정용) + 회귀 sweep 영역
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick + devel merge + push
-6. ⏳ PR #592 close 댓글 + 처리 보고서 (`pr_592_report.md`) 작성 + archives 이동
+2. ✅ 본 환경 결정적 재검증
+3. ✅ SVG 생성 — `output/svg/pr592_before/exam_eng/` + `output/svg/pr592_after/exam_eng/` (page 7 만 의도된 차이)
+4. ✅ Docker WASM 빌드 완료 (4,581,527 bytes)
+5. ✅ 광범위 페이지네이션 sweep — 164 fixture 1,614 페이지 / 페이지 수 회귀 0
+6. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_eng page 7 #40 화살표) — 본 단계 대기 중
+7. ⏳ 통과 시 devel merge + push + PR close
+8. ⏳ 처리 보고서 (`pr_592_report.md`) 작성 + archives 이동
 
 ## 10. 메모리 정합
 
