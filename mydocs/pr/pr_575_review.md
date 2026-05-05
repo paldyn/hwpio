@@ -152,14 +152,62 @@ exam_science page 1 header (외곽 1×1 표 셀 p[3] 의 sub-tables):
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + 결정적 검증 통과 + 케이스별 명시 가드 + 단일 룰 재사용 + 정밀 진단 + 인접 효과.
 
-## 9. 다음 단계 (작업지시자 승인 시)
+## 9. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| 본질 commit cherry-pick (`7d5075bf`) | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel cherry-pick commit | `323c1c7` |
+
+### 9.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1131 passed** / 0 failed / 2 ignored (회귀 0) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --test issue_546` | ✅ 1 passed (Task #546 회귀 0) |
+| `cargo test --test issue_554` | ✅ 12 passed |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+| Docker WASM 빌드 | ✅ **4,571,604 bytes** (1m 33s, PR #570 baseline +703 bytes — table_layout.rs +19/-2 LOC 정합) |
+
+### 9.3 광범위 페이지네이션 sweep (페이지 수 회귀 자동 검출)
+
+본 환경 `samples/` 폴더 전체 자동 sweep:
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (devel baseline) | **1,614** |
+| 총 페이지 (cherry-pick 후) | **1,614** |
+| **fixture 별 페이지 수 차이** | **0** |
+| Export 실패 fixture | 0 |
+
+→ **164 fixture / 1,614 페이지 / 페이지 수 회귀 0**. block / inline TAC 케이스 분리 + 인접 효과 (Issue #572) 의 광범위 안전성이 정량 입증.
+
+### 9.4 exam_science byte 차이 (PR 본문 명시 영역)
+
+| 페이지 | byte 차이 | 정정 영역 |
+|------|---------|---------|
+| **page 1** | **differ** ✅ | Page 1 header item ① (Issue #572 인접 효과 자동 정정) |
+| **page 2** | **differ** ✅ | pi=61 (Task #565/#568 영역과 인접) |
+| **page 3** | **differ** ✅ | 보기 셀 분수 단락 13/16번 |
+| **page 4** | **differ** ✅ | 보기 셀 분수 단락 19번 |
+
+→ PR 본문 "exam_science.hwp 4 페이지 의도된 정정" 본 환경에서 정확히 재현. **단일 본질 정정으로 4 페이지 모든 결함 + Issue #572 인접 효과 동시 정합**.
+
+### 9.5 다음 단계
 
 1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep, WASM)
-3. ⏳ SVG 생성 — `output/svg/pr575_before/exam_science/` + `output/svg/pr575_after/exam_science/` (작업지시자 시각 판정용) + 회귀 sweep 영역
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick + devel merge + push + Issue #572 자동 close 검토
-6. ⏳ PR #575 close 댓글 + 처리 보고서 (`pr_575_report.md`) 작성 + archives 이동
+2. ✅ 본 환경 결정적 재검증
+3. ✅ SVG 생성 — `output/svg/pr575_before/exam_science/` + `output/svg/pr575_after/exam_science/` (4 페이지 모두 의도된 차이)
+4. ✅ Docker WASM 빌드 완료 (4,571,604 bytes)
+5. ✅ 광범위 페이지네이션 sweep — 164 fixture 1,614 페이지 / 페이지 수 회귀 0
+6. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_science 4 페이지 + WASM 다양한 hwp 검증) — 본 단계 대기 중
+7. ⏳ 통과 시 devel merge + push + PR close + Issue #572 자동 close 검토
+8. ⏳ 처리 보고서 (`pr_575_report.md`) 작성 + archives 이동
 
 ## 10. 메모리 정합
 
