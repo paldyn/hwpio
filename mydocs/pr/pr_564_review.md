@@ -133,14 +133,62 @@ PR 본문:
 
 → **작업지시자 결정 대기**. 옵션 A 권장 — 본질 cherry-pick 깨끗 + 결정적 검증 통과 + 단일 룰 + 한컴 명세 정합.
 
-## 9. 다음 단계 (작업지시자 승인 시)
+## 9. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| 본질 commit cherry-pick (`04eefd99`) | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel cherry-pick commit | `fc16acc` |
+
+### 9.2 결정적 검증 (모두 통과)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1131 passed** / 0 failed / 2 ignored (test_521 RED → GREEN) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --test issue_546` | ✅ 1 passed (Task #546 회귀 0) |
+| `cargo test --test issue_554` | ✅ 12 passed |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ Finished |
+| Docker WASM 빌드 | ✅ **4,570,615 bytes** (1m 34s, PR #567 baseline +151 bytes — layout.rs +11 LOC 정합) |
+
+### 9.3 광범위 페이지네이션 sweep (페이지 수 회귀 자동 검출)
+
+작업지시자 안내:
+> 이번 PR 은 광범위한 페이지네이션 변화가 발생하는지 검증을 해야 합니다.
+> 메인테이너가 시각 검증 하는 동안 페이지 수변화 회귀테스트를 해주세요.
+
+본 환경 `samples/` 폴더 **전체 164 fixture (158 hwp + 6 hwpx)** 자동 sweep — devel 기준 페이지 수 vs cherry-pick 후 페이지 수 비교:
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (devel baseline) | **1,614** |
+| 총 페이지 (cherry-pick 후) | **1,614** |
+| **fixture 별 페이지 수 차이** | **0** |
+| Export 실패 fixture | 0 |
+| 측정 도구 | `./target/release/rhwp export-svg` (60s timeout / fixture) |
+
+→ **164 fixture / 1,614 페이지 / 페이지 수 회귀 0** 확인. PR 본문 "278 differ / text count 변동 0" 안전성 패턴이 본 환경 광범위 sweep 으로 정량 입증.
+
+**검증 결과 해석**:
+- TAC 표 outer_margin_bottom 가산 (+8 px / 표) 이 페이지 break 를 트리거하는 케이스 없음
+- `feedback_visual_regression_grows` 정합 — 페이지 수 byte 비교만으로 시각 결함 검출 한계 인정 + 메인테이너 시각 판정 필수
+- 페이지 내 시프트 영역 (paragraph y +8 px 누적 효과) 은 본 자동 sweep 미검출 → 메인테이너 직접 다양한 hwp 시각 검증으로 보완
+
+→ 메인테이너 직접 다양한 hwp 문서 시각 검증 단계로 진행 가능 — 페이지 수 회귀는 자동 sweep 으로 0 확인됨.
+
+### 9.4 다음 단계
 
 1. ✅ 본 1차 검토 보고서 작성 (현재 문서)
-2. ⏳ 본 환경 결정적 재검증 (`cargo test --lib`, `clippy`, 광범위 sweep, WASM)
-3. ⏳ SVG 생성 — `output/svg/pr564_before/exam_eng/` + `output/svg/pr564_after/exam_eng/` (작업지시자 시각 판정용) + 회귀 sweep 영역
-4. ⏳ 작업지시자 시각 판정 (★ 게이트)
-5. ⏳ 통과 시 cherry-pick + devel merge + push
-6. ⏳ PR #564 close 댓글 + 처리 보고서 (`pr_564_report.md`) 작성 + archives 이동
+2. ✅ 본 환경 결정적 재검증
+3. ✅ Docker WASM 빌드 완료 (메인테이너 직접 검증용 `pkg/rhwp_bg.wasm` 4,570,615 bytes)
+4. ✅ 광범위 페이지네이션 sweep — **164 fixture / 1,614 페이지 / 페이지 수 회귀 0** (전체 samples/ 폴더)
+5. ⏳ **메인테이너 직접 다양한 hwp 문서 시각 검증** (★ 게이트, WASM 기반) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close
+7. ⏳ 처리 보고서 (`pr_564_report.md`) 작성 + archives 이동
 
 ## 10. 메모리 정합
 
