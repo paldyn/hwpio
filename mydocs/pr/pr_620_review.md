@@ -4,7 +4,7 @@
 **작성자**: @planet6897 (Jaeuk Ryu) / Jaeook Ryu (commit author, jaeook.ryu@gmail.com)
 **상태**: OPEN, **mergeable=MERGEABLE**, **mergeStateStatus=BEHIND** (PR base 22 commits 뒤 — 본 사이클 #578/#629/#611 처리분 누적)
 **관련**: closes #618, **회귀 origin = Issue #519 (CLOSED)** — PR #527 (CLOSED) 묶음 머지 영역의 누락
-**처리 결정**: ⏳ **검토 중** (1차 검토)
+**처리 결정**: ⏳ **옵션 A 진행 중 — 시각 판정 게이트 대기** (작업지시자 승인 후 cherry-pick 적용 + 결정적 재검증 통과)
 **검토 시작일**: 2026-05-07
 
 ## 1. 검토 핵심 질문
@@ -200,7 +200,75 @@ $ git branch -a --contains 7ead89d
 - ✅ `feedback_close_issue_verify_merged` — **본 PR 의 회귀 origin 자체가 이 메모리 영역의 권위 케이스**: Task #519 close 시 정정 commit 의 devel 머지 검증 미수행 → 동일 결함 재발 (Issue #618). 본 PR 은 이 패턴을 정확히 진단하고 재적용. 메모리 권위 영역 강화.
 - ✅ `feedback_small_batch_release_strategy` — 본 사이클 (5/6 v0.7.10 후 처리) 영역 정합
 
+## 9.5 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.5.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| `7ac87770` cherry-pick | ✅ 4 파일 충돌 0 (auto-merge layout.rs / paragraph_layout.rs 깨끗 통과) |
+| local/devel commit | `95b228e` (**author Jaeook Ryu 보존**, committer edward) |
+
+### 9.5.2 결정적 재검증 (local/devel cherry-pick 후)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo build --release` | ✅ Finished |
+| `cargo test --lib --release` | ✅ **1140 passed** / 0 failed (회귀 0) |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| **Docker WASM 빌드** | ✅ **4,590,537 bytes** (1m 30s, PR #611 baseline 4,590,307 **+230 bytes** — 4 파일 transform: extract_shape_transform 호출 추가 정합) |
+
+### 9.5.3 광범위 페이지네이션 sweep (1차 검토 시 측정 완료)
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **167** (161 hwp + 6 hwpx) |
+| 총 페이지 (BEFORE) | **1,687** |
+| 총 페이지 (AFTER) | **1,687** |
+| **fixture 별 페이지 수 차이** | **0** |
+
+→ Picture transform 추가가 페이지네이션에 영향 없음 (회귀 0).
+
+### 9.5.4 SVG byte 차이 + 정량 측정 (PR 본문 100% 재현, 1차 검토 시 측정 완료)
+
+| 페이지 | BEFORE `<g transform=>` | AFTER `<g transform=>` | byte 차이 |
+|---|---|---|---|
+| page 1 | 0 | 0 | identical |
+| page 2 | 0 | 0 | identical |
+| page 3 | 0 | 0 | identical |
+| **page 4** | **0** | **1** | **differ (2,519,257 → 2,519,364, +107)** |
+| page 5 | 0 | 0 | identical |
+| page 6 | 0 | 0 | identical |
+| page 7 | 0 | 0 | identical |
+| page 8 | 0 | 0 | identical |
+
+**page 4 transform 영역** (PR 본문 명시값 100% 일치):
+```
+<g transform="translate(1602.426666666667,0) scale(-1,1) translate(0,2217.373333333333) scale(1,-1)">
+```
+
+### 9.5.5 시각 판정 자료 (작업지시자 검증용)
+
+| 자료 | 위치 | 비고 |
+|---|---|---|
+| **Before** (devel HEAD `7f89147`, fix 미적용) | `output/svg/pr620_before/exam_eng/exam_eng_00{1..8}.svg` | 8 페이지, page 4 = 0 transform |
+| **After** (cherry-pick `95b228e` 적용) | `output/svg/pr620_after/exam_eng/exam_eng_00{1..8}.svg` | 8 페이지, page 4 = **1 transform** |
+| **차이 페이지** | page 4 단독 | 다른 7 페이지 byte-identical |
+
+**시각 판정 권위 영역**:
+- **page 4 — Q28 박스 종이-말림(curl) 데코레이션 그림** — `bin_id=2`, `flip=(h=true,v=true)`, `rot=0` 의 horz/vert flip 정상 적용으로 박스 좌상단 정상 위치 출력 (PDF 정합).
+- 다른 페이지 / 영역은 회귀 없음 (광범위 sweep 167 fixture / 1,687 페이지 차이 0).
+
+**WASM 산출물**: `pkg/rhwp_bg.wasm` 4,590,537 bytes (Docker WASM 빌드 1m 30s, PR #611 baseline +230 bytes — 4 파일 transform: extract_shape_transform 호출 추가 정합).
+
+### 9.5.6 다음 단계
+
+5. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_eng page 4 Q28 박스 좌상단 curl 그림 정상 위치) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close (한글 댓글) + Issue #618 close (closes #618 자동 처리 미발동 시 수동)
+7. ⏳ 처리 보고서 (`pr_620_report.md`) 작성 + archives 이동 + 5/7 orders 신규 작성
+8. ⏳ **옵션 B 후속 권유 댓글** — Task #517 / #518 / #523 누락 영역 재적용 권유 (별도 후속)
+
 ---
 
 **검토자**: 클로드 (페어 프로그래밍 파트너)
-**1차 검토 단계 — 작업지시자 결정 대기**.
+**옵션 A 진행 — WASM 빌드 + 시각 판정 게이트 대기**.
