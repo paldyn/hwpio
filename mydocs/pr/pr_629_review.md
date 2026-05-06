@@ -4,7 +4,7 @@
 **작성자**: @planet6897 (Jaeuk Ryu)
 **상태**: OPEN, **mergeable=UNKNOWN** (PR base 8 commits 뒤 — 본 사이클 #578 후속 commits 영역, 본질 충돌 0)
 **관련**: closes #628
-**처리 결정**: ⏳ **검토 중** (1차 검토)
+**처리 결정**: ⏳ **옵션 A 진행 중 — 시각 판정 게이트 대기** (작업지시자 승인 후 cherry-pick 적용 + 결정적 재검증 통과)
 **검토 시작일**: 2026-05-06
 
 ## 1. 검토 핵심 질문
@@ -205,7 +205,76 @@ x=568.00 y=783.92 width=376.65 height=101.81
 - ✅ `feedback_small_batch_release_strategy` — 본 사이클 (5/6 v0.7.10 후 첫 PR 처리분 - PR #578 후속) 영역 정합
 - ✅ `feedback_image_renderer_paths_separate` — 본 PR 의 키 namespace 분리는 SVG/Canvas 양쪽 동일 영향 (renderer 별 분기 없음, 데이터 구조 영역)
 
+## 9.5 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.5.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| `04ce0d22` cherry-pick | ✅ 본질 src 7 파일 충돌 0, **author Jaeook Ryu 보존** |
+| `mydocs/orders/20260506.md` | ours 보존 (본 환경 5/6 orders 유지) |
+| 컨트리뷰터 fork plans/working/report | 본 환경 미도입 (PR 검토는 `pr/` 폴더 정책) |
+| local/devel commit | `c353cfc` |
+
+### 9.5.2 결정적 재검증 (local/devel cherry-pick 후)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo build --release` | ✅ Finished |
+| `cargo test --lib --release` | ✅ **1140 passed** / 0 failed (회귀 0) |
+| `cargo test --release --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo test --release --test issue_546 --test issue_554` | ✅ 모두 통과 |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| **Docker WASM 빌드** | ✅ **4,590,307 bytes** (1m 27s, PR #578 baseline 4,583,156 +7,151 — render_tree.rs +43 LOC + InlineShapeKey Vec allocation 정합) |
+
+### 9.5.3 광범위 페이지네이션 sweep
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (BEFORE) | **1,684** |
+| 총 페이지 (AFTER) | **1,684** |
+| **fixture 별 페이지 수 차이** | **0** |
+
+→ 본 PR 의 키 namespace 분리가 페이지네이션에 영향 없음 (회귀 0).
+
+### 9.5.4 SVG byte 차이 + 정량 측정 (PR 본문 100% 재현)
+
+| 페이지 | BEFORE images | AFTER images | byte 차이 | 평가 |
+|---|---|---|---|---|
+| page 1 | 12 | 12 | identical | ✅ 회귀 0 |
+| page 2 | 2 | 2 | identical | ✅ 회귀 0 |
+| page 3 | 2 | 2 | identical | ✅ 회귀 0 |
+| **page 4** | **3** | **4** | **differ (461,151 → 532,816, +71,665 bytes)** | ✅ **20번 실린더 이미지 +1** (정정 영역) |
+
+**page 4 추가 image 위치 (4번째)**:
+```
+x=568.00 y=783.92 width=376.65 height=101.81
+```
+
+→ **PR 본문 명세 `99.7×26.9mm IR 정확 매칭` 100% 일치**.
+
+### 9.5.5 시각 판정 자료 (작업지시자 검증용)
+
+| 자료 | 위치 | 비고 |
+|---|---|---|
+| **Before** (devel HEAD `18f5161`, fix 미적용) | `output/svg/pr629_before/exam_science/exam_science_00{1..4}.svg` | 4 페이지, page 4 = 3 images |
+| **After** (cherry-pick `c353cfc` 적용) | `output/svg/pr629_after/exam_science/exam_science_00{1..4}.svg` | 4 페이지, page 4 = **4 images** |
+| **차이 페이지** | page 4 단독 | page 1/2/3 byte-identical |
+
+**시각 판정 권위 영역**:
+- **page 4 — 20번 문항** 글상자 안 (외부 1×1 → 내부 2×3 → 셀 → 그림 이중 nesting) **실린더 이미지** (`bin_id=2`, 99.7×26.9mm) 정상 위치 (`x=568 y=783.92 w=376.65 h=101.81`) 출력 확인.
+- 19번 (`bin_id=1`, 단일 nesting) + 다른 영역은 회귀 없음.
+
+**WASM 산출물**: `pkg/rhwp_bg.wasm` 4,590,307 bytes (Docker WASM 빌드 1m 27s, PR #578 baseline +7,151 bytes — render_tree.rs +43 LOC + InlineShapeKey Vec allocation 정합).
+
+### 9.5.6 다음 단계
+
+5. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_science page 4 — 20번 실린더 이미지 정상 위치) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close (한글 댓글) + Issue #628 close (closes #628 자동 처리)
+7. ⏳ 처리 보고서 (`pr_629_report.md`) 작성 + archives 이동 + 5/6 orders 갱신
+
 ---
 
 **검토자**: 클로드 (페어 프로그래밍 파트너)
-**1차 검토 단계 — 작업지시자 승인 대기**.
+**옵션 A 진행 — 시각 판정 게이트 대기**.
