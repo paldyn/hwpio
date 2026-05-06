@@ -4,7 +4,7 @@
 **작성자**: @kihyunnn (김기현, mable0927@gmail.com) — **첫 PR 컨트리뷰터**
 **상태**: OPEN, **mergeable=MERGEABLE**, **mergeStateStatus=BEHIND** (PR base 283 commits 뒤 — 4/29 등록 후 본 사이클 누적)
 **관련**: closes #458
-**처리 결정**: ⏳ **검토 중** (1차 검토)
+**처리 결정**: ⏳ **옵션 A 진행 중 — web 환경 시각 판정 게이트 대기** (작업지시자 승인 + WASM 빌드 정합 확인 후 cherry-pick 적용)
 **검토 시작일**: 2026-05-06
 
 ## 1. 검토 핵심 질문
@@ -154,7 +154,7 @@ PR 본문 명시:
 |------|---------|----------|
 | `cargo test` | 통과 | ✅ 1140 passed |
 | `cargo clippy -- -D warnings` | 통과 | ✅ 0건 |
-| Docker WASM 빌드 | 통과 | ⏳ 현재 baseline WASM 4,588,198 bytes 정합 (PR #607 측정 활용) |
+| Docker WASM 빌드 | 통과 | ✅ **4,590,307 bytes** (PR #629 baseline 과 **정확 일치** — Rust 영역 변경 0 정합 정량 입증) |
 | `cd rhwp-studio && npm run build` | 통과 | ✅ tsc + vite build 정합 |
 | `git diff --check` | 통과 | ✅ 본 환경 정합 |
 | 관련 샘플 파일로 SVG 내보내기 확인 | ☐ 미체크 (Rust 영역 무관) | 무관 — TypeScript editor 영역 |
@@ -217,7 +217,76 @@ PR 본문 명시:
 - ✅ **신규 컨트리뷰터 첫 PR 영역** — 차분/정중한 톤 + 본질 정합 인정 패턴
 - ⚠️ **rhwp-studio TypeScript 영역** — 본 사이클 첫 web editor 본질 정정 PR (이전 사이클 PR 들은 모두 Rust 렌더러 영역)
 
+## 9.5 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.5.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| `a4944d2b` cherry-pick | ✅ rhwp-studio TS 5 파일 충돌 0 (auto-merge picture.ts 깨끗 통과) |
+| local/devel commit | `5cdf8e5` (**author kihyunnn 보존**, committer edward) |
+
+### 9.5.2 결정적 재검증 (local/devel cherry-pick 후)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo build --release` | ✅ Finished |
+| `cargo test --lib --release` | ✅ **1140 passed** / 0 failed (회귀 0) |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| **rhwp-studio `npm run build`** (`tsc && vite build`) | ✅ **TypeScript 타입 체크 통과 + dist 빌드 성공** (`dist/index.html` 55KB / `index-cbRqvVRC.js` 689KB / `rhwp_bg-DEftyAl6.wasm` 4.59MB) |
+| **Docker WASM 빌드** | ✅ **4,590,307 bytes** (1m 31s, PR #629 baseline 과 **정확 일치** — Rust 영역 변경 0 정합 정량 입증) |
+
+### 9.5.3 광범위 페이지네이션 sweep
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 (BEFORE) | **1,684** |
+| 총 페이지 (AFTER) | **1,684** |
+| **fixture 별 페이지 수 차이** | **0** |
+
+→ rhwp-studio TypeScript 변경은 페이지네이션 (Rust 영역) 에 영향 없음 (자명).
+
+### 9.5.4 WASM 정량 정합
+
+| Baseline | bytes |
+|---|---|
+| PR #578 (5/6 첫 처리) | 4,583,156 |
+| PR #629 (5/6 두 번째 처리) | **4,590,307** |
+| PR #611 (5/6 세 번째 처리, 본 PR) | **4,590,307** ← **정확 일치** |
+
+→ **본 PR 의 변경 영역 (rhwp-studio TypeScript) 이 Rust → WASM 산출물에 영향 0** 정량 입증.
+
+### 9.5.5 시각 판정 자료 (작업지시자 검증용 — web 환경)
+
+본 PR 은 web editor 의 Undo/Redo 동작 영역으로 SVG byte 비교 자료 무관. **메인테이너 직접 web 환경에서 Ctrl+Z / Ctrl+Y 시각 판정 필요**.
+
+**시각 판정 권위 영역** (vite dev server 실행 후 브라우저에서 검증):
+
+1. **표 리사이즈 → Ctrl+Z** — 마우스 드래그로 셀 경계 이동 후 Ctrl+Z 로 원래 크기 복원 ✓
+2. **표 리사이즈 → Ctrl+Z → Ctrl+Y** — 복원 후 다시 Ctrl+Y 로 변경 후 크기 회복 ✓
+3. **그림 리사이즈 → Ctrl+Z** — 그림 핸들 드래그로 크기 변경 후 Ctrl+Z 로 원래 크기 복원 ✓
+4. **그림 리사이즈 → Ctrl+Z → Ctrl+Y** — 복원 후 Ctrl+Y 회복 ✓
+5. **다중 선택 그림 리사이즈 → Ctrl+Z** — 여러 그림 동시 리사이즈 후 Ctrl+Z 한 번으로 모두 복원 ✓
+6. **텍스트 입력 Undo 회귀 0** — 본 PR 은 텍스트 undo 경로 무변경, 정합 보존 확인
+7. **표/개체 이동 Undo 회귀 0** — 본 PR 은 이동 undo 경로 무변경 (`MovePictureCommand`/`MoveShapeCommand` 보존), 정합 보존 확인
+
+**실행 명령** (메인테이너 환경):
+```bash
+cd rhwp-studio
+npx vite --host 0.0.0.0 --port 7700
+# 브라우저로 http://localhost:7700 접속 후 검증
+```
+
+**WASM 산출물**: `pkg/rhwp_bg.wasm` 4,590,307 bytes (PR #629 baseline 과 **정확 일치**, Docker WASM 빌드 1m 31s — Rust 영역 변경 0 정합 정량 입증). `rhwp-studio/dist/assets/rhwp_bg-DEftyAl6.wasm` 4,588,198 bytes (vite plugin 의 wasm 처리, dist 산출물).
+
+### 9.5.6 다음 단계
+
+5. ⏳ **작업지시자 web 환경 시각 판정** (★ 게이트, Ctrl+Z / Ctrl+Y 동작 확인) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close (한글 댓글) + Issue #458 close (closes #458 자동 처리)
+7. ⏳ 처리 보고서 (`pr_611_report.md`) 작성 + archives 이동 + 5/6 orders 갱신
+
 ---
 
 **검토자**: 클로드 (페어 프로그래밍 파트너)
-**1차 검토 단계 — 작업지시자 결정 대기**.
+**옵션 A 진행 — web 환경 시각 판정 게이트 대기**.
