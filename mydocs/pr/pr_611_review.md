@@ -261,13 +261,20 @@ PR 본문 명시:
 
 본 PR 은 web editor 의 Undo/Redo 동작 영역으로 SVG byte 비교 자료 무관. **메인테이너 직접 web 환경에서 Ctrl+Z / Ctrl+Y 시각 판정 필요**.
 
-**시각 판정 권위 영역** (vite dev server 실행 후 브라우저에서 검증):
+**작업지시자 지정 권위 샘플 (3개, 본 PR 시각 판정 자료 영역)**:
 
-1. **표 리사이즈 → Ctrl+Z** — 마우스 드래그로 셀 경계 이동 후 Ctrl+Z 로 원래 크기 복원 ✓
-2. **표 리사이즈 → Ctrl+Z → Ctrl+Y** — 복원 후 다시 Ctrl+Y 로 변경 후 크기 회복 ✓
-3. **그림 리사이즈 → Ctrl+Z** — 그림 핸들 드래그로 크기 변경 후 Ctrl+Z 로 원래 크기 복원 ✓
-4. **그림 리사이즈 → Ctrl+Z → Ctrl+Y** — 복원 후 Ctrl+Y 회복 ✓
-5. **다중 선택 그림 리사이즈 → Ctrl+Z** — 여러 그림 동시 리사이즈 후 Ctrl+Z 한 번으로 모두 복원 ✓
+| # | 샘플 | 권위 영역 | 검증 단계 |
+|---|------|---------|---------|
+| 1 | `samples/calc-cell.hwp` (15,872 bytes) | **표 리사이즈 Undo** | 셀 경계 드래그로 표 크기 축소 → **Ctrl+Z** → 원래 표 크기 복원 ✓ |
+| 2 | `samples/p122.hwp` (89,088 bytes) | **단일 이미지 리사이즈 Undo** | 이미지 핸들 드래그로 크기 축소 → **Ctrl+Z** → 원래 이미지 크기 복원 ✓ |
+| 3 | `samples/mix-shape-01.hwp` (78,848 bytes) | **다중 이미지 리사이즈 Undo 스택 순서** | 다중 이미지 순차 리사이즈 → **Ctrl+Z** 누를 때마다 LIFO 순서로 복원 ✓ |
+
+→ 본 사이클 (5/6) 에서 본 PR 의 시각 판정 자료 영역으로 git tracked 추가 (158 → 161 직속 hwp). Issue #458 의 사용자 영역 ("표 / 이미지 / 기타 모두 Undo 동작 회복") 에 정합한 권위 케이스.
+
+**시각 판정 추가 권위 영역** (회귀 차단 가드):
+
+4. **표 리사이즈 → Ctrl+Z → Ctrl+Y** — 복원 후 다시 Ctrl+Y 로 변경 후 크기 회복 ✓
+5. **그림 리사이즈 → Ctrl+Z → Ctrl+Y** — 복원 후 Ctrl+Y 회복 ✓
 6. **텍스트 입력 Undo 회귀 0** — 본 PR 은 텍스트 undo 경로 무변경, 정합 보존 확인
 7. **표/개체 이동 Undo 회귀 0** — 본 PR 은 이동 undo 경로 무변경 (`MovePictureCommand`/`MoveShapeCommand` 보존), 정합 보존 확인
 
@@ -275,7 +282,7 @@ PR 본문 명시:
 ```bash
 cd rhwp-studio
 npx vite --host 0.0.0.0 --port 7700
-# 브라우저로 http://localhost:7700 접속 후 검증
+# 브라우저로 http://localhost:7700 접속 후 위 3개 샘플 열고 검증
 ```
 
 **WASM 산출물**: `pkg/rhwp_bg.wasm` 4,590,307 bytes (PR #629 baseline 과 **정확 일치**, Docker WASM 빌드 1m 31s — Rust 영역 변경 0 정합 정량 입증). `rhwp-studio/dist/assets/rhwp_bg-DEftyAl6.wasm` 4,588,198 bytes (vite plugin 의 wasm 처리, dist 산출물).
