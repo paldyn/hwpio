@@ -4,8 +4,9 @@
 **작성자**: @planet6897 (PR 등록) / Jaeook Ryu = @jangster77 (commit author)
 **상태**: OPEN, **mergeable=MERGEABLE**
 **관련**: closes #576, **PR #579 (@oksure) — CLOSED 영역** (5/4 협업 PR 권유 후 self-close)
-**처리 결정**: ⏳ **검토 중** (1차 검토)
+**처리 결정**: ✅ **핀셋 cherry-pick + devel merge + push + PR close 완료** (옵션 A 진행 — ★ 시각 판정 통과)
 **검토 시작일**: 2026-05-06
+**처리 완료일**: 2026-05-06
 
 ## 1. 검토 핵심 질문
 
@@ -178,11 +179,38 @@ PR #579 (@oksure) 의 일반 인프라 (`is_known_command()` + `longest_keyword_
 
 → page 1/2 byte-identical (회귀 0) + page 3/4 의도된 정정 (수식 토크나이저).
 
-### 9.5.5 다음 단계
+### 9.5.5 시각 판정 자료 (작업지시자 검증용)
 
-5. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_science page 3/4 — `times`/`sim` 키워드 정합) — 본 단계 대기 중
-6. ⏳ 통과 시 devel merge + push + PR close (한글 댓글)
-7. ⏳ 처리 보고서 (`pr_578_report.md`) 작성 + archives 이동
+| 자료 | 위치 | 비고 |
+|---|---|---|
+| **Before** (devel HEAD, fix 미적용) | `output/svg/pr578_before/exam_science/exam_science_00{1..4}.svg` | 4 페이지 |
+| **After** (cherry-pick `fda98d2` 적용) | `output/svg/pr578_after/exam_science/exam_science_00{1..4}.svg` | 4 페이지 |
+| **차이 페이지** | page 3 / page 4 | page 1/2 byte-identical |
+
+**본질 정정 시각 판정 권위 영역**:
+- **page 3** — 15번 본문/보기: `rm W simY/Z`, `rmA SIMC` 의 `~` (∼ U+223C) 출력
+- **page 4** — 20번 본문/응답: `{b} over {a timesm}` 분모 `a × m` (× U+00D7), `1TIMES10^-14` → `1 × 10⁻¹⁴`, `rm X simZ` → `X ∼ Z`
+
+**WASM 산출물**: `pkg/rhwp_bg.wasm` 4,583,156 bytes (Docker WASM 빌드 1m 26s, v0.7.10 baseline +1,691 bytes — tokenizer.rs +53 LOC + 6 unit tests 정합).
+
+### 9.5.6 작업지시자 시각 판정 결과 — ★ 통과
+
+작업지시자 평가:
+> 웹 시각판정 통과입니다.
+
+→ ★ **통과**.
+
+### 9.5.7 후속 처리 완료
+
+| 항목 | 결과 |
+|---|---|
+| devel merge | ✅ `72cd9fd` |
+| push origin devel | ✅ |
+| PR #578 close | ✅ 한글 댓글 등록 |
+| Issue #576 close | ✅ closes #576 자동 처리 |
+| 처리 보고서 | ✅ `mydocs/pr/archives/pr_578_report.md` |
+| 검토 보고서 archives 이동 | ✅ 본 문서 (`mydocs/pr/archives/pr_578_review.md`) |
+| 5/6 orders 신규 | ✅ `mydocs/orders/20260506.md` (PR #578 첫 항목) |
 
 ## 10. 메모리 정합
 
@@ -199,4 +227,4 @@ PR #579 (@oksure) 의 일반 인프라 (`is_known_command()` + `longest_keyword_
 ---
 
 **검토자**: 클로드 (페어 프로그래밍 파트너)
-**1차 검토 단계 — 작업지시자 승인 대기**.
+**처리 완료** — 옵션 A 진행 + 시각 판정 ★ 통과 + devel merge `72cd9fd` + push + PR/Issue close.
