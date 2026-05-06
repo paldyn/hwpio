@@ -142,6 +142,48 @@ PR #579 (@oksure) 의 일반 인프라 (`is_known_command()` + `longest_keyword_
 
 → **작업지시자 결정 대기**. 옵션 A 권장.
 
+## 9.5 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 9.5.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| `6f3d94aa` cherry-pick | ✅ 충돌 0, author Jaeook Ryu 보존 |
+| local/devel commit | `fda98d2` |
+
+### 9.5.2 결정적 검증
+
+| 검증 | 결과 |
+|------|------|
+| `cargo test --lib --release` | ✅ **1140 passed** (회귀 0) |
+| **task576 unit tests** | ✅ **6/6 passed** (alpha 회귀 차단 가드 포함) |
+| `cargo test --test svg_snapshot` | ✅ 6/6 passed |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| `cargo build --release` | ✅ 통과 |
+| **Docker WASM 빌드** | ✅ **4,583,156 bytes** (1m 26s, v0.7.10 baseline +1,691 bytes — tokenizer.rs +53 LOC + 6 unit tests 정합) |
+
+### 9.5.3 광범위 페이지네이션 sweep
+
+| 통계 | 결과 |
+|---|---|
+| 총 fixture | **164** (158 hwp + 6 hwpx) |
+| 총 페이지 | **1,614** |
+| **fixture 별 페이지 수 차이** | **0** |
+
+### 9.5.4 SVG byte 차이 (PR 본문 100% 재현)
+
+| Fixture | 페이지 수 | byte 차이 | 평가 |
+|---|---|---|---|
+| **exam_science** | 4 | **2 (page 3, 4)** | ✅ PR 본문 명시 정정 영역 |
+
+→ page 1/2 byte-identical (회귀 0) + page 3/4 의도된 정정 (수식 토크나이저).
+
+### 9.5.5 다음 단계
+
+5. ⏳ **작업지시자 시각 판정** (★ 게이트, exam_science page 3/4 — `times`/`sim` 키워드 정합) — 본 단계 대기 중
+6. ⏳ 통과 시 devel merge + push + PR close (한글 댓글)
+7. ⏳ 처리 보고서 (`pr_578_report.md`) 작성 + archives 이동
+
 ## 10. 메모리 정합
 
 - ✅ `feedback_essential_fix_regression_risk` — 광범위 sweep (158 fixture / 563 scripts) + 6 신규 tokenizer tests
