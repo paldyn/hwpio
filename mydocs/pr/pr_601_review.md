@@ -4,7 +4,7 @@
 **작성자**: @oksure (Hyunwoo Park, oksure@gmail.com) — **활발한 컨트리뷰터** (PR #581/#582/#583/#600 등 본 사이클 누적, 5번째 PR)
 **상태**: OPEN, **mergeable=MERGEABLE**, **mergeStateStatus=BEHIND** (PR base 134 commits 뒤 — 5/5 등록 후 본 사이클 누적)
 **관련**: closes #594 (외부 사용자 등록 권위 영역, 한컴뷰어 정합)
-**처리 결정**: ⏳ **검토 중** (1차 검토)
+**처리 결정**: ⏳ **옵션 A 진행 중 — 시각 판정 게이트 + 컨트리뷰터 41 페이지 표기 부정확 영역 점검** (작업지시자 승인 후 cherry-pick 적용)
 **검토 시작일**: 2026-05-07
 
 ## 1. 검토 핵심 질문
@@ -189,6 +189,8 @@ PR 본문 명시 검증 영역:
 - ⚠️ **Issue #594 첨부 `테스트.hwp` 본 환경 미존재** — 다중 제목행 + 분할 표 결함 발현 영역의 권위 시각 판정 자료 부재. 컨트리뷰터 응답: "메인테이너 쪽에서 샘플 기반 integration test 를 추가해주시면 좋겠습니다." → **작업지시자 시각 판정 게이트 권고 + 권위 샘플 본 환경 영역 도입 검토**
 - ⚠️ **PR base BEHIND 134 commits** — UI MERGEABLE 표시지만 본 환경 cherry-pick 충돌 0 확인 (저위험 영역)
 - ⚠️ **`MeasuredTable.header_row_flags` 후속 영역** — 다중 제목행 높이 예약 영역 별도 task 영역 (본 PR 범위 외)
+- ⚠️ **컨트리뷰터의 `aift.hwp` 페이지 수 표기 부정확** — PR 본문 "41 페이지" 표기, 본 환경 측정 **77 페이지** (작업지시자 안내: 실제 47 페이지). 본 환경의 페이지네이션이 한컴 정합과 차이 있을 수 있음 (별도 영역). 본 PR 의 정정 자체는 다중 제목행 영역만 다루므로 영향 없음.
+- ⚠️ **시각적으로 개선되지 않음 (작업지시자 안내)** — 본 환경 fixture 들 (synam-001 / aift) 의 표가 단일 제목행 영역으로 본 PR fix 분기 미발현 → SVG byte 차이 0. **시각적 개선은 다중 제목행 + 분할 표 영역에서만 발현** (Issue #594 첨부 `테스트.hwp` 권위 케이스 영역). 작업지시자 시각 판정 영역에서는 본 환경 권위 샘플 영역 부재로 개선 미발현 정합 — **권위 샘플 도입 후 재시각 판정 또는 후속 task 영역 분리** 필요.
 
 ## 11. 1차 검토 결론
 
@@ -232,7 +234,76 @@ PR 본문 명시 검증 영역:
 - ✅ `reference_authoritative_hancom` — Issue #594 의 한컴뷰어 첨부 스크린샷이 권위 기준
 - ✅ **`feedback_close_issue_verify_merged` 영역** — Copilot review 영역에서 컨트리뷰터의 회귀 테스트 메인테이너 영역 권유 정합 (회귀 차단 가드 영구 보존 영역)
 
+## 13. 옵션 A 진행 결과 (작업지시자 승인 후)
+
+### 13.1 핀셋 cherry-pick
+
+| 단계 | 결과 |
+|------|------|
+| `45d3eeb` + `80db71a` 2 commits squash cherry-pick | ✅ 단일 파일 충돌 0 (auto-merge 깨끗 통과) |
+| local/devel commit | `0059557` (**author Hyunwoo Park (oksure) 보존**, committer edward) |
+
+### 13.2 결정적 재검증 (local/devel cherry-pick 후)
+
+| 검증 | 결과 |
+|------|------|
+| `cargo build --release` | ✅ Finished |
+| `cargo test --lib --release` | ✅ **1141 passed** / 0 failed (회귀 0) |
+| `cargo clippy --release --lib` | ✅ 0건 |
+| **Docker WASM 빌드** | ✅ **4,588,023 bytes** (1m 26s, PR #642 baseline 4,587,318 **+705 bytes** — table_partial.rs +22/-12 LOC + header_rows Vec allocation 정합) |
+| **rhwp-studio `npm run build`** (신규 WASM 반영) | ✅ TypeScript 통과 + dist (`index-BywcUMYq.js` 691,386 / `rhwp_bg-BAk_YtfR.wasm` 4,588,023) |
+
+### 13.3 작업지시자 안내 영역 — 시각적 개선 미발현
+
+**작업지시자 평가**:
+> 컨트리뷰터는 41페이지로 지칭한 것은 실제로는 47페이지. wasm 다시 빌드해주세요. 시각적으로 개선되지 않았습니다.
+
+**점검 영역**:
+
+#### A. 컨트리뷰터의 페이지 수 표기 부정확
+- **PR 본문 표기**: "samples/aift.hwp (41 페이지, 대형 표 다수)"
+- **작업지시자 측정**: 47 페이지 (한컴 정합)
+- **본 환경 측정**: **77 페이지** (현재 본 환경 페이지네이션 영역)
+- **차이 영역**: 본 환경의 페이지네이션이 한컴 정합과 차이 있음 (별도 영역). 본 PR 의 fix 영역과는 무관.
+
+#### B. 시각적 개선 미발현
+- **본 환경 권위 샘플** (synam-001 35 + aift 77) 의 표는 **단일 제목행 영역** 으로 본 PR fix 의 분기 (`r < start_row` && `is_header`) 미발현
+- → SVG byte 차이 0 (회귀 0 입증, 단 시각적 개선도 0)
+- **시각적 개선은 다중 제목행 + 분할 표 영역에서만 발현** — Issue #594 첨부 `테스트.hwp` 권위 케이스 영역
+- 본 환경에는 다중 제목행 + 분할 표 fixture 부재 → 시각 판정 영역 부재
+
+### 13.4 권장 처리 방향 정합
+
+#### 옵션 A-1 — 본 PR cherry-pick 유지 + 권위 샘플 도입 후 재시각 판정 (권장)
+- 본 PR 의 정정 본질 정합성은 결정적 검증 통과 + 회귀 0 입증으로 명확
+- 다만 시각 판정 영역의 권위 샘플 (다중 제목행 + 분할 표) 본 환경 도입 필요
+- Issue #594 첨부 `테스트.hwp` 또는 동등 권위 fixture 추가 후 재시각 판정 → 통과 시 머지
+
+#### 옵션 A-2 — 본 PR cherry-pick 그대로 머지 (회귀 0 + 결정적 검증 통과)
+- 본 환경 권위 샘플 (synam-001/aift) 회귀 0 입증 + 결정적 검증 통과
+- 시각적 개선 영역은 본 환경 fixture 부재로 별도 영역
+- 후속 task 로 권위 샘플 도입 + 회귀 테스트 추가 (옵션 B)
+
+#### 옵션 A-3 — close + 컨트리뷰터에게 권위 샘플 동봉 요청
+- 본 PR close 후 컨트리뷰터에게 `테스트.hwp` 또는 동등 권위 샘플 동봉한 후속 PR 권유
+
+### 13.5 WASM 산출물 정합
+
+| 산출물 | bytes |
+|---|---|
+| `pkg/rhwp_bg.wasm` | **4,588,023** (Docker WASM 빌드 1m 26s) |
+| `rhwp-studio/dist/assets/rhwp_bg-BAk_YtfR.wasm` | 4,588,023 (vite copy) |
+| `rhwp-studio/dist/assets/index-BywcUMYq.js` | 691,386 |
+| **PR #642 baseline** | 4,587,318 |
+| **PR #601 (본 PR)** | 4,588,023 ← **+705 bytes** |
+| 차이 본질 | table_partial.rs +22/-12 LOC + header_rows Vec allocation + seen boolean vec O(1) 정합 |
+
+### 13.6 다음 단계
+
+6. ⏳ **작업지시자 결정** — 옵션 A-1 (권위 샘플 도입 후 재시각 판정) / A-2 (회귀 0 입증으로 그대로 머지 + 후속 task) / A-3 (close + 컨트리뷰터 후속 PR 권유) 중 진행 영역
+7. ⏳ 결정에 따라 후속 단계 (devel merge + push + PR close + 처리 보고서 또는 close + 후속 PR 권유)
+
 ---
 
 **검토자**: 클로드 (페어 프로그래밍 파트너)
-**1차 검토 단계 — 작업지시자 결정 + 시각 판정 게이트 대기**.
+**옵션 A 진행 — 작업지시자 시각 판정 영역 결정 대기**.
