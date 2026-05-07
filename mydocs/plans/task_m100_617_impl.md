@@ -26,7 +26,7 @@
 
 **검증**: `cargo test shrink_padding_tests`.
 
-**커밋**: `Task #617 stage1: 재현 단위 테스트 추가 + 시그니처 보강` + `mydocs/working/task_m07_617_stage1.md`.
+**커밋**: `Task #617 stage1: 재현 단위 테스트 추가 + 시그니처 보강` + `mydocs/working/task_m100_617_stage1.md`.
 
 ---
 
@@ -100,7 +100,7 @@
    - `samples/` 의 핵심 샘플(특히 KTX 목차 관련, 한컴 고시 샘플, exam_kor) 재렌더.
    - SVG diff 또는 PNG 픽셀 diff (관찰 가능한 차이가 의도한 박스에만 발생).
 2. clippy + 전체 cargo test 통과.
-3. `mydocs/report/task_m07_617_report.md` 작성.
+3. `mydocs/report/task_m100_617_report.md` 작성.
 4. `mydocs/orders/<오늘날짜>.md` Task #617 상태 갱신.
 
 **커밋**: `Task #617 최종 보고서 + orders 갱신`.

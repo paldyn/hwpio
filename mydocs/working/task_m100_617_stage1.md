@@ -81,4 +81,4 @@ cropped 이미지 4 종 (`/tmp/v2_p6_crop.png`, `/tmp/final_p9_27.png`,
 
 ## 잔여 단계
 
-- Stage 4 — 회귀 검증·최종 보고: 진행 후 `task_m07_617_report.md` 작성.
+- Stage 4 — 회귀 검증·최종 보고: 진행 후 `task_m100_617_report.md` 작성.
