@@ -453,17 +453,21 @@ impl HeightMeasurer {
                 row_block_end: rbe,
             };
         }
-        // 1x1 래퍼 표 감지: 내부 표의 높이를 직접 측정
+        // 1x1 래퍼 표 감지: 내부 표의 높이를 직접 측정.
+        // 셀의 paragraphs 가 2개 이상이거나 paragraph 안에 nested 표 외 다른 control 이 섞인 경우,
+        // 첫 nested 표만 unwrap 하면 나머지 paragraph 의 컨텐츠(특히 또 다른 nested 표)가 누락된다.
         if table.row_count == 1 && table.col_count == 1 && table.cells.len() == 1 {
             let cell = &table.cells[0];
-            let has_visible_text = cell.paragraphs.iter()
-                .any(|p| p.text.chars().any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n'));
-            if !has_visible_text {
-                if let Some(nested) = cell.paragraphs.iter()
-                    .flat_map(|p| p.controls.iter())
-                    .find_map(|c| if let Control::Table(t) = c { Some(t.as_ref()) } else { None })
-                {
-                    return self.measure_table_impl(nested, para_index, control_index, styles, depth + 1);
+            if cell.paragraphs.len() == 1 {
+                let p = &cell.paragraphs[0];
+                let has_visible_text = p.text.chars()
+                    .any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n');
+                let only_one_nested_table = p.controls.len() == 1
+                    && matches!(p.controls.first(), Some(Control::Table(_)));
+                if !has_visible_text && only_one_nested_table {
+                    if let Some(Control::Table(t)) = p.controls.first() {
+                        return self.measure_table_impl(t.as_ref(), para_index, control_index, styles, depth + 1);
+                    }
                 }
             }
         }
