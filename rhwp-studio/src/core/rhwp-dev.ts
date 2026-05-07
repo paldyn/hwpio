@@ -15,6 +15,7 @@ interface TextRunInfo {
 
 interface SearchResult {
   found: boolean;
+  wrapped?: boolean;
   sec?: number;
   para?: number;
   charOffset?: number;
@@ -80,13 +81,25 @@ export function initRhwpDev(wasm: WasmBridge): void {
       const results: SearchResult[] = [];
       let sec = 0, para = 0, charOff = 0;
 
-      for (;;) {
+      // 반복 횟수 한계 — 방어 가드 (실 사용 한도 충분)
+      const MAX_MATCHES = 10000;
+      for (let i = 0; i < MAX_MATCHES; i++) {
         const r = wasm.searchText(text, sec, para, charOff, true, false);
         if (!r || !r.found) break;
+        // wrap-around 가드 — search_text_native 가 마지막 매치 이후 wrap 시 body_hits[0] 을
+        // wrapped=true 로 반환 → break 안 하면 무한 루프
+        if (r.wrapped) break;
+        // 후진 가드 — 다음 매치 위치가 직전 위치보다 앞이거나 같으면 break (방어)
+        const sNext = r.sec ?? 0;
+        const pNext = r.para ?? 0;
+        const cNext = r.charOffset ?? 0;
+        if (sNext < sec
+            || (sNext === sec && pNext < para)
+            || (sNext === sec && pNext === para && cNext < charOff)) break;
         results.push(r);
-        sec = r.sec!;
-        para = r.para!;
-        charOff = r.charOffset! + (r.length ?? text.length);
+        sec = sNext;
+        para = pNext;
+        charOff = cNext + (r.length ?? text.length);
       }
 
       if (results.length === 0) {
