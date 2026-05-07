@@ -7,6 +7,10 @@ interface TextRunInfo {
   x: number;
   y: number;
   text: string;
+  parentParaIdx?: number;
+  controlIdx?: number;
+  cellIdx?: number;
+  cellParaIdx?: number;
 }
 
 interface SearchResult {
@@ -17,13 +21,25 @@ interface SearchResult {
   length?: number;
 }
 
+function containerKey(run: TextRunInfo): string {
+  if (run.parentParaIdx != null) {
+    return `cell[p${run.parentParaIdx},c${run.controlIdx ?? 0},i${run.cellIdx ?? 0}]`;
+  }
+  return 'body';
+}
+
+
 export function initRhwpDev(wasm: WasmBridge): void {
   const dev = {
     showAllIds(pageNum?: number): void {
       const totalPages = wasm.pageCount;
       const startPage = pageNum ?? 0;
       const endPage = pageNum != null ? pageNum + 1 : totalPages;
-      const entries: Array<{ page: number; secIdx: number; paraIdx: number; charStart: number; x: number; y: number; text: string }> = [];
+      const entries: Array<{
+        page: number; container: string;
+        secIdx: number; paraIdx: number; charStart: number;
+        x: number; y: number; text: string;
+      }> = [];
 
       for (let p = startPage; p < endPage; p++) {
         let layout: string;
@@ -33,10 +49,11 @@ export function initRhwpDev(wasm: WasmBridge): void {
         const data = JSON.parse(layout);
         if (!data || !Array.isArray(data.runs)) continue;
 
-        for (const run of data.runs) {
+        for (const run of data.runs as TextRunInfo[]) {
           if (run.secIdx == null || run.paraIdx == null) continue;
           entries.push({
             page: p,
+            container: containerKey(run),
             secIdx: run.secIdx,
             paraIdx: run.paraIdx,
             charStart: run.charStart ?? 0,
@@ -47,10 +64,9 @@ export function initRhwpDev(wasm: WasmBridge): void {
         }
       }
 
-      // 중복 제거 (같은 page+secIdx+paraIdx 는 첫 런만)
       const seen = new Set<string>();
       const unique = entries.filter(e => {
-        const key = `${e.page}:${e.secIdx}:${e.paraIdx}`;
+        const key = `${e.page}:${e.container}:${e.secIdx}:${e.paraIdx}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;
@@ -60,17 +76,29 @@ export function initRhwpDev(wasm: WasmBridge): void {
       console.log(`[rhwpDev] showAllIds: ${unique.length} unique paragraph IDs across pages ${startPage}~${endPage - 1}`);
     },
 
-    search(text: string): SearchResult | null {
-      const result = wasm.searchText(text, 0, 0, 0, true, false);
-      if (!result || !result.found) {
-        console.warn(`[rhwpDev] search("${text}"): not found`);
-        return null;
+    search(text: string): SearchResult[] {
+      const results: SearchResult[] = [];
+      let sec = 0, para = 0, charOff = 0;
+
+      for (;;) {
+        const r = wasm.searchText(text, sec, para, charOff, true, false);
+        if (!r || !r.found) break;
+        results.push(r);
+        sec = r.sec!;
+        para = r.para!;
+        charOff = r.charOffset! + (r.length ?? text.length);
       }
-      console.log(`[rhwpDev] search("${text}"): sec=${result.sec} para=${result.para} offset=${result.charOffset} len=${result.length}`);
-      return result;
+
+      if (results.length === 0) {
+        console.warn(`[rhwpDev] search("${text}"): not found`);
+      } else {
+        console.log(`[rhwpDev] search("${text}"): ${results.length} match(es)`);
+        console.table(results);
+      }
+      return results;
     },
 
-    findNearest(targetId: number, pageNum?: number): { paraIdx: number; distance: number; text: string } | null {
+    findNearest(targetId: number, pageNum?: number): { paraIdx: number; distance: number; text: string; container: string } | null {
       const totalPages = wasm.pageCount;
       const page = pageNum ?? 0;
       if (page >= totalPages) return null;
@@ -82,25 +110,25 @@ export function initRhwpDev(wasm: WasmBridge): void {
       const data = JSON.parse(layout);
       if (!data || !Array.isArray(data.runs)) return null;
 
-      let nearest: { paraIdx: number; distance: number; text: string } | null = null;
-      for (const run of data.runs) {
-        const id = run.paraIdx as number;
+      let nearest: { paraIdx: number; distance: number; text: string; container: string } | null = null;
+      for (const run of data.runs as TextRunInfo[]) {
+        const id = run.paraIdx;
         if (id == null) continue;
         const dist = Math.abs(id - targetId);
         if (!nearest || dist < nearest.distance) {
-          nearest = { paraIdx: id, distance: dist, text: (run.text ?? '').slice(0, 30) };
+          nearest = { paraIdx: id, distance: dist, text: (run.text ?? '').slice(0, 30), container: containerKey(run) };
         }
       }
       if (nearest) {
-        console.log(`[rhwpDev] findNearest(${targetId}, page=${page}): closest paraIdx=${nearest.paraIdx} (distance=${nearest.distance}) "${nearest.text}"`);
+        console.log(`[rhwpDev] findNearest(${targetId}, page=${page}): closest paraIdx=${nearest.paraIdx} (${nearest.container}, distance=${nearest.distance}) "${nearest.text}"`);
       }
       return nearest;
     },
 
     help(): void {
       console.log(`%c[rhwpDev]%c Debugging Toolkit
-  .showAllIds(page?)      — list all paragraph IDs (console.table)
-  .search("text")         — find section/paragraph/offset for text
+  .showAllIds(page?)      — list all paragraph IDs with container context (console.table)
+  .search("text")         — find all matches: section/paragraph/offset (returns array)
   .findNearest(id, page?) — find nearest valid paraIdx to a given ID
   .help()                 — this message`, 'color:#2563eb;font-weight:bold', 'color:inherit');
     },
