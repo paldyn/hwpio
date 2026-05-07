@@ -148,23 +148,27 @@ impl LayoutEngine {
         if table.cells.is_empty() {
             if depth == 0 { return y_start; } else { return 0.0; }
         }
-        // 1x1 래퍼 표 감지: 외곽 표를 무시하고 내부 표를 직접 렌더링
+        // 1x1 래퍼 표 감지: 외곽 표를 무시하고 내부 표를 직접 렌더링.
+        // 셀의 paragraphs 가 2개 이상이거나 paragraph 안에 nested 표 외 다른 control 이 섞인 경우,
+        // 첫 nested 표만 unwrap 하면 나머지 paragraph 의 컨텐츠(특히 또 다른 nested 표)가 누락된다.
         if table.row_count == 1 && table.col_count == 1 && table.cells.len() == 1 {
             let cell = &table.cells[0];
-            let has_visible_text = cell.paragraphs.iter()
-                .any(|p| p.text.chars().any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n'));
-            if !has_visible_text {
-                if let Some(nested) = cell.paragraphs.iter()
-                    .flat_map(|p| p.controls.iter())
-                    .find_map(|c| if let Control::Table(t) = c { Some(t.as_ref()) } else { None })
-                {
-                    return self.layout_table(
-                        tree, col_node, nested,
-                        section_index, styles, col_area, y_start,
-                        bin_data_content, None, depth,
-                        table_meta, host_alignment, enclosing_cell_ctx, host_margin_left,
-                        host_margin_right, inline_x_override, nested_split, para_y,
-                    );
+            if cell.paragraphs.len() == 1 {
+                let p = &cell.paragraphs[0];
+                let has_visible_text = p.text.chars()
+                    .any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n');
+                let only_one_nested_table = p.controls.len() == 1
+                    && matches!(p.controls.first(), Some(Control::Table(_)));
+                if !has_visible_text && only_one_nested_table {
+                    if let Some(Control::Table(t)) = p.controls.first() {
+                        return self.layout_table(
+                            tree, col_node, t.as_ref(),
+                            section_index, styles, col_area, y_start,
+                            bin_data_content, None, depth,
+                            table_meta, host_alignment, enclosing_cell_ctx, host_margin_left,
+                            host_margin_right, inline_x_override, nested_split, para_y,
+                        );
+                    }
                 }
             }
         }
