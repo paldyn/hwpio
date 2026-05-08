@@ -148,87 +148,94 @@ impl LayoutEngine {
         if table.cells.is_empty() {
             if depth == 0 { return y_start; } else { return 0.0; }
         }
-        // 1x1 래퍼 표 감지: 외곽 표를 무시하고 내부 표를 직접 렌더링
+        // 1x1 래퍼 표 감지: 외곽 표를 무시하고 내부 표를 직접 렌더링.
+        // (Task #688) 셀 paragraphs 가 2개 이상이면 첫 nested 표만 unwrap 시 나머지
+        // paragraph 의 nested 표가 누락되므로 paragraphs.len() == 1 가드를 둔다.
+        // controls.len() == 1 가드는 두지 않는다 — exam_social.hwp pi=15 (PR #681)
+        // 처럼 정렬 마커 등 다른 control 이 동거하는 케이스에서 unwrap + 외곽선 분기를
+        // 모두 보존해야 하므로 find_map 으로 첫 nested table 만 추출한다.
         if table.row_count == 1 && table.col_count == 1 && table.cells.len() == 1 {
             let cell = &table.cells[0];
-            let has_visible_text = cell.paragraphs.iter()
-                .any(|p| p.text.chars().any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n'));
-            if !has_visible_text {
-                if let Some(nested) = cell.paragraphs.iter()
-                    .flat_map(|p| p.controls.iter())
-                    .find_map(|c| if let Control::Table(t) = c { Some(t.as_ref()) } else { None })
-                {
-                    // [Task: nested-table-border] 자료 박스 외곽 테두리 추가:
-                    // 외부 1x1 표가 wrapper 라도 padding + border_fill 에 테두리선이
-                    // 정의된 경우 (자료 박스 외곽), 외곽 4개 라인을 별도 추가하여 시각 정합.
-                    // 외곽 박스의 size 는 nested layout 의 실제 결과 (y_end - y_start) 와
-                    // nested 표의 측정 width 를 사용하여 내부 표 영역과 정확히 정합.
-                    // (exam_social.hwp pi=15 4번 자료 박스: 외부 1x1 padding=(850,850,850,850)
-                    //  border_fill_id=6, 내부 6x3 대화체 셀.)
-                    let outer_y = y_start;
-                    let outer_border_meta = if depth == 0 {
-                        let has_outer_padding = cell.padding.left != 0
-                            || cell.padding.right != 0
-                            || cell.padding.top != 0
-                            || cell.padding.bottom != 0;
-                        if has_outer_padding {
-                            if let Some(bs) = styles.border_styles.get(cell.border_fill_id as usize) {
-                                let any_border = bs.borders.iter()
-                                    .any(|b| b.line_type != crate::model::style::BorderLineType::None);
-                                if any_border {
-                                    Some(bs.borders)
+            if cell.paragraphs.len() == 1 {
+                let p = &cell.paragraphs[0];
+                let has_visible_text = p.text.chars()
+                    .any(|ch| !ch.is_whitespace() && ch != '\r' && ch != '\n');
+                if !has_visible_text {
+                    if let Some(nested) = p.controls.iter()
+                        .find_map(|c| if let Control::Table(t) = c { Some(t.as_ref()) } else { None })
+                    {
+                        // [Task: nested-table-border] 자료 박스 외곽 테두리 추가:
+                        // 외부 1x1 표가 wrapper 라도 padding + border_fill 에 테두리선이
+                        // 정의된 경우 (자료 박스 외곽), 외곽 4개 라인을 별도 추가하여 시각 정합.
+                        // 외곽 박스의 size 는 nested layout 의 실제 결과 (y_end - y_start) 와
+                        // nested 표의 측정 width 를 사용하여 내부 표 영역과 정확히 정합.
+                        // (exam_social.hwp pi=15 4번 자료 박스: 외부 1x1 padding=(850,850,850,850)
+                        //  border_fill_id=6, 내부 6x3 대화체 셀.)
+                        let outer_y = y_start;
+                        let outer_border_meta = if depth == 0 {
+                            let has_outer_padding = cell.padding.left != 0
+                                || cell.padding.right != 0
+                                || cell.padding.top != 0
+                                || cell.padding.bottom != 0;
+                            if has_outer_padding {
+                                if let Some(bs) = styles.border_styles.get(cell.border_fill_id as usize) {
+                                    let any_border = bs.borders.iter()
+                                        .any(|b| b.line_type != crate::model::style::BorderLineType::None);
+                                    if any_border {
+                                        Some(bs.borders)
+                                    } else { None }
                                 } else { None }
                             } else { None }
-                        } else { None }
-                    } else { None };
+                        } else { None };
 
-                    // nested 표 위치/size 미리 결정 (nested layout 의 위치 결정 logic 동일)
-                    let pw_now = self.current_paper_width.get();
-                    let paper_w = if pw_now > 0.0 { Some(pw_now) } else { None };
-                    let nested_w = hwpunit_to_px(nested.common.width as i32, self.dpi);
-                    let outer_w_for_box = nested_w;
-                    let outer_x_for_box = self.compute_table_x_position(
-                        nested, nested_w, col_area, depth, host_alignment,
-                        host_margin_left, host_margin_right, inline_x_override, paper_w,
-                    );
+                        // nested 표 위치/size 미리 결정 (nested layout 의 위치 결정 logic 동일)
+                        let pw_now = self.current_paper_width.get();
+                        let paper_w = if pw_now > 0.0 { Some(pw_now) } else { None };
+                        let nested_w = hwpunit_to_px(nested.common.width as i32, self.dpi);
+                        let outer_w_for_box = nested_w;
+                        let outer_x_for_box = self.compute_table_x_position(
+                            nested, nested_w, col_area, depth, host_alignment,
+                            host_margin_left, host_margin_right, inline_x_override, paper_w,
+                        );
 
-                    let y_end = self.layout_table(
-                        tree, col_node, nested,
-                        section_index, styles, col_area, y_start,
-                        bin_data_content, None, depth,
-                        table_meta, host_alignment, enclosing_cell_ctx, host_margin_left,
-                        host_margin_right, inline_x_override, nested_split, para_y,
-                    );
+                        let y_end = self.layout_table(
+                            tree, col_node, nested,
+                            section_index, styles, col_area, y_start,
+                            bin_data_content, None, depth,
+                            table_meta, host_alignment, enclosing_cell_ctx, host_margin_left,
+                            host_margin_right, inline_x_override, nested_split, para_y,
+                        );
 
-                    if let Some(bs_borders) = outer_border_meta {
-                        let outer_h_actual = (y_end - outer_y).max(0.0);
-                        if outer_h_actual > 0.0 {
-                            use super::border_rendering::create_border_line_nodes;
-                            // 좌
-                            col_node.children.extend(create_border_line_nodes(
-                                tree, &bs_borders[0],
-                                outer_x_for_box, outer_y, outer_x_for_box, outer_y + outer_h_actual,
-                            ));
-                            // 우
-                            col_node.children.extend(create_border_line_nodes(
-                                tree, &bs_borders[1],
-                                outer_x_for_box + outer_w_for_box, outer_y,
-                                outer_x_for_box + outer_w_for_box, outer_y + outer_h_actual,
-                            ));
-                            // 상
-                            col_node.children.extend(create_border_line_nodes(
-                                tree, &bs_borders[2],
-                                outer_x_for_box, outer_y, outer_x_for_box + outer_w_for_box, outer_y,
-                            ));
-                            // 하
-                            col_node.children.extend(create_border_line_nodes(
-                                tree, &bs_borders[3],
-                                outer_x_for_box, outer_y + outer_h_actual,
-                                outer_x_for_box + outer_w_for_box, outer_y + outer_h_actual,
-                            ));
+                        if let Some(bs_borders) = outer_border_meta {
+                            let outer_h_actual = (y_end - outer_y).max(0.0);
+                            if outer_h_actual > 0.0 {
+                                use super::border_rendering::create_border_line_nodes;
+                                // 좌
+                                col_node.children.extend(create_border_line_nodes(
+                                    tree, &bs_borders[0],
+                                    outer_x_for_box, outer_y, outer_x_for_box, outer_y + outer_h_actual,
+                                ));
+                                // 우
+                                col_node.children.extend(create_border_line_nodes(
+                                    tree, &bs_borders[1],
+                                    outer_x_for_box + outer_w_for_box, outer_y,
+                                    outer_x_for_box + outer_w_for_box, outer_y + outer_h_actual,
+                                ));
+                                // 상
+                                col_node.children.extend(create_border_line_nodes(
+                                    tree, &bs_borders[2],
+                                    outer_x_for_box, outer_y, outer_x_for_box + outer_w_for_box, outer_y,
+                                ));
+                                // 하
+                                col_node.children.extend(create_border_line_nodes(
+                                    tree, &bs_borders[3],
+                                    outer_x_for_box, outer_y + outer_h_actual,
+                                    outer_x_for_box + outer_w_for_box, outer_y + outer_h_actual,
+                                ));
+                            }
                         }
+                        return y_end;
                     }
-                    return y_end;
                 }
             }
         }
