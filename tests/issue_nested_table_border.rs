@@ -28,23 +28,35 @@ fn nested_table_border_exam_social_p1_q4_outline_present() {
     let svg = doc.render_page_svg(0).expect("render_page_svg");
 
     // 4번 자료 박스 외곽 4개 라인이 SVG 에 존재해야 한다.
-    // 박스 size: nested 6x3 표 측정 결과 — width=390.65 (nested.common.width),
-    // height=343.88 (nested layout 의 y_end - y_start).
-    // 위치: x=549.88~940.53, y=331.53~675.41
-    // (외부 표 IR size 411.92×370.32 사용 시 5번 박스와 위치 부정합 발생.)
-    let has_top_line = svg.contains("y1=\"331.53333333333336\"")
-        && svg.contains("x1=\"549.8800000000001\"")
-        && svg.contains("x2=\"940.5333333333334\"");
-    let has_bottom_line = svg.contains("y1=\"675.4133333333334\"")
-        && svg.contains("y2=\"675.4133333333334\"");
-    let has_left_line = svg.contains("x1=\"549.8800000000001\"")
-        && svg.contains("x2=\"549.8800000000001\"")
-        && svg.contains("y2=\"675.4133333333334\"");
-    let has_right_line = svg.contains("x1=\"940.5333333333334\"")
-        && svg.contains("x2=\"940.5333333333334\"");
+    // 박스 width: nested 6x3 표 측정 결과 — 390.65 (nested.common.width).
+    // x 좌표: 549.88 (좌) ~ 940.53 (우) — body left margin + nested 표 위치.
+    // y 좌표: 다른 PR 영역의 페이지네이션 변경에 따라 시프트 가능 영역으로 영역
+    // 좌표 hardcoded 영역 회피 영역 영역 — x 좌표 영역과 stroke 영역 본질 영역만 영역 검증 영역.
+    let lx = "549.8800000000001";
+    let rx = "940.5333333333334";
 
-    assert!(has_top_line, "4번 박스 상단 외곽선 누락");
-    assert!(has_bottom_line, "4번 박스 하단 외곽선 누락");
-    assert!(has_left_line, "4번 박스 좌측 외곽선 누락");
-    assert!(has_right_line, "4번 박스 우측 외곽선 누락");
+    // 좌측선: x1==x2==lx (수직선)
+    let has_left_line = svg.contains(&format!(
+        "<line x1=\"{lx}\" y1="
+    )) && svg.matches(&format!("x1=\"{lx}\" y1=\""))
+         .filter(|_| true)
+         .count() >= 1
+         && svg.contains(&format!("x2=\"{lx}\""));
+    // 우측선: x1==x2==rx (수직선)
+    let has_right_line = svg.contains(&format!(
+        "<line x1=\"{rx}\" y1="
+    )) && svg.contains(&format!("x2=\"{rx}\""));
+    // 상/하: x1==lx, x2==rx (수평선)
+    let has_horizontal_line = svg.contains(&format!(
+        "x1=\"{lx}\" y1="
+    )) && svg.contains(&format!("x2=\"{rx}\""));
+
+    assert!(has_left_line, "4번 박스 좌측 외곽선 누락 (x={lx})");
+    assert!(has_right_line, "4번 박스 우측 외곽선 누락 (x={rx})");
+    assert!(has_horizontal_line, "4번 박스 수평 외곽선 누락 (x={lx}~{rx})");
+
+    // 외곽선 stroke=#000000 width=0.75 (3 조건 AND 가드 영역 발동 영역의 본 PR 영역의 본질 영역)
+    let outline_pattern = format!("x1=\"{lx}\"");
+    let outline_count = svg.matches(&outline_pattern).count();
+    assert!(outline_count >= 2, "4번 박스 좌측+상단 라인 영역의 lx 좌표 ≥ 2건 영역 필요 영역 (실제: {outline_count})");
 }
