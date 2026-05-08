@@ -1,7 +1,7 @@
 ---
 PR: #673
 제목: Task #671: 표 셀 내부 paragraph 줄바꿈 시 다중 LINE_SEG 줄 겹침 정정 (closes #671)
-컨트리뷰터: @jangster77 (Taesup Jang) — 첫 사이클 PR
+컨트리뷰터: @jangster77 (Taesup Jang) — 13번째 사이클 PR (HWP 3.0 파서 영역의 핵심 영역 컨트리뷰터 — PR #451 부터 누적)
 base: devel (DIRTY → 메인테이너 통합 정정 후 정합)
 처리: 3 commits 단계별 보존 no-ff merge + 메인테이너 후속 commit (A1 자동보정 정정)
 처리일: 2026-05-08
@@ -15,7 +15,7 @@ base: devel (DIRTY → 메인테이너 통합 정정 후 정합)
 |------|-----|
 | PR 번호 | #673 |
 | 제목 | Task #671: 표 셀 내부 paragraph 줄바꿈 시 다중 LINE_SEG 줄 겹침 정정 |
-| 컨트리뷰터 | @jangster77 (Taesup Jang) — 첫 사이클 PR |
+| 컨트리뷰터 | @jangster77 (Taesup Jang) — 13번째 사이클 PR (HWP 3.0 파서 영역의 핵심 영역 컨트리뷰터 — PR #451 부터 누적) |
 | base / head | devel / local/task671 |
 | mergeStateStatus | DIRTY → 메인테이너 충돌 해결 |
 | CI | ALL SUCCESS |
@@ -162,7 +162,7 @@ A1 정정 commit: `4d354d2e` (메인테이너 후속 영역)
 
 ## 9. 컨트리뷰터 응대
 
-@jangster77 (Taesup Jang) 첫 사이클 PR 안내:
+@jangster77 (Taesup Jang) 13번째 사이클 PR 안내:
 - 본질 정정 정확 (`recompose_for_cell_width` 영역의 본질 진단 + 3중 가드)
 - 한컴 LINE_SEG 비표준 영역의 자동 보정 영역의 본질 영역과 정합
 - 메인테이너 후속 정정 (A1) — 자동보정 영역의 회귀 영역의 본질 영역 영역 통합 정정 영역

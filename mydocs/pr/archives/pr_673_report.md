@@ -1,7 +1,7 @@
 ---
 PR: #673
 제목: Task #671: 표 셀 내부 paragraph 줄바꿈 시 다중 LINE_SEG 줄 겹침 정정 (closes #671)
-컨트리뷰터: @jangster77 (Taesup Jang) — 첫 사이클 PR
+컨트리뷰터: @jangster77 (Taesup Jang) — 13번째 사이클 PR (HWP 3.0 파서 영역의 핵심 영역 컨트리뷰터 — PR #451 부터 누적)
 처리: MERGE (3 commits 단계별 보존 + 메인테이너 후속 commit A1 자동보정 정정)
 처리일: 2026-05-08
 ---
@@ -125,7 +125,7 @@ TOTAL: pages=170 same=170 diff=0 ✅
 
 ## 7. 컨트리뷰터 응대
 
-@jangster77 (Taesup Jang) 첫 사이클 PR 안내:
+@jangster77 (Taesup Jang) 13번째 사이클 PR 안내:
 - 본질 정정 정확 (`recompose_for_cell_width` + 3중 가드)
 - 메인테이너 후속 정정 (A1 자동보정 영역) 영역의 통합 영역 정합
 - 본 환경 결정적 검증 + 광범위 sweep 회귀 0
