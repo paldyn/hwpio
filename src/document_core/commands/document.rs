@@ -262,12 +262,18 @@ impl DocumentCore {
                 for ctrl in &mut para.controls {
                     if let Control::Table(ref mut table) = ctrl {
                         for cell in &mut table.cells {
+                            // [Task #671 후속 / Issue #671 자동보정 영역 정정]
+                            // 셀 폭 (cell.width) 에서 좌우 padding 차감하여 셀 inner 폭 계산.
+                            // col_width 사용 시 셀 너비 영역 밖으로 LINE_SEG 가 채워져
+                            // recompose_for_cell_width 가드 #1 (line_segs.is_empty()) 영역 거짓 →
+                            // PR #673 영역의 layout 단계 정정 미적용 → 자동보정 모드 영역 한 줄 겹침 회귀.
+                            let cell_w_px = crate::renderer::hwpunit_to_px(cell.width as i32, dpi);
+                            let pad_left = crate::renderer::hwpunit_to_px(cell.padding.left as i32, dpi);
+                            let pad_right = crate::renderer::hwpunit_to_px(cell.padding.right as i32, dpi);
+                            let cell_inner_width = (cell_w_px - pad_left - pad_right).max(1.0);
                             for cell_para in &mut cell.paragraphs {
                                 if Self::needs_line_seg_reflow(cell_para) {
-                                    // 셀 너비가 아직 불확정이므로 컬럼 너비를 근사값으로 사용.
-                                    // 핵심은 line_height > 0을 보장하는 것이며,
-                                    // 실제 셀 내 줄바꿈은 테이블 레이아웃이 재수행한다.
-                                    reflow_line_segs(cell_para, col_width, styles, dpi);
+                                    reflow_line_segs(cell_para, cell_inner_width, styles, dpi);
                                 }
                             }
                         }
@@ -420,9 +426,16 @@ impl DocumentCore {
                 for ctrl in &mut para.controls {
                     if let Control::Table(ref mut table) = ctrl {
                         for cell in &mut table.cells {
+                            // [Task #671 후속 / Issue #671 자동보정 영역 정정]
+                            // 셀 폭 (cell.width) 에서 좌우 padding 차감하여 셀 inner 폭 계산.
+                            // 동일 본질 정정: line 270 영역 참조.
+                            let cell_w_px = crate::renderer::hwpunit_to_px(cell.width as i32, dpi);
+                            let pad_left = crate::renderer::hwpunit_to_px(cell.padding.left as i32, dpi);
+                            let pad_right = crate::renderer::hwpunit_to_px(cell.padding.right as i32, dpi);
+                            let cell_inner_width = (cell_w_px - pad_left - pad_right).max(1.0);
                             for cell_para in &mut cell.paragraphs {
                                 if Self::needs_reflow_broadly(cell_para) {
-                                    reflow_line_segs(cell_para, col_width, &styles, dpi);
+                                    reflow_line_segs(cell_para, cell_inner_width, &styles, dpi);
                                     reflowed += 1;
                                 }
                             }
