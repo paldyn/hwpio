@@ -2289,11 +2289,13 @@ impl LayoutEngine {
         // 절대 좌표(cum 기반)와 비교하려면 content_offset 을 더해 절대 끝 좌표로 변환한다.
         // (Task #362 의 도입 시점에 단위 mismatch 가 있었음 — content_offset >= content_limit
         // 케이스에서 셀 내 문단이 즉시 break 되어 빈 페이지로 출력되던 결함 정정.)
-        // [Task #485 Bug-2] boundary epsilon — abs_limit 와 cell-clip-rect bottom 의 미세 어긋남 +
-        // descender 여유분 흡수. line_end_pos 가 abs_limit 와 ~0~2px 차이로 fit 하면
-        // 시각적으로 본문 경계 침범 → 다음 페이지로 밀어냄.
-        const SPLIT_LIMIT_EPSILON: f64 = 2.0;
-        let effective_limit = if has_limit { content_offset + content_limit - SPLIT_LIMIT_EPSILON } else { 0.0 };
+        // [Task #656] abs_limit 그대로 사용 (epsilon 제거).
+        // - Task #485 의 SPLIT_LIMIT_EPSILON = 2.0px 휴리스틱 마진은 typeset/layout 의
+        //   trail_ls 비교 모델 어긋남을 흡수하던 임시방편이었음.
+        // - 본질 정정: break 비교 시 마지막 visible 줄의 trail_ls 제외 (line_break_pos = cum + h).
+        //   typeset 의 split_end_limit = avail_content 추정과 layout 의 셀 마지막 줄 trail_ls
+        //   미렌더 모델 (is_cell_last_line) 과 일관 → epsilon 마진 없이 폰트 무관하게 정합.
+        let abs_limit = if has_limit { content_offset + content_limit } else { 0.0 };
 
         // [Task #485 Bug-1] abs_limit 도달 후 렌더 차단 플래그.
         // 이전엔 inner break 만 빠져나와 다음 단락에서 같은 cum 으로 재평가 → 셀 마지막 단락(line_spacing 제외로 line_h 작아짐)이
@@ -2356,8 +2358,8 @@ impl LayoutEngine {
                 let was_on_prev = has_offset && para_end_pos <= content_offset;
                 let bigger_than_page = has_limit && para_h > content_limit;
                 // [Task #431] abs_limit (= content_offset + content_limit) 와 비교 (단위 정합)
-                // [Task #485 Bug-2] boundary epsilon 적용 — descender 여유분
-                let exceeds_limit = has_limit && para_end_pos > effective_limit && !bigger_than_page;
+                // [Task #656] epsilon 제거 — atomic 단락은 단일 단위로 visible/skip 결정
+                let exceeds_limit = has_limit && para_end_pos > abs_limit && !bigger_than_page;
                 let visible_count = if line_count == 0 { 0 } else { line_count };
                 if was_on_prev || exceeds_limit {
                     // (n,n): 렌더 스킵 마커. line_count==0 이면 (0,0) 동일.
@@ -2400,10 +2402,15 @@ impl LayoutEngine {
                     continue;
                 }
 
-                if has_limit && line_end_pos > effective_limit {
-                    // [Task #431] abs_limit (= content_offset + content_limit) 와 비교 (단위 정합)
-                    // [Task #485 Bug-2] boundary epsilon 적용 — line_end_pos 가 abs_limit 와 ~0~2px 차이로 fit 하면
-                    // cell-clip-rect bottom 과 descender 가 충돌 → 다음 페이지로 밀어냄.
+                // [Task #656] break 비교 시 마지막 visible 줄의 trail_ls 제외.
+                // - cum 누적은 line_h (h+ls) 그대로 (이전 줄들의 ls 는 다음 줄 직전 spacing 이므로 렌더)
+                // - break 비교는 line_break_pos = cum + h (이 줄의 ls 제외) 로 비교
+                //   → 이 줄이 visible 시 마지막 줄이면 trail_ls 미렌더 영역, abs_limit 안에 들어감
+                // typeset 의 split_end_limit = avail_content 추정과 정합. 셀
+                // is_cell_last_line 분기의 trail_ls 미렌더 모델과 동일 본질.
+                // (Task #485 의 epsilon 휴리스틱 본질 정정 — 휴리스틱 마진 없이 일관된 모델, 폰트 무관.)
+                let line_break_pos = cum + h;
+                if has_limit && line_break_pos > abs_limit {
                     // [Task #485 Bug-1] outer 루프도 차단 — 후속 단락의 작은 line_h slip 방지.
                     limit_reached = true;
                     break;
