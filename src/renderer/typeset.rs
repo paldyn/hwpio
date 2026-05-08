@@ -595,7 +595,15 @@ impl TypesetEngine {
                         })
                         .sum();
                     let para_h_hu = crate::renderer::px_to_hwpunit(para_h_px, self.dpi);
-                    let vpos_end = first_seg.vertical_pos + para_h_hu;
+                    // [Task #643] vpos_end 는 마지막 줄의 bottom (vpos + lh) 기준.
+                    // para_h_px 누적은 트레일링 line_spacing 까지 포함하여 ~10-12 HU 과대.
+                    // HWP 가 페이지 끝에서 트레일링 ls 를 고려하지 않고 lh 만 fit 검사하는
+                    // 시멘틱 정합 (pi=39 page 3 fits 케이스).
+                    let vpos_end = para
+                        .line_segs
+                        .last()
+                        .map(|s| s.vertical_pos + s.line_height)
+                        .unwrap_or(first_seg.vertical_pos + para_h_hu);
                     let page_bottom_vpos = page_top_vpos + body_h_hu;
 
                     let avail = st.available_height();
@@ -905,7 +913,9 @@ impl TypesetEngine {
         // PartialTable 의 cur_h 는 row 단위로 정확히 누적되므로 안전마진이 과함.
         // (k-water-rfp p15 case: PartialTable 직후 작은 텍스트 (16px) 가 잔여 5.3px 부족으로
         // fit 실패하여 다음 페이지로 밀리는 회귀.)
-        const LAYOUT_DRIFT_SAFETY_PX: f64 = 10.0;
+        // [Task #643] VPOS_CORR 백워드 허용 (8px) 으로 layout drift 누적이 해소됨.
+        // 트레일링 ls 누적 fit 산식 정정과 함께 안전마진 10 → 4 축소.
+        const LAYOUT_DRIFT_SAFETY_PX: f64 = 4.0;
         let prev_is_partial_table = matches!(
             st.current_items.last(),
             Some(PageItem::PartialTable { .. })
