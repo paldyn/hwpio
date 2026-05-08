@@ -1542,7 +1542,9 @@ export class InputHandler {
       const zoom = this.viewportManager.getZoom();
       this.caret.hideComposition();
       this.caret.updateLive(rect, zoom);
-      this.scrollCaretIntoView(rect);
+      // [Task #661] 드래그 중 스크롤은 caret rect 가 아니라 포인터 edge 기준 경로에서만 처리한다.
+      // 메인테이너 통합 정정: devel 의 updateLive (PR #664 깜박임 타이머 유지 본질) 보존 +
+      // PR #718 의 scrollCaretIntoView 부재 본질 적용.
     }
     this.updateSelection();
 
