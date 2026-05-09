@@ -1,6 +1,6 @@
 use skia_safe::{
     font, paint, surfaces, Canvas, Color, EncodedImageFormat, Font, FontMgr, FontStyle, Paint,
-    PathBuilder, PathEffect, Rect, Typeface,
+    PathBuilder, PathEffect, RRect, Rect, Typeface,
 };
 use std::collections::HashMap;
 
@@ -849,7 +849,7 @@ fn draw_form_control(
             let mut fill = Paint::default();
             fill.set_anti_alias(true);
             fill.set_style(paint::Style::Fill);
-            fill.set_color(Color::WHITE);
+            fill.set_color(bg_color);
             canvas.draw_rect(box_rect, &fill);
 
             let mut stroke = Paint::default();
@@ -898,7 +898,7 @@ fn draw_form_control(
             let mut fill = Paint::default();
             fill.set_anti_alias(true);
             fill.set_style(paint::Style::Fill);
-            fill.set_color(Color::WHITE);
+            fill.set_color(bg_color);
             canvas.draw_circle((cx, cy), r, &fill);
 
             let mut stroke = Paint::default();
@@ -931,7 +931,7 @@ fn draw_form_control(
             let mut fill = Paint::default();
             fill.set_anti_alias(true);
             fill.set_style(paint::Style::Fill);
-            fill.set_color(Color::WHITE);
+            fill.set_color(bg_color);
             canvas.draw_rect(rect, &fill);
 
             let mut stroke = Paint::default();
@@ -967,8 +967,7 @@ fn draw_form_control(
             path.close();
             canvas.draw_path(&path, &arrow);
 
-            let display = if form.text.is_empty() { &form.caption } else { &form.text };
-            if !display.is_empty() {
+            if !form.text.is_empty() {
                 let mut font = Font::default();
                 font.set_size((h * 0.55).clamp(8.0, 13.0));
                 let mut tp = Paint::default();
@@ -976,14 +975,14 @@ fn draw_form_control(
                 tp.set_color(fg_color);
                 let tx = x + 4.0;
                 let ty = y + h / 2.0 + font.size() * 0.35;
-                canvas.draw_str(display, (tx, ty), &font, &tp);
+                canvas.draw_str(&form.text, (tx, ty), &font, &tp);
             }
         }
         FormType::Edit => {
             let mut fill = Paint::default();
             fill.set_anti_alias(true);
             fill.set_style(paint::Style::Fill);
-            fill.set_color(Color::WHITE);
+            fill.set_color(bg_color);
             canvas.draw_rect(rect, &fill);
 
             let mut stroke = Paint::default();
@@ -993,8 +992,7 @@ fn draw_form_control(
             stroke.set_color(border_color);
             canvas.draw_rect(rect, &stroke);
 
-            let display = if form.text.is_empty() { &form.caption } else { &form.text };
-            if !display.is_empty() {
+            if !form.text.is_empty() {
                 let mut font = Font::default();
                 font.set_size((h * 0.55).clamp(8.0, 13.0));
                 let mut tp = Paint::default();
@@ -1002,7 +1000,7 @@ fn draw_form_control(
                 tp.set_color(fg_color);
                 let tx = x + 4.0;
                 let ty = y + h / 2.0 + font.size() * 0.35;
-                canvas.draw_str(display, (tx, ty), &font, &tp);
+                canvas.draw_str(&form.text, (tx, ty), &font, &tp);
             }
         }
     }
