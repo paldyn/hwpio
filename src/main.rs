@@ -68,12 +68,12 @@ fn print_help() {
     println!("                              명시 --scale 이 없으면 자동 scale 계산 (페이지 → 한도 안)");
     println!("      --dpi <값>              DPI 메타데이터 (PNG pHYs chunk). 실제 픽셀 수 무관.");
     println!("                              --scale 미지정 시 scale = dpi/96 자동 계산");
-    println!("      --vlm-target <프리셋>   VLM 입력 프리셋:");
+    println!("      --vlm-target <프리셋>   VLM 입력 프리셋 (하이픈/밑줄 모두 허용):");
     println!("                              claude:     1568 px / 1.15 MP (Claude Vision)");
     println!("                              gpt4v-low:  512 px (GPT-4V low detail)");
-    println!("                              gpt4v-high: 2000 px / 1.54 MP (GPT-4V high detail)");
+    println!("                              gpt4v-high: 2000 px / 1.54 MP (GPT-4V high, 별칭: gpt4v)");
     println!("                              gemini:     3072 px (Google Gemini)");
-    println!("                              qwen-vl:    2240 px (Qwen-VL)");
+    println!("                              qwen-vl:    2240 px (Qwen-VL, 별칭: qwen)");
     println!("                              llava:      672 px (LLaVA / OSS CLIP)");
     println!();
     println!("  export-text <파일.hwp> [옵션]");
