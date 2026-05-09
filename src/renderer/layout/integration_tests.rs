@@ -1455,7 +1455,14 @@ mod tests {
         );
     }
 
-    /// Task #634: 2022년 국립국어원 페이지 3 (NewNumber 발화 후) 쪽번호 표시 (회귀 방지).
+    /// Task #634/#705: 2022년 국립국어원 페이지 3 — 셀 안 PageHide 영역의 hide_page_num 적용.
+    ///
+    /// PR #711 (Task #705) 영역 의 셀 안 PageHide 본질 정정 + 작업지시자 시각 판정 권위 영역으로
+    /// page 3 영역의 쪽번호 미표시 영역이 한컴 정답지 정합으로 확정 (2026-05-09).
+    ///
+    /// 본 가드 영역 의 의도 변경:
+    /// - PR #634 시점 (rhwp 의 한컴 부정합 행위 보존): count == 3
+    /// - PR #711 시점 (한컴 권위 정합): count == 0 — 셀[0]/p[5] 영역의 hide_page_num 적용
     #[test]
     fn test_634_gukrip_page3_shows_page_number() {
         let Some(core) = load_document("samples/2022년 국립국어원 업무계획.hwp") else {
@@ -1464,8 +1471,9 @@ mod tests {
         let svg = core.render_page_svg_native(2).unwrap_or_default();
         let count = count_text_at_y(&svg, 1069.7066666666665);
         assert_eq!(
-            count, 3,
-            "국립국어원 페이지 3 은 쪽번호 표시되어야 함."
+            count, 0,
+            "국립국어원 페이지 3 은 셀 안 PageHide 영역의 hide_page_num 영역 적용 영역으로 \
+             쪽번호 미표시 (한컴 권위 정합, PR #711 시각 판정 통과)."
         );
     }
 
