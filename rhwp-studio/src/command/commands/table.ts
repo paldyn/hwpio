@@ -53,6 +53,20 @@ function blockCalcCommand(id: string, label: string, func: string, shortcut: str
   };
 }
 
+function openFormulaDialog(services: Parameters<CommandDef['execute']>[0]): void {
+  const ih = services.getInputHandler();
+  if (!ih) return;
+  const pos = ih.getCursorPosition();
+  if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+  const dialog = new FormulaDialog(services.wasm, services.eventBus, {
+    sec: pos.sectionIndex,
+    ppi: pos.parentParaIndex,
+    ci: pos.controlIndex,
+    cellIndex: pos.cellIndex,
+  });
+  dialog.show();
+}
+
 export const tableCommands: CommandDef[] = [
   { id: 'table:create', label: '표 만들기', icon: 'icon-table',
     canExecute: (ctx) => ctx.hasDocument && !ctx.inTable,
@@ -489,37 +503,13 @@ export const tableCommands: CommandDef[] = [
     label: '계산식(F)...',
     shortcutLabel: 'Ctrl+N,F',
     canExecute: inTable,
-    execute(services) {
-      const ih = services.getInputHandler();
-      if (!ih) return;
-      const pos = ih.getCursorPosition();
-      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
-      const dialog = new FormulaDialog(services.wasm, services.eventBus, {
-        sec: pos.sectionIndex,
-        ppi: pos.parentParaIndex,
-        ci: pos.controlIndex,
-        cellIndex: pos.cellIndex,
-      });
-      dialog.show();
-    },
+    execute(services) { openFormulaDialog(services); },
   },
   {
     id: 'table:block-formula',
     label: '블록 계산식',
     canExecute: inTable,
-    execute(services) {
-      const ih = services.getInputHandler();
-      if (!ih) return;
-      const pos = ih.getCursorPosition();
-      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
-      const dialog = new FormulaDialog(services.wasm, services.eventBus, {
-        sec: pos.sectionIndex,
-        ppi: pos.parentParaIndex,
-        ci: pos.controlIndex,
-        cellIndex: pos.cellIndex,
-      });
-      dialog.show();
-    },
+    execute(services) { openFormulaDialog(services); },
   },
   blockCalcCommand('table:block-sum', '블록 합계', 'SUM', 'Ctrl+Shift+S'),
   blockCalcCommand('table:block-avg', '블록 평균', 'AVERAGE', 'Ctrl+Shift+A'),
