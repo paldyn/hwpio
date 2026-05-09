@@ -130,7 +130,7 @@ TOTAL: pages=170 same=170 diff=0
 
 ## 8. 잔존 후속
 
-- **도형 2개 미출력 결함** — 별도 이슈 등록 (본 PR 범위 외, 회귀 아님). table-vpos-01.hwpx 영역 또는 본 환경 devel 기존 결함 가능성. 시각 판정에서 발견 — nested 11×3 그리드 표시 후 cell-clip 확장으로 가시화된 별건.
+- **Issue #726 (5/9 신규 등록)** — table-vpos-01.hwpx p.5 nested 11×3 그리드 안 4대 그룹 구분 도형 2개 SVG 미출력. 본 PR 범위 외 별건 결함. 본 환경 IR 권위 (pi=34 셀[18] 다각형 1개 + 셀[6]/셀[13] ctrls=0) + SVG polygon 0건 측정 — 두 결함 후보: (a) SVG renderer 다각형 미출력, (b) HWPX 파서 다각형 누락. 시각 판정에서 nested 11×3 그리드 표시 + cell-clip 확장 후 가시화된 별건.
 - 페이지 2/3 hwp_used diff (-791.9px / -1658.3px) — 본 수정과 무관, PR 본문 명시
 - 1×1 wrapper unwrap 로직 두 곳 (table_layout.rs + height_measurer.rs) 중복 — 향후 공통 helper 추출 검토
 
