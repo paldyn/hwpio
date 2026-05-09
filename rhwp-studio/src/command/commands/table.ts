@@ -503,7 +503,24 @@ export const tableCommands: CommandDef[] = [
       dialog.show();
     },
   },
-  stub('table:block-formula', '블록 계산식'),
+  {
+    id: 'table:block-formula',
+    label: '블록 계산식',
+    canExecute: inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      const dialog = new FormulaDialog(services.wasm, services.eventBus, {
+        sec: pos.sectionIndex,
+        ppi: pos.parentParaIndex,
+        ci: pos.controlIndex,
+        cellIndex: pos.cellIndex,
+      });
+      dialog.show();
+    },
+  },
   blockCalcCommand('table:block-sum', '블록 합계', 'SUM', 'Ctrl+Shift+S'),
   blockCalcCommand('table:block-avg', '블록 평균', 'AVERAGE', 'Ctrl+Shift+A'),
   blockCalcCommand('table:block-product', '블록 곱', 'PRODUCT', 'Ctrl+Shift+P'),
