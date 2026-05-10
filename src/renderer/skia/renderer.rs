@@ -1022,6 +1022,7 @@ impl SkiaLayerRenderer {
             }
         }
     }
+    }
 }
 
 fn parse_css_color(s: &str) -> Option<Color> {
