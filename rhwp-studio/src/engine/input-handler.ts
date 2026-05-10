@@ -1828,17 +1828,17 @@ export class InputHandler {
   }
 
   /** 개체 속성을 타입에 따라 조회한다 (그림/글상자 분기) */
-  private getObjectProperties(ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' }): any {
+  private getObjectProperties(ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line' }): any {
     return _picture.getObjectProperties.call(this, ref);
   }
 
   /** 개체 속성을 타입에 따라 변경한다 (그림/글상자 분기) */
-  private setObjectProperties(ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' }, props: Record<string, unknown>): void {
+  private setObjectProperties(ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line' }, props: Record<string, unknown>): void {
     _picture.setObjectProperties.call(this, ref, props);
   }
 
   /** 개체를 타입에 따라 삭제한다 (그림/글상자 분기) */
-  private deleteObjectControl(ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' }): void {
+  private deleteObjectControl(ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line' }): void {
     _picture.deleteObjectControl.call(this, ref);
   }
 
