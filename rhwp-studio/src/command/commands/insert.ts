@@ -81,7 +81,7 @@ export const insertCommands: CommandDef[] = [
   {
     id: 'insert:equation',
     label: '수식',
-    shortcutLabel: 'Ctrl+N,M',
+    shortcutLabel: 'Ctrl+M,M',
     canExecute: (ctx) => ctx.hasDocument && !ctx.inTable,
     execute(services) {
       const ih = services.getInputHandler();
@@ -310,6 +310,8 @@ export const insertCommands: CommandDef[] = [
       if (!ref) return;
       if (ref.type === 'shape' || ref.type === 'line' || ref.type === 'group') {
         services.wasm.deleteShapeControl(ref.sec, ref.ppi, ref.ci);
+      } else if (ref.type === 'equation') {
+        services.wasm.deleteEquationControl(ref.sec, ref.ppi, ref.ci);
       } else {
         services.wasm.deletePictureControl(ref.sec, ref.ppi, ref.ci);
       }

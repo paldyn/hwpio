@@ -366,7 +366,7 @@ export const pageCommands: CommandDef[] = [
   {
     id: 'page:hide',
     label: '감추기',
-    shortcutLabel: 'Ctrl+N,S',
+    shortcutLabel: 'Ctrl+M,S',
     canExecute: (ctx) => ctx.hasDocument,
     execute(services) {
       const ih = services.getInputHandler();

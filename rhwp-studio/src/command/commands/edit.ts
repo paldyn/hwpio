@@ -166,7 +166,7 @@ export const editCommands: CommandDef[] = [
   {
     id: 'field:edit',
     label: '누름틀 고치기(E)...',
-    shortcutLabel: 'Ctrl+N,K',
+    shortcutLabel: 'Ctrl+M,K',
     canExecute: (ctx) => ctx.hasDocument && ctx.inField,
     execute(services) {
       const ih = services.getInputHandler();
