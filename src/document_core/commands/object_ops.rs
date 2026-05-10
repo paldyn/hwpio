@@ -75,6 +75,11 @@ impl DocumentCore {
         };
         // description 내 JSON 제어 문자 이스케이프
         let desc_escaped = super::super::helpers::json_escape(&c.description);
+        // [Task #741 후속] 외부 file path (HWP3 외부 그림) 영역 영역 dialog 표시 영역
+        let external_path_field = match &pic.image_attr.external_path {
+            Some(p) => format!(",\"externalPath\":\"{}\"", super::super::helpers::json_escape(p)),
+            None => String::new(),
+        };
 
         let sa = &pic.shape_attr;
 
@@ -101,7 +106,7 @@ impl DocumentCore {
                 "\"borderColor\":{},\"borderWidth\":{},",
                 // 캡션
                 "\"hasCaption\":{},\"captionDirection\":\"{}\",\"captionVertAlign\":\"{}\",",
-                "\"captionWidth\":{},\"captionSpacing\":{},\"captionMaxWidth\":{},\"captionIncludeMargin\":{}}}"
+                "\"captionWidth\":{},\"captionSpacing\":{},\"captionMaxWidth\":{},\"captionIncludeMargin\":{}{}}}"
             ),
             c.width, c.height, c.treat_as_char,
             vert_rel, vert_align,
@@ -139,6 +144,7 @@ impl DocumentCore {
             pic.caption.as_ref().map_or(0i16, |cap| cap.spacing),
             pic.caption.as_ref().map_or(0u32, |cap| cap.max_width),
             pic.caption.as_ref().map_or(false, |cap| cap.include_margin),
+            external_path_field,
         ))
     }
 
@@ -463,7 +469,7 @@ impl DocumentCore {
     ///
     /// 그림/도형 삭제 시 문단의 line_segs에 컨트롤 높이가 그대로 남아,
     /// 레이아웃이 갱신되지 않는 문제를 방지한다.
-    fn reflow_paragraph_line_segs_after_control_delete(
+    pub(crate) fn reflow_paragraph_line_segs_after_control_delete(
         para: &mut Paragraph,
         styles: &crate::renderer::style_resolver::ResolvedStyleSet,
         dpi: f64,
@@ -473,6 +479,7 @@ impl DocumentCore {
             match ctrl {
                 Control::Picture(pic) => pic.common.height as i32,
                 Control::Shape(shape) => shape.common().height as i32,
+                Control::Equation(eq) => eq.common.height as i32,
                 _ => 0,
             }
         }).max().unwrap_or(0);
@@ -1145,6 +1152,7 @@ impl DocumentCore {
                 brightness: 0,
                 contrast: 0,
                 effect: ImageEffect::RealPic,
+                external_path: None,
             },
             ..Default::default()
         };
@@ -3390,6 +3398,78 @@ impl DocumentCore {
         Ok(svg)
     }
 
+    /// 수식(Equation) 컨트롤을 문단에서 삭제한다.
+    pub fn delete_equation_control_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+    ) -> Result<String, HwpError> {
+        if section_idx >= self.document.sections.len() {
+            return Err(HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx)));
+        }
+        let section = &mut self.document.sections[section_idx];
+        if parent_para_idx >= section.paragraphs.len() {
+            return Err(HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx)));
+        }
+        let para = &mut section.paragraphs[parent_para_idx];
+        if control_idx >= para.controls.len() {
+            return Err(HwpError::RenderError(format!("컨트롤 인덱스 {} 범위 초과", control_idx)));
+        }
+        if !matches!(&para.controls[control_idx], Control::Equation(_)) {
+            return Err(HwpError::RenderError("지정된 컨트롤이 수식이 아닙니다".to_string()));
+        }
+
+        let text_chars: Vec<char> = para.text.chars().collect();
+        let mut ci = 0usize;
+        let mut prev_end: u32 = 0;
+        let mut gap_start: Option<u32> = None;
+        'outer: for i in 0..text_chars.len() {
+            let offset = if i < para.char_offsets.len() { para.char_offsets[i] } else { prev_end };
+            while prev_end + 8 <= offset && ci < para.controls.len() {
+                if ci == control_idx { gap_start = Some(prev_end); break 'outer; }
+                ci += 1;
+                prev_end += 8;
+            }
+            let char_size: u32 = if text_chars[i] == '\t' { 8 }
+                else if text_chars[i].len_utf16() == 2 { 2 }
+                else { 1 };
+            prev_end = offset + char_size;
+        }
+        if gap_start.is_none() {
+            while ci < para.controls.len() {
+                if ci == control_idx { gap_start = Some(prev_end); break; }
+                ci += 1;
+                prev_end += 8;
+            }
+        }
+
+        if let Some(gs) = gap_start {
+            let threshold = gs + 8;
+            for offset in para.char_offsets.iter_mut() {
+                if *offset >= threshold {
+                    *offset -= 8;
+                }
+            }
+        }
+
+        para.controls.remove(control_idx);
+        if control_idx < para.ctrl_data_records.len() {
+            para.ctrl_data_records.remove(control_idx);
+        }
+        if para.char_count >= 8 {
+            para.char_count -= 8;
+        }
+
+        Self::reflow_paragraph_line_segs_after_control_delete(para, &self.styles, self.dpi);
+        section.raw_stream = None;
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+
+        self.event_log.push(DocumentEvent::PictureDeleted { section: section_idx, para: parent_para_idx, ctrl: control_idx });
+        Ok("{\"ok\":true}".to_string())
+    }
+
     // ─── 각주 삽입/삭제 API ──────────────────────────────
 
     /// 각주를 삽입한다.
@@ -3566,7 +3646,7 @@ impl DocumentCore {
             }
         }
         paragraph.char_count += 8;
-        paragraph.control_mask |= 0x00000010; // 각주 비트
+        paragraph.control_mask |= 1u32 << 0x0011; // 각주/미주 비트
         paragraph.has_para_text = true;
 
         // 전체 각주 순서 번호 재계산 (1부터 순차)
@@ -3639,6 +3719,100 @@ impl DocumentCore {
 
         self.event_log.push(DocumentEvent::PictureInserted { section: section_idx, para: para_idx });
         Ok(format!("{{\"ok\":true,\"paraIdx\":{},\"controlIdx\":{},\"footnoteNumber\":{}}}", para_idx, insert_idx, footnote_number))
+    }
+
+    /// 본문 문단에 수식을 삽입한다 (표 셀/글상자 내부는 미지원).
+    /// 커서 위치에 수식 컨트롤을 추가한다.
+    /// 반환: JSON `{"ok":true, "paraIdx":N, "controlIdx":N}`
+    pub fn insert_equation_native(
+        &mut self,
+        section_idx: usize,
+        para_idx: usize,
+        char_offset: usize,
+        script: &str,
+        font_size: u32,
+        color: u32,
+    ) -> Result<String, HwpError> {
+        use crate::model::control::Equation;
+        use crate::model::shape::CommonObjAttr;
+        use crate::parser::tags::CTRL_EQUATION;
+
+        if section_idx >= self.document.sections.len() {
+            return Err(HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx)));
+        }
+        if para_idx >= self.document.sections[section_idx].paragraphs.len() {
+            return Err(HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", para_idx)));
+        }
+
+        let equation = Equation {
+            common: CommonObjAttr {
+                ctrl_id: CTRL_EQUATION,
+                treat_as_char: true,
+                width: 0,
+                height: 0,
+                ..Default::default()
+            },
+            script: script.to_string(),
+            font_size,
+            color,
+            font_name: "HYhwpEQ".to_string(),
+            ..Default::default()
+        };
+
+        self.document.sections[section_idx].raw_stream = None;
+        let paragraph = &mut self.document.sections[section_idx].paragraphs[para_idx];
+
+        let insert_idx = {
+            let positions = crate::document_core::helpers::find_control_text_positions(paragraph);
+            let mut idx = paragraph.controls.len();
+            for (i, &pos) in positions.iter().enumerate() {
+                if pos > char_offset {
+                    idx = i;
+                    break;
+                }
+            }
+            idx
+        };
+
+        paragraph.controls.insert(insert_idx, Control::Equation(Box::new(equation)));
+        paragraph.ctrl_data_records.insert(insert_idx, None);
+
+        if !paragraph.char_offsets.is_empty() {
+            let text_len = paragraph.text.chars().count();
+            let safe_offset = char_offset.min(text_len);
+            for co in paragraph.char_offsets[safe_offset..].iter_mut() {
+                *co += 8;
+            }
+        }
+        paragraph.char_count += 8;
+        paragraph.control_mask |= 1u32 << 11;
+        paragraph.has_para_text = true;
+
+        // 본문 문단 리플로우
+        {
+            use crate::renderer::hwpunit_to_px;
+            use crate::renderer::composer::reflow_line_segs;
+            let page_def = &self.document.sections[section_idx].section_def.page_def;
+            let text_width = page_def.width as i32
+                - page_def.margin_left as i32
+                - page_def.margin_right as i32;
+            let available_width = hwpunit_to_px(text_width, self.dpi);
+            let para_style = self.styles.para_styles.get(
+                self.document.sections[section_idx].paragraphs[para_idx].para_shape_id as usize
+            );
+            let margin_left = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+            let margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+            let final_width = (available_width - margin_left - margin_right).max(0.0);
+            let body_para = &mut self.document.sections[section_idx].paragraphs[para_idx];
+            reflow_line_segs(body_para, final_width, &self.styles, self.dpi);
+        }
+
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+        self.invalidate_page_tree_cache();
+
+        self.event_log.push(DocumentEvent::PictureInserted { section: section_idx, para: para_idx });
+        Ok(format!("{{\"ok\":true,\"paraIdx\":{},\"controlIdx\":{}}}", para_idx, insert_idx))
     }
 }
 

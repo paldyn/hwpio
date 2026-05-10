@@ -1,7 +1,7 @@
 /** input-handler picture/shape methods — extracted from InputHandler class */
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { MovePictureCommand, MoveShapeCommand } from './command';
+import { MovePictureCommand, MoveShapeCommand, ResizeObjectCommand } from './command';
 
 /** 클릭 좌표에서 그림, 글상자, 수식 개체를 찾는다. */
 /** 점과 선분 사이 최소 거리 (px) */
@@ -294,6 +294,8 @@ export function setObjectProperties(this: any, ref: { sec: number; ppi: number; 
 export function deleteObjectControl(this: any, ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line' }): void {
   if (ref.type === 'shape' || ref.type === 'group' || ref.type === 'line') {
     this.wasm.deleteShapeControl(ref.sec, ref.ppi, ref.ci);
+  } else if (ref.type === 'equation') {
+    this.wasm.deleteEquationControl(ref.sec, ref.ppi, ref.ci);
   } else {
     this.wasm.deletePictureControl(ref.sec, ref.ppi, ref.ci);
   }
@@ -452,6 +454,7 @@ export function finishPictureResizeDrag(this: any, e: MouseEvent): void {
     const isCorner = ['nw', 'ne', 'sw', 'se'].includes(state.dir);
 
     try {
+      const historyTargets = [];
       for (const r of state.multiRefs) {
         const relX = r.bboxX - origX;
         const relY = r.bboxY - origY;
@@ -464,9 +467,22 @@ export function finishPictureResizeDrag(this: any, e: MouseEvent): void {
         const newW = Math.max(Math.round(r.origWidth * sx), MIN_SIZE_HWP);
         const newH = Math.max(Math.round(r.origHeight * sy), MIN_SIZE_HWP);
         const updated: Record<string, unknown> = { width: newW, height: newH };
-        if (deltaH !== 0) updated['horzOffset'] = ((r.origHorzOffset + deltaH) >>> 0);
-        if (deltaV !== 0) updated['vertOffset'] = ((r.origVertOffset + deltaV) >>> 0);
+        const before: Record<string, unknown> = { width: r.origWidth, height: r.origHeight };
+        if (deltaH !== 0) {
+          updated['horzOffset'] = ((r.origHorzOffset + deltaH) >>> 0);
+          before['horzOffset'] = r.origHorzOffset;
+        }
+        if (deltaV !== 0) {
+          updated['vertOffset'] = ((r.origVertOffset + deltaV) >>> 0);
+          before['vertOffset'] = r.origVertOffset;
+        }
+        const changed = Object.keys(updated).some(key => updated[key] !== before[key]);
+        if (!changed) continue;
         setObjectProperties.call(this, r, updated);
+        historyTargets.push({ sec: r.sec, ppi: r.ppi, ci: r.ci, type: r.type, before, after: updated });
+      }
+      if (historyTargets.length > 0) {
+        this.executeOperation({ kind: 'record', command: new ResizeObjectCommand(historyTargets) });
       }
       this.eventBus.emit('document-changed');
     } catch (err) {
@@ -488,12 +504,31 @@ export function finishPictureResizeDrag(this: any, e: MouseEvent): void {
 
   try {
     const updated: Record<string, unknown> = {};
-    if (newW !== state.origWidth) updated['width'] = newW;
-    if (newH !== state.origHeight) updated['height'] = newH;
-    if (newHorzOffset !== origHorzOffset) updated['horzOffset'] = (newHorzOffset >>> 0);
-    if (newVertOffset !== origVertOffset) updated['vertOffset'] = (newVertOffset >>> 0);
+    const before: Record<string, unknown> = {};
+    if (newW !== state.origWidth) {
+      updated['width'] = newW;
+      before['width'] = state.origWidth;
+    }
+    if (newH !== state.origHeight) {
+      updated['height'] = newH;
+      before['height'] = state.origHeight;
+    }
+    const beforeHorzOffset = state.origHorzOffset ?? origHorzOffset;
+    const beforeVertOffset = state.origVertOffset ?? origVertOffset;
+    if (newHorzOffset !== origHorzOffset) {
+      updated['horzOffset'] = (newHorzOffset >>> 0);
+      before['horzOffset'] = beforeHorzOffset;
+    }
+    if (newVertOffset !== origVertOffset) {
+      updated['vertOffset'] = (newVertOffset >>> 0);
+      before['vertOffset'] = beforeVertOffset;
+    }
     if (Object.keys(updated).length > 0) {
       setObjectProperties.call(this, state.ref, updated);
+      this.executeOperation({
+        kind: 'record',
+        command: new ResizeObjectCommand([{ sec: state.ref.sec, ppi: state.ref.ppi, ci: state.ref.ci, type: state.ref.type, before, after: updated }]),
+      });
       this.eventBus.emit('document-changed');
     }
   } catch (err) {
@@ -558,10 +593,10 @@ export function updatePictureMoveDrag(this: any, e: MouseEvent): void {
   const cr = sc.getBoundingClientRect();
   const cx = e.clientX - cr.left;
   const cy = e.clientY - cr.top;
-  const pi = this.virtualScroll.getPageAtY(cy);
+  const pi = this.virtualScroll.getPageAtPoint(cx, cy);
   const po = this.virtualScroll.getPageOffset(pi);
   const pw = this.virtualScroll.getPageWidth(pi);
-  const pl = (sc.clientWidth - pw) / 2;
+  const pl = this.virtualScroll.getPageLeftResolved(pi, sc.clientWidth);
   const px = (cx - pl) / zoom;
   const py = (cy - po) / zoom;
 

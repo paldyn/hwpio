@@ -25,6 +25,7 @@ import { CellSelectionRenderer } from '@/engine/cell-selection-renderer';
 import { TableObjectRenderer } from '@/engine/table-object-renderer';
 import { TableResizeRenderer } from '@/engine/table-resize-renderer';
 import { Ruler } from '@/view/ruler';
+import { initRhwpDev } from '@/core/rhwp-dev';
 
 const wasm = new WasmBridge();
 const eventBus = new EventBus();
@@ -95,6 +96,9 @@ async function initialize(): Promise<void> {
     await loadWebFonts([]);  // CSS @font-face 등록 + CRITICAL 폰트만 로드
     msg.textContent = 'WASM 로딩 중...';
     await wasm.initialize();
+    if (import.meta.env.DEV) {
+      initRhwpDev(wasm);
+    }
     msg.textContent = 'HWP 파일을 선택해주세요.';
 
     const container = document.getElementById('scroll-container')!;
@@ -176,6 +180,17 @@ async function initialize(): Promise<void> {
       document.querySelectorAll('.tb-split.open').forEach(s => s.classList.remove('open'));
     });
 
+    // #780: 도구 모음/서식 도구 모음 영역 mousedown 시 focus 이동 방지
+    // — 편집 영역의 텍스트 선택(cursor.anchor)이 보존되어야 서식 적용이 동작함
+    for (const id of ['icon-toolbar', 'style-bar']) {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('mousedown', (e) => {
+        if ((e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'SELECT') {
+          e.preventDefault();
+        }
+      });
+    }
+
     setupFileInput();
     setupZoomControls();
     setupEventListeners();
@@ -212,6 +227,14 @@ function setupGlobalShortcuts(): void {
       if (e.key === 'n' || e.key === 'N' || e.key === 'ㅜ') {
         e.preventDefault();
         dispatcher.dispatch('file:new-doc');
+        return;
+      }
+    }
+    // Ctrl/Cmd+O → 열기 (문서 미로드 상태에서도 동작)
+    if (ctrlOrMeta && !e.altKey && !e.shiftKey) {
+      if (e.key === 'o' || e.key === 'O' || e.key === 'ㅐ') {
+        e.preventDefault();
+        dispatcher.dispatch('file:open');
         return;
       }
     }
@@ -422,7 +445,8 @@ async function initializeDocument(docInfo: DocumentInfo, displayName: string): P
     canvasView?.loadDocument();
     console.log('[initDoc] 5. toolbar setEnabled');
     toolbar?.setEnabled(true);
-    console.log('[initDoc] 6. toolbar initStyleDropdown');
+    console.log('[initDoc] 6. toolbar initFontDropdown + initStyleDropdown');
+    toolbar?.initFontDropdown(docInfo.fontsUsed);
     toolbar?.initStyleDropdown();
     console.log('[initDoc] 7. inputHandler activateWithCaretPosition');
     inputHandler?.activateWithCaretPosition();

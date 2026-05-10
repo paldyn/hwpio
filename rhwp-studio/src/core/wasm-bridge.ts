@@ -1,5 +1,5 @@
 import init, { HwpDocument, version } from '@wasm/rhwp.js';
-import type { DocumentInfo, PageInfo, PageDef, SectionDef, CursorRect, HitTestResult, LineInfo, TableDimensions, CellInfo, CellBbox, CellProperties, TableProperties, DocumentPosition, MoveVerticalResult, SelectionRect, CharProperties, ParaProperties, CellPathEntry, NavContextEntry, FieldInfoResult, BookmarkInfo } from './types';
+import type { DocumentInfo, PageInfo, PageDef, SectionDef, CursorRect, HitTestResult, BodyFootnoteMarkerHit, FootnoteAtCursorResult, DeleteFootnoteResult, LineInfo, TableDimensions, CellInfo, CellBbox, CellProperties, TableProperties, DocumentPosition, MoveVerticalResult, SelectionRect, CharProperties, ParaProperties, CellPathEntry, NavContextEntry, FieldInfoResult, BookmarkInfo } from './types';
 
 /** HWPX 비표준 감지 경고 리포트 (#177). */
 export interface ValidationReport {
@@ -87,7 +87,47 @@ export class WasmBridge {
     this.doc.setFileName(this._fileName);
     const info: DocumentInfo = JSON.parse(this.doc.getDocumentInfo());
     console.log(`[WasmBridge] 문서 로드: ${info.pageCount}페이지`);
+
+    // [Task #741 후속] 외부 file path 그림 영역 영역 dev 환경 영역 영역 fetch (basename 영역
+    // 영역 영역 same dir 영역 image 영역 영역 영역 — 본 환경 dev 영역 영역 samples/ 영역
+    // Vite asset). 영역 영역 영역 영역 영역 부재 영역 영역 placeholder 표시.
+    void this.populateExternalImagesFromDevServer();
+
     return info;
+  }
+
+  /** [Task #741 후속] 외부 file path 그림 영역 영역 dev 서버 영역 영역 fetch + inject. */
+  private async populateExternalImagesFromDevServer(): Promise<void> {
+    if (!this.doc) return;
+    try {
+      const basenamesJson = this.doc.getExternalImageBasenames();
+      const basenames: string[] = JSON.parse(basenamesJson);
+      if (basenames.length === 0) return;
+      console.log(`[WasmBridge] 외부 image 영역 영역 ${basenames.length}개 영역 영역 fetch 시도`);
+      for (const name of basenames) {
+        try {
+          const url = `/samples/${name}`;
+          const res = await fetch(url);
+          if (!res.ok) {
+            console.warn(`[WasmBridge] 외부 image 영역 영역 영역 fetch 실패: ${url} (status=${res.status})`);
+            continue;
+          }
+          const buf = await res.arrayBuffer();
+          // [Task #741 후속] OS 절대 경로 영역 영역 X-File-Path header 영역 영역 영역 → dialog
+          // 영역 영역 한컴 viewer 정합 (resolved local path 영역 영역).
+          const filePathHeader = res.headers.get('X-File-Path');
+          const displayPath = filePathHeader ? decodeURI(filePathHeader) : '';
+          const injected = this.doc.injectExternalImage(name, new Uint8Array(buf), displayPath);
+          console.log(`[WasmBridge] 외부 image inject: ${name} → ${displayPath || url} (${buf.byteLength} bytes, ${injected} 영역)`);
+        } catch (e) {
+          console.warn(`[WasmBridge] 외부 image 영역 영역 영역: ${name}`, e);
+        }
+      }
+      // 갱신된 image 영역 영역 영역 화면 영역 영역 영역 — eventBus 영역 영역 document-changed 영역 영역.
+      // (caller 영역 영역 영역 별도 영역 영역 reflow 영역 영역.)
+    } catch (e) {
+      console.warn('[WasmBridge] populateExternalImagesFromDevServer 실패', e);
+    }
   }
 
   createNewDocument(): DocumentInfo {
@@ -241,6 +281,13 @@ export class WasmBridge {
     return JSON.parse(this.doc.hitTest(pageNum, x, y));
   }
 
+  hitTestBodyFootnoteMarker(pageNum: number, x: number, y: number): BodyFootnoteMarkerHit {
+    if (!this.doc) return { hit: false };
+    const hitTest = (this.doc as any).hitTestBodyFootnoteMarker;
+    if (typeof hitTest !== 'function') return { hit: false };
+    return JSON.parse(hitTest.call(this.doc, pageNum, x, y));
+  }
+
   insertText(sec: number, para: number, charOffset: number, text: string): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return this.doc.insertText(sec, para, charOffset, text);
@@ -264,6 +311,11 @@ export class WasmBridge {
   insertColumnBreak(sec: number, para: number, charOffset: number): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return (this.doc as any).insertColumnBreak(sec, para, charOffset);
+  }
+
+  getColumnDef(sec: number): { columnCount: number; columnType: number; sameWidth: boolean; spacing: number } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse((this.doc as any).getColumnDef(sec));
   }
 
   setColumnDef(sec: number, columnCount: number, columnType: number, sameWidth: number, spacingHu: number): string {
@@ -622,6 +674,11 @@ export class WasmBridge {
     return JSON.parse(this.doc.deleteShapeControl(sec, para, ci));
   }
 
+  deleteEquationControl(sec: number, para: number, ci: number): { ok: boolean } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse(this.doc.deleteEquationControl(sec, para, ci));
+  }
+
   changeShapeZOrder(sec: number, para: number, ci: number, operation: string): { ok: boolean; zOrder?: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.changeShapeZOrder(sec, para, ci, operation));
@@ -633,6 +690,11 @@ export class WasmBridge {
     return JSON.parse((this.doc as any).groupShapes(json));
   }
 
+  insertEquation(sec: number, para: number, charOffset: number, script: string, fontSizeHwpunit: number, color: number): { ok: boolean; paraIdx: number; controlIdx: number } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse((this.doc as any).insertEquation(sec, para, charOffset, script, fontSizeHwpunit, color));
+  }
+
   insertFootnote(sec: number, para: number, charOffset: number): { ok: boolean; paraIdx: number; controlIdx: number; footnoteNumber: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse((this.doc as any).insertFootnote(sec, para, charOffset));
@@ -641,6 +703,18 @@ export class WasmBridge {
   getFootnoteInfo(sec: number, para: number, controlIdx: number): { ok: boolean; paraCount: number; totalTextLen: number; number: number; texts: string[] } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse((this.doc as any).getFootnoteInfo(sec, para, controlIdx));
+  }
+
+  getFootnoteAtCursor(sec: number, para: number, charOffset: number, direction: 'backward' | 'forward'): FootnoteAtCursorResult {
+    if (!this.doc) return { hit: false };
+    const getter = (this.doc as any).getFootnoteAtCursor;
+    if (typeof getter !== 'function') return { hit: false };
+    return JSON.parse(getter.call(this.doc, sec, para, charOffset, direction));
+  }
+
+  deleteFootnote(sec: number, para: number, controlIdx: number): DeleteFootnoteResult {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse((this.doc as any).deleteFootnote(sec, para, controlIdx));
   }
 
   insertTextInFootnote(sec: number, para: number, controlIdx: number, fnParaIdx: number, charOffset: number, text: string): { ok: boolean; charOffset: number } {

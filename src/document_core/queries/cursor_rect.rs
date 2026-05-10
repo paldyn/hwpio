@@ -5,7 +5,7 @@ use crate::model::paragraph::Paragraph;
 use crate::model::path::PathSegment;
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
-use super::super::helpers::{LineInfoResult, utf16_pos_to_char_idx, color_ref_to_css, has_table_control, find_char_at_x, navigable_text_len};
+use super::super::helpers::{LineInfoResult, utf16_pos_to_char_idx, color_ref_to_css, has_table_control, find_char_at_x, find_control_text_positions, navigable_text_len};
 use crate::renderer::render_tree::TextRunNode;
 
 /// PUA 다자리 글자겹침 TextRun의 논리적 char_count (1) 반환, 아니면 실제 글자 수 반환
@@ -32,6 +32,18 @@ impl DocumentCore {
         // 문단이 포함된 페이지 찾기
         let pages = self.find_pages_for_paragraph(section_idx, para_idx)?;
 
+        let footnote_marker_positions: Vec<(usize, usize)> = self.document.sections
+            .get(section_idx)
+            .and_then(|section| section.paragraphs.get(para_idx))
+            .map(|para| {
+                let ctrl_positions = find_control_text_positions(para);
+                para.controls.iter().enumerate()
+                    .filter(|(_, ctrl)| matches!(ctrl, Control::Footnote(_) | Control::Endnote(_)))
+                    .filter_map(|(ci, _)| ctrl_positions.get(ci).copied().map(|pos| (ci, pos)))
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // 커서 결과를 담을 구조체
         struct CursorHit {
             page_index: u32,
@@ -49,7 +61,25 @@ impl DocumentCore {
             offset: usize,
             page_index: u32,
             exact_only: bool,
+            footnote_marker_positions: &[(usize, usize)],
         ) -> Option<CursorHit> {
+            if let RenderNodeType::FootnoteMarker(ref marker) = node.node_type {
+                if marker.section_index == sec && marker.para_index == para {
+                    if let Some((_, marker_pos)) = footnote_marker_positions.iter()
+                        .find(|(ci, _)| *ci == marker.control_index)
+                    {
+                        if offset == *marker_pos || offset == *marker_pos + 1 {
+                            return Some(CursorHit {
+                                page_index,
+                                x: if offset == *marker_pos { node.bbox.x } else { node.bbox.x + node.bbox.width },
+                                y: node.bbox.y,
+                                height: node.bbox.height.max(10.0),
+                            });
+                        }
+                    }
+                }
+            }
+
             if let RenderNodeType::TextRun(ref text_run) = node.node_type {
                 // 번호/글머리표 TextRun (char_start: None)은 건너뛴다
                 if let Some(char_start) = text_run.char_start {
@@ -128,7 +158,7 @@ impl DocumentCore {
                 }
             }
             for child in &node.children {
-                if let Some(hit) = find_cursor_in_node(child, sec, para, offset, page_index, exact_only) {
+                if let Some(hit) = find_cursor_in_node(child, sec, para, offset, page_index, exact_only, footnote_marker_positions) {
                     return Some(hit);
                 }
             }
@@ -139,8 +169,8 @@ impl DocumentCore {
         // 1차: 정확한 앵커(zero-width 노드) 우선 검색, 2차: 일반 검색
         for &page_num in &pages {
             let tree = self.build_page_tree(page_num)?;
-            let exact_hit = find_cursor_in_node(&tree.root, section_idx, para_idx, char_offset, page_num, true);
-            let hit_result = exact_hit.or_else(|| find_cursor_in_node(&tree.root, section_idx, para_idx, char_offset, page_num, false));
+            let exact_hit = find_cursor_in_node(&tree.root, section_idx, para_idx, char_offset, page_num, true, &footnote_marker_positions);
+            let hit_result = exact_hit.or_else(|| find_cursor_in_node(&tree.root, section_idx, para_idx, char_offset, page_num, false, &footnote_marker_positions));
             if let Some(hit) = hit_result {
                 return Ok(format!(
                     "{{\"pageIndex\":{},\"x\":{:.1},\"y\":{:.1},\"height\":{:.1}}}",
@@ -177,7 +207,7 @@ impl DocumentCore {
                         // inline_shape_positions에서 Shape 좌표 조회
                         let first_page = pages[0];
                         let tree = self.build_page_tree(first_page)?;
-                        if let Some((sx, sy)) = tree.get_inline_shape_position(section_idx, para_idx, ci) {
+                        if let Some((sx, sy)) = tree.get_inline_shape_position(section_idx, para_idx, ci, None) {
                             let shape_h = if let Some(Control::Shape(s)) = para.controls.get(ci) {
                                 crate::renderer::hwpunit_to_px(s.common().height as i32, crate::renderer::DEFAULT_DPI)
                             } else if let Some(Control::Picture(p)) = para.controls.get(ci) {
@@ -308,6 +338,9 @@ impl DocumentCore {
             is_textbox: bool,
             // 소속 칼럼 인덱스 (다단 지원)
             column_index: Option<u16>,
+            // 소속 표 RenderNode id. 중첩 표에서 같은 cell_index가 반복되므로
+            // TextRun과 TableCell bbox를 같은 표 단위로 묶는 데 사용한다.
+            table_id: Option<u32>,
         }
 
         /// 안내문(guide text) TextRun 정보 (char_start: None)
@@ -323,16 +356,19 @@ impl DocumentCore {
 
         /// 셀 bbox 정보
         struct CellBboxInfo {
+            table_id: Option<u32>,
             section_index: usize,
             parent_para_index: usize,
             control_index: usize,
             cell_index: usize,
+            text_direction: u8,
             x: f64,
             y: f64,
             w: f64,
             h: f64,
             // Table 노드에서 meta가 채워졌는지 여부 (false이면 TextRun에서만 보완됨)
             has_meta: bool,
+            cell_context: Option<CellContext>,
         }
 
         fn collect_runs(
@@ -341,6 +377,7 @@ impl DocumentCore {
             guide_runs: &mut Vec<GuideRunInfo>,
             cell_bboxes: &mut Vec<CellBboxInfo>,
             current_column: Option<u16>,
+            current_table_id: Option<u32>,
             // Table 노드에서 전파되는 (section_index, parent_para_index, control_index)
             current_table_meta: Option<(usize, usize, usize)>,
         ) {
@@ -351,10 +388,15 @@ impl DocumentCore {
                 current_column
             };
             // Table 노드 진입 시 section_index / parent_para_index / control_index 전파
+            let current_table_id = if matches!(node.node_type, RenderNodeType::Table(_)) {
+                Some(node.id)
+            } else {
+                current_table_id
+            };
             let table_meta = if let RenderNodeType::Table(ref tn) = node.node_type {
                 match (tn.section_index, tn.para_index, tn.control_index) {
                     (Some(si), Some(pi), Some(ci)) => Some((si, pi, ci)),
-                    _ => current_table_meta,
+                    _ => None,
                 }
             } else {
                 current_table_meta
@@ -367,15 +409,18 @@ impl DocumentCore {
                         .map(|(si, ppi, ci)| (si, ppi, ci, true))
                         .unwrap_or((0, 0, 0, false));
                     cell_bboxes.push(CellBboxInfo {
+                        table_id: current_table_id,
                         section_index: si,
                         parent_para_index: ppi,
                         control_index: ci,
                         cell_index: cell_idx as usize,
+                        text_direction: tc.text_direction,
                         x: node.bbox.x,
                         y: node.bbox.y,
                         w: node.bbox.width,
                         h: node.bbox.height,
                         has_meta,
+                        cell_context: None,
                     });
                 }
             }
@@ -403,6 +448,7 @@ impl DocumentCore {
                             cell_context: text_run.cell_context.clone(),
                             is_textbox: false,
                             column_index: col,
+                            table_id: current_table_id,
                         });
                     } else {
                         // char_start: None → 안내문 TextRun
@@ -419,7 +465,7 @@ impl DocumentCore {
                 }
             }
             for child in &node.children {
-                collect_runs(child, runs, guide_runs, cell_bboxes, col, table_meta);
+                collect_runs(child, runs, guide_runs, cell_bboxes, col, current_table_id, table_meta);
             }
         }
 
@@ -465,18 +511,35 @@ impl DocumentCore {
         let mut runs: Vec<RunInfo> = Vec::new();
         let mut guide_runs: Vec<GuideRunInfo> = Vec::new();
         let mut cell_bboxes: Vec<CellBboxInfo> = Vec::new();
-        collect_runs(&tree.root, &mut runs, &mut guide_runs, &mut cell_bboxes, None, None);
+        collect_runs(&tree.root, &mut runs, &mut guide_runs, &mut cell_bboxes, None, None, None);
 
-        // cell_bboxes의 section_index/parent_para_index/control_index를 runs로 재확인하여 보완
-        // (Table 노드에서 이미 채워진 값이 있어도 runs에서 더 정확한 값을 덮어씀)
+        // cell_bboxes의 section_index/parent_para_index/control_index/cellPath를 runs로 보완.
+        // Table 노드에서 이미 채워진 최외곽 메타는 유지하되, 중첩 표의 Table 노드에는
+        // 메타가 없을 수 있으므로 같은 RenderNode 표 안의 TextRun cell_context를 템플릿으로 쓴다.
+        // cell_index는 표마다 반복되므로 같은 table_id 범위 안에서만 매칭해야 한다.
         for cb in &mut cell_bboxes {
-            if let Some(run) = runs.iter().find(|r| {
-                r.cell_context.as_ref().map(|ctx| ctx.path[0].cell_index == cb.cell_index).unwrap_or(false)
-            }) {
+            let same_cell_run = runs.iter().find(|r| {
+                r.table_id == cb.table_id
+                    && r.cell_context.as_ref().map(|ctx| {
+                        ctx.innermost().cell_index == cb.cell_index
+                    }).unwrap_or(false)
+            });
+            let template_run = same_cell_run.or_else(|| {
+                runs.iter().find(|r| r.table_id == cb.table_id && r.cell_context.is_some())
+            });
+
+            if let Some(run) = template_run {
                 if let Some(ref ctx) = run.cell_context {
+                    let mut cell_ctx = ctx.clone();
+                    if let Some(last) = cell_ctx.path.last_mut() {
+                        last.cell_index = cb.cell_index;
+                        last.cell_para_index = 0;
+                        last.text_direction = cb.text_direction;
+                    }
                     cb.section_index = run.section_index;
-                    cb.parent_para_index = ctx.parent_para_index;
-                    cb.control_index = ctx.path[0].control_index;
+                    cb.parent_para_index = cell_ctx.parent_para_index;
+                    cb.control_index = cell_ctx.path[0].control_index;
+                    cb.cell_context = Some(cell_ctx);
                     cb.has_meta = true;
                 }
             }
@@ -530,7 +593,9 @@ impl DocumentCore {
         // inline_shape_positions에 등록된 Shape의 bbox를 검사하여
         // 클릭 시 해당 Shape의 텍스트 위치(char_offset)를 반환
         for (key, &(sx, sy)) in tree.inline_shape_positions() {
-            let (si, pi, ci) = *key;
+            let (si, pi, ci, ref cell_path) = *key;
+            // 셀 내부 inline shape 은 cursor hit-test 에서 별도 처리 — 섹션 단위만 검사
+            if !cell_path.is_empty() { continue; }
             if let Some(section) = self.document.sections.get(si) {
                 if let Some(para) = section.paragraphs.get(pi) {
                     if let Some(ctrl) = para.controls.get(ci) {
@@ -605,16 +670,18 @@ impl DocumentCore {
 
         // 2. 셀 bbox 기반으로 클릭한 셀 판별
         let clicked_cell: Option<&CellBboxInfo> = cell_bboxes.iter()
-            .find(|cb| x >= cb.x && x <= cb.x + cb.w && y >= cb.y && y <= cb.y + cb.h);
+            .filter(|cb| cb.has_meta)
+            .filter(|cb| x >= cb.x && x <= cb.x + cb.w && y >= cb.y && y <= cb.y + cb.h)
+            .min_by_key(|cb| ((cb.w.max(0.0) * cb.h.max(0.0)) * 1000.0) as i64);
 
         // 셀 내부 클릭이면: 해당 셀의 run만 검색하여 가장 가까운 위치 반환
         if let Some(cb) = clicked_cell {
             let cell_runs: Vec<&RunInfo> = runs.iter()
                 .filter(|r| {
                     r.cell_context.as_ref().map(|ctx| {
-                        ctx.parent_para_index == cb.parent_para_index
-                            && ctx.path[0].control_index == cb.control_index
-                            && ctx.path[0].cell_index == cb.cell_index
+                        r.table_id == cb.table_id
+                            && ctx.parent_para_index == cb.parent_para_index
+                            && ctx.innermost().cell_index == cb.cell_index
                     }).unwrap_or(false)
                 })
                 .collect();
@@ -660,16 +727,36 @@ impl DocumentCore {
             // 양식 컨트롤(FormObject)만 있는 셀: TextRun이 없어 cell_runs가 비어있음.
             // table_meta(또는 runs)에서 채워진 meta로 커서 진입.
             if cb.has_meta {
+                let caret_h = (cb.h - 4.0).max(12.0);
+                if let Some(ref ctx) = cb.cell_context {
+                    let outer = &ctx.path[0];
+                    let inner = ctx.innermost();
+                    let path_entries: Vec<String> = ctx.path.iter().map(|e| {
+                        format!("{{\"controlIndex\":{},\"cellIndex\":{},\"cellParaIndex\":{}}}",
+                            e.control_index, e.cell_index, e.cell_para_index)
+                    }).collect();
+                    return Ok(format!(
+                        "{{\"sectionIndex\":{},\"paragraphIndex\":{},\"charOffset\":0,\
+                         \"parentParaIndex\":{},\"controlIndex\":{},\"cellIndex\":{},\"cellParaIndex\":{},\
+                         \"cellPath\":[{}],\
+                         \"cursorRect\":{{\"pageIndex\":{},\"x\":{:.1},\"y\":{:.1},\"height\":{:.1}}}}}",
+                        cb.section_index, inner.cell_para_index,
+                        ctx.parent_para_index, outer.control_index, outer.cell_index, outer.cell_para_index,
+                        path_entries.join(","),
+                        page_num,
+                        cb.x + 2.0, cb.y + 2.0, caret_h
+                    ));
+                }
                 return Ok(format!(
-                    "{{\"sectionIndex\":{},\"paragraphIndex\":{},\"charOffset\":0,\
+                    "{{\"sectionIndex\":{},\"paragraphIndex\":0,\"charOffset\":0,\
                      \"parentParaIndex\":{},\"controlIndex\":{},\"cellIndex\":{},\"cellParaIndex\":0,\
                      \"cellPath\":[{{\"controlIndex\":{},\"cellIndex\":{},\"cellParaIndex\":0}}],\
                      \"cursorRect\":{{\"pageIndex\":{},\"x\":{:.1},\"y\":{:.1},\"height\":{:.1}}}}}",
-                    cb.section_index, cb.parent_para_index,
+                    cb.section_index,
                     cb.parent_para_index, cb.control_index, cb.cell_index,
                     cb.control_index, cb.cell_index,
                     page_num,
-                    cb.x + 2.0, cb.y + 2.0, cb.h.max(4.0) - 4.0
+                    cb.x + 2.0, cb.y + 2.0, caret_h
                 ));
             }
         }
@@ -1744,40 +1831,53 @@ impl DocumentCore {
     /// 페이지 좌표가 머리말 또는 꼬리말 영역에 해당하는지 판별.
     /// 반환: JSON `{"hit":true,"isHeader":bool,"sectionIndex":N,"applyTo":N}`
     /// 또는 `{"hit":false}`
+    ///
+    /// Issue #595: Header/Footer 노드의 bbox 는 `expand_bbox_to_children` 으로
+    /// 자식 (예: 단 구분선 line) 까지 확장되어 본문 영역을 침범할 수 있음.
+    /// hit 판정은 layout 의 정확한 `header_area` / `footer_area` 로 수행하여
+    /// bbox 확장과 무관하게 본질 영역만 hit.
     pub fn hit_test_header_footer_native(
         &self,
         page_num: u32,
         x: f64,
         y: f64,
     ) -> Result<String, HwpError> {
-        use crate::renderer::render_tree::RenderNodeType;
+        let (page_content, _, _) = self.find_page(page_num)?;
+        let layout = &page_content.layout;
 
-        let tree = self.build_page_tree(page_num)?;
-
-        for child in &tree.root.children {
-            let is_header = matches!(child.node_type, RenderNodeType::Header);
-            let is_footer = matches!(child.node_type, RenderNodeType::Footer);
-            if !is_header && !is_footer { continue; }
-
-            if x >= child.bbox.x && x <= child.bbox.x + child.bbox.width
-                && y >= child.bbox.y && y <= child.bbox.y + child.bbox.height
-            {
-                // active header/footer에서 source_section_index와 apply_to 추출
-                // 머리말/꼬리말은 이전 구역에서 상속될 수 있으므로
-                // 페이지 소속 구역이 아닌 source_section_index를 반환해야 함
-                if let Some((source_sec, apply_to)) = self.get_active_hf_info(page_num, is_header) {
-                    return Ok(format!(
-                        "{{\"hit\":true,\"isHeader\":{},\"sectionIndex\":{},\"applyTo\":{}}}",
-                        is_header, source_sec, apply_to
-                    ));
-                }
-                // active 정보가 없는 경우 fallback
-                let (section_idx, _) = self.find_section_for_page(page_num);
+        // 머리말 영역 hit 판정 (layout.header_area — 정확한 머리말 범위)
+        let h = &layout.header_area;
+        if x >= h.x && x <= h.x + h.width && y >= h.y && y <= h.y + h.height {
+            // active header에서 source_section_index와 apply_to 추출
+            // 머리말은 이전 구역에서 상속될 수 있으므로 source_section_index 우선
+            if let Some((source_sec, apply_to)) = self.get_active_hf_info(page_num, true) {
                 return Ok(format!(
-                    "{{\"hit\":true,\"isHeader\":{},\"sectionIndex\":{},\"applyTo\":0}}",
-                    is_header, section_idx
+                    "{{\"hit\":true,\"isHeader\":true,\"sectionIndex\":{},\"applyTo\":{}}}",
+                    source_sec, apply_to
                 ));
             }
+            // active 정보가 없는 경우 fallback (빈 머리말 영역 — 신규 생성 대상)
+            let (section_idx, _) = self.find_section_for_page(page_num);
+            return Ok(format!(
+                "{{\"hit\":true,\"isHeader\":true,\"sectionIndex\":{},\"applyTo\":0}}",
+                section_idx
+            ));
+        }
+
+        // 꼬리말 영역 hit 판정 (layout.footer_area)
+        let f = &layout.footer_area;
+        if x >= f.x && x <= f.x + f.width && y >= f.y && y <= f.y + f.height {
+            if let Some((source_sec, apply_to)) = self.get_active_hf_info(page_num, false) {
+                return Ok(format!(
+                    "{{\"hit\":true,\"isHeader\":false,\"sectionIndex\":{},\"applyTo\":{}}}",
+                    source_sec, apply_to
+                ));
+            }
+            let (section_idx, _) = self.find_section_for_page(page_num);
+            return Ok(format!(
+                "{{\"hit\":true,\"isHeader\":false,\"sectionIndex\":{},\"applyTo\":0}}",
+                section_idx
+            ));
         }
 
         Ok("{\"hit\":false}".to_string())
@@ -2382,6 +2482,117 @@ impl DocumentCore {
         Ok(format!(
             "{{\"pageIndex\":{},\"x\":{:.1},\"y\":{:.1},\"height\":{:.1}}}",
             page_num, cursor_x, cursor_y, last.font_size
+        ))
+    }
+
+    fn find_page_body_footnote_index(
+        &self,
+        page_num: u32,
+        section_idx: usize,
+        para_idx: usize,
+        control_idx: usize,
+    ) -> Option<usize> {
+        use crate::renderer::pagination::FootnoteSource;
+
+        let (page_section_idx, local_page) = self.find_section_for_page(page_num);
+        if page_section_idx != section_idx {
+            return None;
+        }
+
+        let pr = self.pagination.get(section_idx)?;
+        let page = pr.pages.get(local_page)?;
+        page.footnotes.iter().position(|fn_ref| {
+            matches!(
+                &fn_ref.source,
+                FootnoteSource::Body { para_index, control_index }
+                    if *para_index == para_idx && *control_index == control_idx
+            )
+        })
+    }
+
+    /// 본문 인라인 각주 마커 히트테스트
+    ///
+    /// 각주 영역(zone)이 아니라 본문 TextLine 안의 FootnoteMarker bbox를 대상으로 한다.
+    /// 반환: JSON `{"hit":true,...}` 또는 `{"hit":false}`
+    pub fn hit_test_body_footnote_marker_native(
+        &self,
+        page_num: u32,
+        x: f64,
+        y: f64,
+    ) -> Result<String, HwpError> {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+
+        struct MarkerHit {
+            section_index: usize,
+            paragraph_index: usize,
+            control_index: usize,
+            footnote_number: u16,
+            bbox_x: f64,
+            bbox_y: f64,
+            bbox_w: f64,
+            bbox_h: f64,
+        }
+
+        fn find_marker(node: &RenderNode, x: f64, y: f64) -> Option<MarkerHit> {
+            if let RenderNodeType::FootnoteMarker(ref marker) = node.node_type {
+                if x >= node.bbox.x
+                    && x <= node.bbox.x + node.bbox.width
+                    && y >= node.bbox.y
+                    && y <= node.bbox.y + node.bbox.height
+                {
+                    return Some(MarkerHit {
+                        section_index: marker.section_index,
+                        paragraph_index: marker.para_index,
+                        control_index: marker.control_index,
+                        footnote_number: marker.number,
+                        bbox_x: node.bbox.x,
+                        bbox_y: node.bbox.y,
+                        bbox_w: node.bbox.width,
+                        bbox_h: node.bbox.height,
+                    });
+                }
+            }
+
+            for child in &node.children {
+                if let Some(hit) = find_marker(child, x, y) {
+                    return Some(hit);
+                }
+            }
+
+            None
+        }
+
+        let tree = self.build_page_tree_cached(page_num)?;
+        let hit = match find_marker(&tree.root, x, y) {
+            Some(hit) => hit,
+            None => return Ok("{\"hit\":false}".to_string()),
+        };
+
+        let footnote_index = match self.find_page_body_footnote_index(
+            page_num,
+            hit.section_index,
+            hit.paragraph_index,
+            hit.control_index,
+        ) {
+            Some(idx) => idx,
+            None => return Ok("{\"hit\":false}".to_string()),
+        };
+
+        Ok(format!(
+            "{{\"hit\":true,\"sectionIndex\":{},\"paragraphIndex\":{},\"controlIndex\":{},\"footnoteNumber\":{},\"footnoteIndex\":{},\"bbox\":{{\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}}},\"cursorRect\":{{\"pageIndex\":{},\"x\":{:.1},\"y\":{:.1},\"height\":{:.1}}}}}",
+            hit.section_index,
+            hit.paragraph_index,
+            hit.control_index,
+            hit.footnote_number,
+            footnote_index,
+            hit.bbox_x,
+            hit.bbox_y,
+            hit.bbox_w,
+            hit.bbox_h,
+            page_num,
+            hit.bbox_x + hit.bbox_w,
+            hit.bbox_y,
+            hit.bbox_h
         ))
     }
 

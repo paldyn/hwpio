@@ -98,10 +98,16 @@ impl Tokenizer {
     /// 붙어 쓰일 수 있고(예: `rmK`, `itl`, `boldX`), 키워드 길이만큼만 소비된 뒤
     /// 나머지는 별개 토큰이 된다. 키워드 직후가 식별자 종료(공백/기호/EOF)인
     /// 경우에는 분리하지 않는다.
+    ///
+    /// [Task #576] times/sim 연산자 키워드도 변수와 인접 시 분리.
+    /// HWP 수식 script 에서 "{a timesm}" → "a × m", "rm X simZ" → "X ~ Z"
+    /// 의미. 광범위 sweep (158 fixture / 563 unique scripts) 결과 결함 발현
+    /// 키워드는 times/sim 만 (대소문자 4 개). alpha/over/sqrt 등은 항상 공백
+    /// 구분되어 prefix-split 불필요 — 그리스 문자 prefix 충돌 회귀 위험 0.
     fn read_command(&mut self) -> Token {
         let start = self.pos;
 
-        for kw in ["bold", "it", "rm"] {
+        for kw in ["bold", "it", "rm", "times", "sim", "TIMES", "SIM"] {
             if self.matches_at(kw) {
                 let after = self.peek(kw.len());
                 if matches!(after, Some(c) if c.is_ascii_alphanumeric()) {
@@ -253,6 +259,46 @@ impl Tokenizer {
         // 따옴표 문자열
         if ch == '"' {
             return self.read_quoted();
+        }
+
+        // LaTeX \\(줄바꿈) — 두 개의 백슬래시 연속
+        if ch == '\\' && self.peek(1) == Some('\\') {
+            self.pos += 2;
+            return Token::new(TokenType::Whitespace, "#", start);
+        }
+
+        // LaTeX spacing: \, \: \; \! → thin/medium/thick/negative space
+        if ch == '\\' {
+            if let Some(nc) = self.peek(1) {
+                let space_cmd = match nc {
+                    ',' => Some("THINSPACE"),
+                    ':' => Some("MEDSPACE"),
+                    ';' => Some("THICKSPACE"),
+                    '!' => Some("NEGSPACE"),
+                    _ => None,
+                };
+                if let Some(cmd) = space_cmd {
+                    self.pos += 2;
+                    return Token::new(TokenType::Command, cmd, start);
+                }
+            }
+        }
+
+        // LaTeX escaped braces and special chars: \{ \} \| \#
+        if ch == '\\' {
+            if let Some(nc) = self.peek(1) {
+                let brace_tok = match nc {
+                    '{' => Some(Token::new(TokenType::LBrace, "{", start)),
+                    '}' => Some(Token::new(TokenType::RBrace, "}", start)),
+                    '|' => Some(Token::new(TokenType::Symbol, "|", start)),
+                    '#' => Some(Token::new(TokenType::Whitespace, "#", start)),
+                    _ => None,
+                };
+                if let Some(tok) = brace_tok {
+                    self.pos += 2;
+                    return tok;
+                }
+            }
         }
 
         // LaTeX 명령어: \frac, \sqrt, \pm 등
@@ -506,5 +552,50 @@ mod tests {
             TokenType::RBrace,
         ]);
         assert_eq!(values(&tokens), vec!["frac", "{", "1", "}", "{", "2", "}"]);
+    }
+
+    // Task #576: times/sim 연산자 키워드 prefix 분리
+
+    #[test]
+    fn test_task576_times_lowercase_prefix_split() {
+        let tokens = tokenize("a timesm");
+        assert_eq!(values(&tokens), vec!["a", "times", "m"]);
+    }
+
+    #[test]
+    fn test_task576_sim_lowercase_prefix_split() {
+        let tokens = tokenize("rm X simZ");
+        assert_eq!(values(&tokens), vec!["rm", "X", "sim", "Z"]);
+    }
+
+    #[test]
+    fn test_task576_times_uppercase_prefix_split() {
+        let tokens = tokenize("1TIMES10");
+        assert_eq!(values(&tokens), vec!["1", "TIMES", "10"]);
+    }
+
+    #[test]
+    fn test_task576_sim_uppercase_prefix_split() {
+        let tokens = tokenize("rmA SIMC");
+        assert_eq!(values(&tokens), vec!["rm", "A", "SIM", "C"]);
+    }
+
+    #[test]
+    fn test_task576_alpha_no_split() {
+        // 회귀 차단: alpha 는 그 자체 keyword 이므로 분리되면 안 됨
+        let tokens = tokenize("alpha");
+        assert_eq!(values(&tokens), vec!["alpha"]);
+        // alphabet 은 일반 식별자 — 분리되지 않아야 함
+        let tokens = tokenize("alphabet");
+        assert_eq!(values(&tokens), vec!["alphabet"]);
+    }
+
+    #[test]
+    fn test_task576_times_followed_by_space() {
+        // 키워드 다음 공백/기호 오면 분리 불필요 (기존 동작 보존)
+        let tokens = tokenize("a times b");
+        assert_eq!(values(&tokens), vec!["a", "times", "b"]);
+        let tokens = tokenize("rmA SIM C");
+        assert_eq!(values(&tokens), vec!["rm", "A", "SIM", "C"]);
     }
 }

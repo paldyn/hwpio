@@ -110,6 +110,38 @@ export interface HitTestResult {
   fieldType?: string;
 }
 
+/** WASM hitTestBodyFootnoteMarker() 반환 타입 */
+export interface BodyFootnoteMarkerHit {
+  hit: boolean;
+  sectionIndex?: number;
+  paragraphIndex?: number;
+  controlIndex?: number;
+  footnoteNumber?: number;
+  footnoteIndex?: number;
+  bbox?: { x: number; y: number; w: number; h: number };
+  cursorRect?: CursorRect;
+}
+
+/** WASM getFootnoteAtCursor() 반환 타입 */
+export interface FootnoteAtCursorResult {
+  hit: boolean;
+  sectionIndex?: number;
+  paragraphIndex?: number;
+  controlIndex?: number;
+  charOffset?: number;
+  footnoteNumber?: number;
+}
+
+/** WASM deleteFootnote() 반환 타입 */
+export interface DeleteFootnoteResult {
+  ok: boolean;
+  sectionIndex: number;
+  paragraphIndex: number;
+  controlIndex: number;
+  charOffset: number;
+  deletedNumber: number;
+}
+
 /** 커서 위치의 필드 범위 정보 */
 export interface FieldInfoResult {
   inField: boolean;
@@ -501,6 +533,8 @@ export interface PictureProperties {
   captionSpacing: number;
   captionMaxWidth: number;
   captionIncludeMargin: boolean;
+  /** [Task #741 후속] 외부 file path (HWP3 외부 그림). 부재 시 문서 포함 그림. */
+  externalPath?: string;
 }
 
 /** 양식 개체 히트 결과 */

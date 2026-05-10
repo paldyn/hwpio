@@ -70,8 +70,10 @@ export const editCommands: CommandDef[] = [
     label: '지우기',
     icon: 'icon-delete',
     shortcutLabel: 'Ctrl+E',
-    canExecute: () => false, // 미구현
-    execute() { /* TODO */ },
+    canExecute: (ctx) => ctx.hasDocument && (ctx.hasSelection || ctx.inPictureObjectSelection || ctx.inTableObjectSelection),
+    execute(services) {
+      services.getInputHandler()?.performDelete();
+    },
   },
   {
     id: 'edit:select-all',
@@ -164,7 +166,7 @@ export const editCommands: CommandDef[] = [
   {
     id: 'field:edit',
     label: '누름틀 고치기(E)...',
-    shortcutLabel: 'Ctrl+N,K',
+    shortcutLabel: 'Ctrl+M,K',
     canExecute: (ctx) => ctx.hasDocument && ctx.inField,
     execute(services) {
       const ih = services.getInputHandler();

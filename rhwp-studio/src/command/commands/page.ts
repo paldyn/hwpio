@@ -1,6 +1,7 @@
 import type { CommandDef } from '../types';
 import { PageSetupDialog } from '@/ui/page-setup-dialog';
 import { SectionSettingsDialog } from '@/ui/section-settings-dialog';
+import { ColumnSettingsDialog } from '@/ui/column-settings-dialog';
 
 function stub(id: string, label: string, icon?: string, shortcut?: string): CommandDef {
   return {
@@ -290,6 +291,28 @@ export const pageCommands: CommandDef[] = [
       (ih as any).updateCaret?.();
     },
   },
+  {
+    id: 'page:hide-current',
+    label: '현재 쪽만 감추기',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const cursor = (ih as any).cursor;
+      if (!cursor) return;
+      const pageIndex = cursor.rect?.pageIndex ?? 0;
+      try {
+        const headerResult = services.wasm.toggleHideHeaderFooter(pageIndex, true);
+        const footerResult = services.wasm.toggleHideHeaderFooter(pageIndex, false);
+        if (headerResult.hidden !== footerResult.hidden) {
+          services.wasm.toggleHideHeaderFooter(pageIndex, false);
+        }
+        services.eventBus.emit('document-changed');
+      } catch (err) {
+        console.warn('[page:hide-current] 현재 쪽 감추기 실패:', err);
+      }
+    },
+  },
   // ─── 머리말/꼬리말 필드 삽입 ────────────────────
   {
     id: 'page:insert-field-pagenum',
@@ -343,7 +366,7 @@ export const pageCommands: CommandDef[] = [
   {
     id: 'page:hide',
     label: '감추기',
-    shortcutLabel: 'Ctrl+N,S',
+    shortcutLabel: 'Ctrl+M,S',
     canExecute: (ctx) => ctx.hasDocument,
     execute(services) {
       const ih = services.getInputHandler();
@@ -438,7 +461,19 @@ export const pageCommands: CommandDef[] = [
       } catch (err) { console.warn('[page:col-right]', err); }
     },
   },
-  stub('page:col-settings', '다단 설정', undefined, 'Ctrl+Alt+Enter'),
+  {
+    id: 'page:col-settings',
+    label: '다단 설정',
+    shortcutLabel: 'Ctrl+Alt+Enter',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getPosition();
+      const dlg = new ColumnSettingsDialog(services.wasm, services.eventBus, pos.sectionIndex);
+      dlg.show();
+    },
+  },
   // ─── 구역 설정 ──────────────────────────────────
   {
     id: 'page:section-settings',

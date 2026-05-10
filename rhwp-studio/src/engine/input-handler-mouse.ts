@@ -17,10 +17,10 @@ export function onClick(this: any, e: MouseEvent): void {
     const cr = sc.getBoundingClientRect();
     const cx = e.clientX - cr.left;
     const cy = e.clientY - cr.top;
-    const pi = this.virtualScroll.getPageAtY(cy);
+    const pi = this.virtualScroll.getPageAtPoint(cx, cy);
     const po = this.virtualScroll.getPageOffset(pi);
     const pw = this.virtualScroll.getPageWidth(pi);
-    const pl = (sc.clientWidth - pw) / 2;
+    const pl = this.virtualScroll.getPageLeftResolved(pi, sc.clientWidth);
     const pageX = (cx - pl) / zoom;
     const pageY = (cy - po) / zoom;
 
@@ -123,10 +123,10 @@ export function onClick(this: any, e: MouseEvent): void {
         const cr = sc.getBoundingClientRect();
         const cx = e.clientX - cr.left;
         const cy = e.clientY - cr.top;
-        const pi = this.virtualScroll.getPageAtY(cy);
+        const pi = this.virtualScroll.getPageAtPoint(cx, cy);
         const po = this.virtualScroll.getPageOffset(pi);
         const pw = this.virtualScroll.getPageWidth(pi);
-        const pl = (sc.clientWidth - pw) / 2;
+        const pl = this.virtualScroll.getPageLeftResolved(pi, sc.clientWidth);
         const px = (cx - pl) / zoom;
         const py = (cy - po) / zoom;
         try {
@@ -170,10 +170,10 @@ export function onClick(this: any, e: MouseEvent): void {
           const cr = sc.getBoundingClientRect();
           const cx = e.clientX - cr.left;
           const cy = e.clientY - cr.top;
-          const pi = this.virtualScroll.getPageAtY(cy);
+          const pi = this.virtualScroll.getPageAtPoint(cx, cy);
           const po = this.virtualScroll.getPageOffset(pi);
           const pw = this.virtualScroll.getPageWidth(pi);
-          const pl = (sc.clientWidth - pw) / 2;
+          const pl = this.virtualScroll.getPageLeftResolved(pi, sc.clientWidth);
           const px = (cx - pl) / zoom;
           const py = (cy - po) / zoom;
           // 합산 BBOX 계산
@@ -276,7 +276,7 @@ export function onClick(this: any, e: MouseEvent): void {
                 const zoom = this.viewportManager.getZoom();
                 const po = this.virtualScroll.getPageOffset(picBbox.pageIndex);
                 const pw = this.virtualScroll.getPageWidth(picBbox.pageIndex);
-                const pl = (sc.clientWidth - pw) / 2;
+                const pl = this.virtualScroll.getPageLeftResolved(picBbox.pageIndex, sc.clientWidth);
                 this.isLineEndpointDragging = true;
                 this.lineEndpointState = {
                   ref: { sec: ref.sec, ppi: ref.ppi, ci: ref.ci, type: ref.type },
@@ -293,7 +293,7 @@ export function onClick(this: any, e: MouseEvent): void {
                 const zoom = this.viewportManager.getZoom();
                 const po = this.virtualScroll.getPageOffset(picBbox.pageIndex);
                 const pw = this.virtualScroll.getPageWidth(picBbox.pageIndex);
-                const pl = (sc.clientWidth - pw) / 2;
+                const pl = this.virtualScroll.getPageLeftResolved(picBbox.pageIndex, sc.clientWidth);
                 // 도형 중심 (scroll-content 좌표)
                 const objCx = pl + (picBbox.x + picBbox.w / 2) * zoom;
                 const objCy = po + (picBbox.y + picBbox.h / 2) * zoom;
@@ -323,6 +323,8 @@ export function onClick(this: any, e: MouseEvent): void {
                 ref: { sec: ref.sec, ppi: ref.ppi, ci: ref.ci, type: ref.type },
                 origWidth: props.width,
                 origHeight: props.height,
+                origHorzOffset: props.horzOffset,
+                origVertOffset: props.vertOffset,
                 rotationAngle: (props.rotationAngle ?? 0) as number,
                 startClientX: e.clientX,
                 startClientY: e.clientY,
@@ -349,10 +351,10 @@ export function onClick(this: any, e: MouseEvent): void {
             const cr = sc.getBoundingClientRect();
             const cx = e.clientX - cr.left;
             const cy = e.clientY - cr.top;
-            const pi = this.virtualScroll.getPageAtY(cy);
+            const pi = this.virtualScroll.getPageAtPoint(cx, cy);
             const po = this.virtualScroll.getPageOffset(pi);
             const pw = this.virtualScroll.getPageWidth(pi);
-            const pl = (sc.clientWidth - pw) / 2;
+            const pl = this.virtualScroll.getPageLeftResolved(pi, sc.clientWidth);
             const px = (cx - pl) / zoom;
             const py = (cy - po) / zoom;
             if (!e.shiftKey && pi === picBbox.pageIndex &&
@@ -423,10 +425,10 @@ export function onClick(this: any, e: MouseEvent): void {
             const contentRect = scrollContent.getBoundingClientRect();
             const contentX = e.clientX - contentRect.left;
             const contentY = e.clientY - contentRect.top;
-            const pageIdx = this.virtualScroll.getPageAtY(contentY);
+            const pageIdx = this.virtualScroll.getPageAtPoint(contentX, contentY);
             const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
             const pageDisplayWidth = this.virtualScroll.getPageWidth(pageIdx);
-            const pageLeft = (scrollContent.clientWidth - pageDisplayWidth) / 2;
+            const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
             const pageX = (contentX - pageLeft) / zoom;
             const pageY = (contentY - pageOffset) / zoom;
             const pageBboxes = bboxes.filter((b: any) => b.pageIndex === pageIdx);
@@ -465,12 +467,12 @@ export function onClick(this: any, e: MouseEvent): void {
   const contentY = e.clientY - contentRect.top;
 
   // 페이지 찾기
-  const pageIdx = this.virtualScroll.getPageAtY(contentY);
+  const pageIdx = this.virtualScroll.getPageAtPoint(contentX, contentY);
   const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
 
   // CSS 중앙 정렬 보정 (left:50%; transform:translateX(-50%))
   const pageDisplayWidth = this.virtualScroll.getPageWidth(pageIdx);
-  const pageLeft = (scrollContent.clientWidth - pageDisplayWidth) / 2;
+  const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
 
   // 페이지 내 좌표 (줌 역산)
   const pageX = (contentX - pageLeft) / zoom;
@@ -531,6 +533,34 @@ export function onClick(this: any, e: MouseEvent): void {
             this.updateCaret();
           }
         } catch { /* 무시 */ }
+        this.textarea.focus();
+        return;
+      }
+    } catch { /* 무시 */ }
+  }
+
+  // 본문 각주 마커 클릭 → 각주 편집 모드 진입
+  if (!this.cursor.isInFootnote()) {
+    try {
+      const markerHit = this.wasm.hitTestBodyFootnoteMarker(pageIdx, pageX, pageY);
+      if (
+        markerHit.hit &&
+        markerHit.sectionIndex !== undefined &&
+        markerHit.paragraphIndex !== undefined &&
+        markerHit.controlIndex !== undefined &&
+        markerHit.footnoteIndex !== undefined
+      ) {
+        this.cursor.enterFootnoteMode(
+          markerHit.sectionIndex,
+          markerHit.paragraphIndex,
+          markerHit.controlIndex,
+          markerHit.footnoteIndex,
+          pageIdx,
+        );
+        this.eventBus.emit('footnoteModeChanged', true);
+        this.cursor.setFnCursorPosition(0, 0);
+        this.active = true;
+        this.updateCaret();
         this.textarea.focus();
         return;
       }
@@ -617,7 +647,7 @@ export function onClick(this: any, e: MouseEvent): void {
       this.cursor.resetPreferredX();
       this.cursor.setAnchor();
       this.active = true;
-      this.isDragging = true;
+      this.startTextSelectionDrag(e);
       this.updateCaret();
       // [Task #394] 셀 진입 자동 ON 로직 비활성화 — input-handler.ts 의 코멘트 참고.
       // this.checkTransparentBordersTransition();
@@ -667,7 +697,7 @@ export function onClick(this: any, e: MouseEvent): void {
               this.cursor.resetPreferredX();
               this.cursor.setAnchor();
               this.active = true;
-              this.isDragging = true;
+              this.startTextSelectionDrag(e);
               this.updateCaret();
               document.addEventListener('mouseup', this.onMouseUpBound, { once: true });
               this.textarea.focus();
@@ -727,7 +757,7 @@ export function onClick(this: any, e: MouseEvent): void {
     this.cursor.resetPreferredX();
     this.cursor.setAnchor(); // 드래그 시작점(anchor) 설정
     this.active = true;
-    this.isDragging = true;
+    this.startTextSelectionDrag(e);
 
     const rect = this.cursor.getRect();
     if (rect) {
@@ -774,11 +804,11 @@ export function onDblClick(this: any, e: MouseEvent): void {
         const cr = sc.getBoundingClientRect();
         const contentX = e.clientX - cr.left;
         const contentY = e.clientY - cr.top;
-        const pageIdx = this.virtualScroll.getPageAtY(contentY);
+        const pageIdx = this.virtualScroll.getPageAtPoint(contentX, contentY);
         if (pageIdx >= 0) {
           const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
           const pageDisplayWidth = this.virtualScroll.getPageWidth(pageIdx);
-          const pageLeft = ((sc as HTMLElement).clientWidth - pageDisplayWidth) / 2;
+          const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, (sc as HTMLElement).clientWidth);
           const pageX = (contentX - pageLeft) / zoom;
           const pageY = (contentY - pageOffset) / zoom;
           const hfHit = this.wasm.hitTestHeaderFooter(pageIdx, pageX, pageY);
@@ -853,10 +883,10 @@ export function onContextMenu(this: any, e: MouseEvent): void {
   const contentRect = scrollContent.getBoundingClientRect();
   const contentX = e.clientX - contentRect.left;
   const contentY = e.clientY - contentRect.top;
-  const pageIdx = this.virtualScroll.getPageAtY(contentY);
+  const pageIdx = this.virtualScroll.getPageAtPoint(contentX, contentY);
   const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
   const pageDisplayWidth = this.virtualScroll.getPageWidth(pageIdx);
-  const pageLeft = (scrollContent.clientWidth - pageDisplayWidth) / 2;
+  const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
   const pageX = (contentX - pageLeft) / zoom;
   const pageY = (contentY - pageOffset) / zoom;
 
@@ -895,10 +925,10 @@ export function onMouseMove(this: any, e: MouseEvent): void {
       const cr = sc.getBoundingClientRect();
       const cx = e.clientX - cr.left;
       const cy = e.clientY - cr.top;
-      const pi = this.virtualScroll.getPageAtY(cy);
+      const pi = this.virtualScroll.getPageAtPoint(cx, cy);
       const po = this.virtualScroll.getPageOffset(pi);
       const pw = this.virtualScroll.getPageWidth(pi);
-      const pl = (sc.clientWidth - pw) / 2;
+      const pl = this.virtualScroll.getPageLeftResolved(pi, sc.clientWidth);
       const pageX = (cx - pl) / zoom;
       const pageY = (cy - po) / zoom;
       _connector.showConnectionPointOverlay.call(this, pi, pageX, pageY);
@@ -1067,15 +1097,15 @@ export function onMouseMove(this: any, e: MouseEvent): void {
 
   // 드래그 중: requestAnimationFrame으로 throttle하여 성능 확보
   if (this.isDragging) {
+    this.updateTextSelectionDragPointer(e);
     if (this.dragRafId) return; // 이미 예약된 프레임이 있으면 건너뜀
     this.dragRafId = requestAnimationFrame(() => {
       this.dragRafId = 0;
       if (!this.isDragging) return;
-      const hit = this.hitTestFromEvent(e);
-      if (hit && hit.paragraphIndex < 0xFFFFFF00) {
-        this.cursor.moveTo(hit);
-        this.updateCaret();
-      }
+      // [Task #661] 포인터 좌표 기반 hit-test (드래그 영역의 자동 스크롤 영역과 동기).
+      // PR #693 의 직접 hit + moveTo + updateCaretDuringDrag 영역은 PR #718 의
+      // updateTextSelectionDragFromPointer 래퍼 영역에 포함됨 (dragLastClientX/Y 사용).
+      this.updateTextSelectionDragFromPointer();
     });
     return;
   }
@@ -1110,10 +1140,10 @@ export function onMouseMove(this: any, e: MouseEvent): void {
         const picBbox = this.findPictureBbox(ref);
         if (picBbox) {
           const zoom = this.viewportManager.getZoom();
-          const pi = this.virtualScroll.getPageAtY(y);
+          const pi = this.virtualScroll.getPageAtPoint(x, y);
           const po = this.virtualScroll.getPageOffset(pi);
           const pw = this.virtualScroll.getPageWidth(pi);
-          const pl = (scrollContent.clientWidth - pw) / 2;
+          const pl = this.virtualScroll.getPageLeftResolved(pi, scrollContent.clientWidth);
           const px = (x - pl) / zoom;
           const py = (y - po) / zoom;
           if (pi === picBbox.pageIndex &&
@@ -1160,10 +1190,10 @@ export function onMouseMove(this: any, e: MouseEvent): void {
       const ref = this.cursor.getSelectedTableRef();
       if (ref) {
         const zoom = this.viewportManager.getZoom();
-        const pi = this.virtualScroll.getPageAtY(y);
+        const pi = this.virtualScroll.getPageAtPoint(x, y);
         const po = this.virtualScroll.getPageOffset(pi);
         const pw = this.virtualScroll.getPageWidth(pi);
-        const pl = (scrollContent.clientWidth - pw) / 2;
+        const pl = this.virtualScroll.getPageLeftResolved(pi, scrollContent.clientWidth);
         const px = (x - pl) / zoom;
         const py = (y - po) / zoom;
         try {
@@ -1207,10 +1237,10 @@ export function handleResizeHover(this: any, e: MouseEvent): void {
   const contentRect = scrollContent.getBoundingClientRect();
   const contentX = e.clientX - contentRect.left;
   const contentY = e.clientY - contentRect.top;
-  const pageIdx = this.virtualScroll.getPageAtY(contentY);
+  const pageIdx = this.virtualScroll.getPageAtPoint(contentX, contentY);
   const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
   const pageDisplayWidth = this.virtualScroll.getPageWidth(pageIdx);
-  const pageLeft = (scrollContent.clientWidth - pageDisplayWidth) / 2;
+  const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
   const pageX = (contentX - pageLeft) / zoom;
   const pageY = (contentY - pageOffset) / zoom;
 
@@ -1331,7 +1361,7 @@ export function onMouseUp(this: any, _e: MouseEvent): void {
   }
 
   if (!this.isDragging) return;
-  this.isDragging = false;
+  this.stopTextSelectionDrag();
   if (this.dragRafId) {
     cancelAnimationFrame(this.dragRafId);
     this.dragRafId = 0;
@@ -1351,7 +1381,13 @@ export function onMouseUp(this: any, _e: MouseEvent): void {
     }
   }
 
-  this.updateCaret();
+  // [Task #779] mouseup 영역 의 updateCaret 은 scrollCaretIntoView skip.
+  // 본질: cursor 변경 trigger 영역 (mousedown / drag selection move 등) 에서 이미 cursor 위치
+  // 갱신 + scroll 호출 영역 동반. mouseup 영역 의 updateCaret 은 selection 종료 영역 의
+  // visual cleanup 만 담당 — caret 위치 자체는 변경 부재 영역. scrollCaretIntoView 가 호출 시
+  // 사용자 의도적 scrollbar drag (drag-during-scroll 패턴) 영역 의 caret 원본 위치 자동 복귀
+  // 결함 발동.
+  this.updateCaret(true);
 }
 
 

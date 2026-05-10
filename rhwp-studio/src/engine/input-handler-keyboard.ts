@@ -52,12 +52,18 @@ const chordMapK: Record<string, string> = {
   ㅜ: 'format:para-num-shape', // 한글 IME 상태
 };
 
-/** 코드 단축키 → 커맨드 ID 매핑 (Ctrl+N,? 형태) */
-const chordMapN: Record<string, string> = {
+/** 코드 단축키 → 커맨드 ID 매핑 (Ctrl+M,? 형태)
+ *
+ * 한컴 표준 영역 영역 Ctrl+N 영역 영역 chord 시작 영역 영역 Chrome 영역 영역 reserved shortcut
+ * (새 창) 영역 영역 JS 차단 불가 영역 영역 Ctrl+M 영역 영역 변경 (PR #786 후속 정정).
+ */
+const chordMapM: Record<string, string> = {
   n: 'insert:footnote',
   ㅜ: 'insert:footnote', // 한글 IME
   s: 'page:hide',
   ㄴ: 'page:hide', // 한글 IME
+  m: 'insert:equation',
+  ㅡ: 'insert:equation', // 한글 IME
 };
 
 /** 코드 단축키 → 커맨드 ID 매핑 (Alt+V,? 형태 — 보기 메뉴) */
@@ -83,7 +89,8 @@ const chordMapG: Record<string, string> = {
 /**
  * 키보드 이벤트 처리 순서:
  *
- * 1. 코드 단축키 2번째 키 (Ctrl+K → ?)
+
+ * 1. 코드 단축키 2번째 키 (Ctrl+K → ? / Ctrl+M → ?)
  * 2. 특수 모드 탈출 (연결선/다각형/이미지/글상자 배치 모드 → Escape)
  * 3. IME 조합 중 네비게이션 키 보류
  * 4. 편집 모드별 키 처리 (머리말꼬리말 / 각주)
@@ -99,7 +106,7 @@ const chordMapG: Record<string, string> = {
 export function onKeyDown(this: any, e: KeyboardEvent): void {
   if (!this.active) return;
 
-  // ─── 1. 코드 단축키 2번째 키 처리 (Ctrl+K → ? / Ctrl+N → ?) ───
+  // ─── 1. 코드 단축키 2번째 키 처리 (Ctrl+K → ? / Ctrl+M → ?) ───
   if (this._pendingChordK) {
     this._pendingChordK = false;
     const key = e.key.toLowerCase();
@@ -110,10 +117,10 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       return;
     }
   }
-  if (this._pendingChordN) {
-    this._pendingChordN = false;
+  if (this._pendingChordM) {
+    this._pendingChordM = false;
     const key = e.key.toLowerCase();
-    const cmdId = chordMapN[key];
+    const cmdId = chordMapM[key];
     if (cmdId && this.dispatcher) {
       e.preventDefault();
       this.dispatcher.dispatch(cmdId);
@@ -192,6 +199,29 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
 
   // IME 조합 중 처리 (한국어 IME에서 e.key는 항상 'Process'이므로 e.code로 판별)
   if (e.isComposing || e.keyCode === 229) {
+    // [PR #786 후속] Ctrl+M chord 1번째/2번째 키 영역 영역 IME 합성 중 영역 영역도 활성화.
+    // 한글 IME 영역 영역 e.key === 'Process' 영역 영역, e.code (KeyM/KeyN/KeyS/KeyF/KeyK 등) 영역 영역 판별.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.code === 'KeyM') {
+      e.preventDefault();
+      this._pendingChordM = true;
+      return;
+    }
+    // chord 2번째 키 — _pendingChordM 활성화 시 e.code 영역 영역 chordMapM lookup
+    if (this._pendingChordM) {
+      this._pendingChordM = false;
+      const codeToKey: Record<string, string> = {
+        KeyM: 'm', KeyN: 'n', KeyS: 's', KeyF: 'f', KeyK: 'k',
+      };
+      const key = codeToKey[e.code];
+      if (key && this.dispatcher) {
+        const cmdId = chordMapM[key];
+        if (cmdId) {
+          e.preventDefault();
+          this.dispatcher.dispatch(cmdId);
+          return;
+        }
+      }
+    }
     const navCodes = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown',
                       'Home', 'End', 'Escape', 'Enter', 'Tab',
                       'PageUp', 'PageDown'];
@@ -413,6 +443,8 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
         this.executeOperation({ kind: 'snapshot', operationType: 'deleteObject', operation: (wasm: WasmBridge) => {
           if (ref.type === 'image') {
             wasm.deletePictureControl(ref.sec, ref.ppi, ref.ci);
+          } else if (ref.type === 'equation') {
+            wasm.deleteEquationControl(ref.sec, ref.ppi, ref.ci);
           } else {
             wasm.deleteShapeControl(ref.sec, ref.ppi, ref.ci);
           }
@@ -468,6 +500,8 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
         this.executeOperation({ kind: 'snapshot', operationType: 'cutObject', operation: (wasm: WasmBridge) => {
           if (ref.type === 'image') {
             wasm.deletePictureControl(ref.sec, ref.ppi, ref.ci);
+          } else if (ref.type === 'equation') {
+            wasm.deleteEquationControl(ref.sec, ref.ppi, ref.ci);
           } else {
             wasm.deleteShapeControl(ref.sec, ref.ppi, ref.ci);
           }
@@ -875,15 +909,17 @@ export function handleCtrlKey(this: any, e: KeyboardEvent): void {
     }
   }
 
-  // ─── 코드 단축키 1번째 키 (Ctrl+K / Ctrl+N) ───
+  // ─── 코드 단축키 1번째 키 (Ctrl+K / Ctrl+M) ───
   if ((e.key === 'k' || e.key === 'K' || e.key === 'ㅏ') && !e.shiftKey && !e.altKey) {
     e.preventDefault();
     this._pendingChordK = true;
     return;
   }
-  if ((e.key === 'n' || e.key === 'N' || e.key === 'ㅜ') && !e.shiftKey && !e.altKey) {
+  // [PR #786 후속] Ctrl+N 영역 영역 Chrome reserved shortcut (새 창) 영역 영역 JS 차단 불가
+  // 영역 영역 Ctrl+M 영역 영역 chord 1번째 키 영역 영역 변경.
+  if ((e.key === 'm' || e.key === 'M' || e.key === 'ㅡ') && !e.shiftKey && !e.altKey) {
     e.preventDefault();
-    this._pendingChordN = true;
+    this._pendingChordM = true;
     return;
   }
   if ((e.key === 'g' || e.key === 'G' || e.key === 'ㅎ') && !e.shiftKey && !e.altKey) {
@@ -892,7 +928,7 @@ export function handleCtrlKey(this: any, e: KeyboardEvent): void {
     return;
   }
 
-  // 커맨드 시스템에 없는 직접 처리 (Ctrl+Home/End 등 커서 이동)
+  // 커맨드 시스템에 없는 직접 처리 (Ctrl+Home/End, Ctrl/Cmd+Arrow 등 커서 이동)
   switch (e.key.toLowerCase()) {
     case 'home': {
       e.preventDefault();
@@ -915,6 +951,38 @@ export function handleCtrlKey(this: any, e: KeyboardEvent): void {
         this.cursor.clearSelection();
         this.cursor.moveToDocumentEnd();
       }
+      this.updateCaret();
+      break;
+    }
+    case 'arrowleft': {
+      e.preventDefault();
+      if (e.shiftKey) this.cursor.setAnchor();
+      else this.cursor.clearSelection();
+      this.cursor.moveToLineStart();
+      this.updateCaret();
+      break;
+    }
+    case 'arrowright': {
+      e.preventDefault();
+      if (e.shiftKey) this.cursor.setAnchor();
+      else this.cursor.clearSelection();
+      this.cursor.moveToLineEnd();
+      this.updateCaret();
+      break;
+    }
+    case 'arrowup': {
+      e.preventDefault();
+      if (e.shiftKey) this.cursor.setAnchor();
+      else this.cursor.clearSelection();
+      this.cursor.moveToDocumentStart();
+      this.updateCaret();
+      break;
+    }
+    case 'arrowdown': {
+      e.preventDefault();
+      if (e.shiftKey) this.cursor.setAnchor();
+      else this.cursor.clearSelection();
+      this.cursor.moveToDocumentEnd();
       this.updateCaret();
       break;
     }
@@ -1026,6 +1094,8 @@ export function onCut(this: any, e: ClipboardEvent): void {
       this.executeOperation({ kind: 'snapshot', operationType: 'cutObject', operation: (wasm: WasmBridge) => {
         if (ref.type === 'image') {
           wasm.deletePictureControl(ref.sec, ref.ppi, ref.ci);
+        } else if (ref.type === 'equation') {
+          wasm.deleteEquationControl(ref.sec, ref.ppi, ref.ci);
         } else {
           wasm.deleteShapeControl(ref.sec, ref.ppi, ref.ci);
         }
