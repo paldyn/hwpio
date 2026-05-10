@@ -402,8 +402,88 @@ export const tableCommands: CommandDef[] = [
       ih.enterTableCaptionEditing(sec, ppi, ci, charOffset);
     },
   },
-  stub('table:cell-height-equal', '셀 높이를 같게', undefined, 'H'),
-  stub('table:cell-width-equal', '셀 너비를 같게', undefined, 'W'),
+  {
+    id: 'table:cell-height-equal',
+    label: '셀 높이를 같게',
+    shortcutLabel: 'H',
+    canExecute: inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      const sec = pos.sectionIndex, ppi = pos.parentParaIndex, ci = pos.controlIndex;
+      try {
+        const dims = services.wasm.getTableDimensions(sec, ppi, ci);
+        const cells: Array<{ idx: number; row: number; height: number }> = [];
+        const rowHeights = new Map<number, { sum: number; count: number }>();
+        for (let i = 0; i < dims.cellCount; i++) {
+          const info = services.wasm.getCellInfo(sec, ppi, ci, i);
+          if (info.rowSpan > 1) continue;
+          const h = services.wasm.getCellProperties(sec, ppi, ci, i).height;
+          cells.push({ idx: i, row: info.row, height: h });
+          const entry = rowHeights.get(info.row);
+          if (entry) { entry.sum += h; entry.count++; }
+          else rowHeights.set(info.row, { sum: h, count: 1 });
+        }
+        if (rowHeights.size < 2) return;
+        let totalHeight = 0;
+        for (const v of rowHeights.values()) totalHeight += v.sum / v.count;
+        const avgHeight = Math.round(totalHeight / rowHeights.size);
+        const updates: Array<{ cellIdx: number; heightDelta: number }> = [];
+        for (const c of cells) {
+          const delta = avgHeight - c.height;
+          if (delta !== 0) updates.push({ cellIdx: c.idx, heightDelta: delta });
+        }
+        if (updates.length === 0) return;
+        services.wasm.resizeTableCells(sec, ppi, ci, updates);
+        services.eventBus.emit('document-changed');
+      } catch (err) {
+        console.warn('[table:cell-height-equal] 높이 균등화 실패:', err);
+      }
+    },
+  },
+  {
+    id: 'table:cell-width-equal',
+    label: '셀 너비를 같게',
+    shortcutLabel: 'W',
+    canExecute: inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      const sec = pos.sectionIndex, ppi = pos.parentParaIndex, ci = pos.controlIndex;
+      try {
+        const dims = services.wasm.getTableDimensions(sec, ppi, ci);
+        const cells: Array<{ idx: number; col: number; width: number }> = [];
+        const colWidths = new Map<number, { sum: number; count: number }>();
+        for (let i = 0; i < dims.cellCount; i++) {
+          const info = services.wasm.getCellInfo(sec, ppi, ci, i);
+          if (info.colSpan > 1) continue;
+          const w = services.wasm.getCellProperties(sec, ppi, ci, i).width;
+          cells.push({ idx: i, col: info.col, width: w });
+          const entry = colWidths.get(info.col);
+          if (entry) { entry.sum += w; entry.count++; }
+          else colWidths.set(info.col, { sum: w, count: 1 });
+        }
+        if (colWidths.size < 2) return;
+        let totalWidth = 0;
+        for (const v of colWidths.values()) totalWidth += v.sum / v.count;
+        const avgWidth = Math.round(totalWidth / colWidths.size);
+        const updates: Array<{ cellIdx: number; widthDelta: number }> = [];
+        for (const c of cells) {
+          const delta = avgWidth - c.width;
+          if (delta !== 0) updates.push({ cellIdx: c.idx, widthDelta: delta });
+        }
+        if (updates.length === 0) return;
+        services.wasm.resizeTableCells(sec, ppi, ci, updates);
+        services.eventBus.emit('document-changed');
+      } catch (err) {
+        console.warn('[table:cell-width-equal] 너비 균등화 실패:', err);
+      }
+    },
+  },
   {
     id: 'table:formula',
     label: '계산식(F)...',
