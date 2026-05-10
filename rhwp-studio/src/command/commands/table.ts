@@ -427,7 +427,107 @@ export const tableCommands: CommandDef[] = [
   blockCalcCommand('table:block-sum', '블록 합계', 'SUM', 'Ctrl+Shift+S'),
   blockCalcCommand('table:block-avg', '블록 평균', 'AVERAGE', 'Ctrl+Shift+A'),
   blockCalcCommand('table:block-product', '블록 곱', 'PRODUCT', 'Ctrl+Shift+P'),
-  stub('table:thousand-sep', '1,000 단위 구분 쉼표'),
-  stub('table:decimal-add', '자릿점 넣기'),
-  stub('table:decimal-remove', '자릿점 빼기'),
+  {
+    id: 'table:thousand-sep',
+    label: '1,000 단위 구분 쉼표',
+    canExecute: inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      const sec = pos.sectionIndex, ppi = pos.parentParaIndex, ci = pos.controlIndex, cei = pos.cellIndex;
+      const cpi = pos.cellParaIndex ?? 0;
+      try {
+        const len = services.wasm.getCellParagraphLength(sec, ppi, ci, cei, cpi);
+        if (len <= 0) return;
+        const text = services.wasm.getTextInCell(sec, ppi, ci, cei, cpi, 0, len);
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        const stripped = trimmed.replace(/,/g, '');
+        const numMatch = stripped.match(/^([+-]?)(\d+)(\.?\d*)$/);
+        if (!numMatch) return;
+        const [, sign, intPart, decPart] = numMatch;
+        let result: string;
+        if (trimmed.includes(',')) {
+          result = sign + intPart + decPart;
+        } else {
+          const formatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+          result = sign + formatted + decPart;
+        }
+        if (result === text) return;
+        services.wasm.deleteTextInCell(sec, ppi, ci, cei, cpi, 0, len);
+        services.wasm.insertTextInCell(sec, ppi, ci, cei, cpi, 0, result);
+        services.eventBus.emit('document-changed');
+      } catch (err) {
+        console.warn('[table:thousand-sep] 구분 쉼표 변환 실패:', err);
+      }
+    },
+  },
+  {
+    id: 'table:decimal-add',
+    label: '자릿점 넣기',
+    canExecute: inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      const sec = pos.sectionIndex, ppi = pos.parentParaIndex, ci = pos.controlIndex, cei = pos.cellIndex;
+      const cpi = pos.cellParaIndex ?? 0;
+      try {
+        const len = services.wasm.getCellParagraphLength(sec, ppi, ci, cei, cpi);
+        if (len <= 0) return;
+        const text = services.wasm.getTextInCell(sec, ppi, ci, cei, cpi, 0, len);
+        const trimmed = text.trim();
+        const raw = trimmed.replace(/,/g, '');
+        const match = raw.match(/^([+-]?)(\d+)(\.(\d*))?$/);
+        if (!match) return;
+        const [, sign, intPart, , decimals] = match;
+        const newDecimals = (decimals ?? '') + '0';
+        const hasCommas = trimmed.includes(',');
+        const fmtInt = hasCommas ? intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : intPart;
+        const result = sign + fmtInt + '.' + newDecimals;
+        if (result === text) return;
+        services.wasm.deleteTextInCell(sec, ppi, ci, cei, cpi, 0, len);
+        services.wasm.insertTextInCell(sec, ppi, ci, cei, cpi, 0, result);
+        services.eventBus.emit('document-changed');
+      } catch (err) {
+        console.warn('[table:decimal-add] 자릿점 넣기 실패:', err);
+      }
+    },
+  },
+  {
+    id: 'table:decimal-remove',
+    label: '자릿점 빼기',
+    canExecute: inTable,
+    execute(services) {
+      const ih = services.getInputHandler();
+      if (!ih) return;
+      const pos = ih.getCursorPosition();
+      if (pos.parentParaIndex === undefined || pos.controlIndex === undefined || pos.cellIndex === undefined) return;
+      const sec = pos.sectionIndex, ppi = pos.parentParaIndex, ci = pos.controlIndex, cei = pos.cellIndex;
+      const cpi = pos.cellParaIndex ?? 0;
+      try {
+        const len = services.wasm.getCellParagraphLength(sec, ppi, ci, cei, cpi);
+        if (len <= 0) return;
+        const text = services.wasm.getTextInCell(sec, ppi, ci, cei, cpi, 0, len);
+        const trimmed = text.trim();
+        const raw = trimmed.replace(/,/g, '');
+        const match = raw.match(/^([+-]?)(\d+)\.(\d+)$/);
+        if (!match) return;
+        const [, sign, intPart, decimals] = match;
+        const hasCommas = trimmed.includes(',');
+        const fmtInt = hasCommas ? intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',') : intPart;
+        const newDecimals = decimals.slice(0, -1);
+        const result = newDecimals ? sign + fmtInt + '.' + newDecimals : sign + fmtInt;
+        if (result === text) return;
+        services.wasm.deleteTextInCell(sec, ppi, ci, cei, cpi, 0, len);
+        services.wasm.insertTextInCell(sec, ppi, ci, cei, cpi, 0, result);
+        services.eventBus.emit('document-changed');
+      } catch (err) {
+        console.warn('[table:decimal-remove] 자릿점 빼기 실패:', err);
+      }
+    },
+  },
 ];
