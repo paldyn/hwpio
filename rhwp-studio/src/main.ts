@@ -206,26 +206,10 @@ function setupGlobalShortcuts(): void {
     // input/textarea 등 편집 가능 요소 내부에서는 무시
     const target = e.target as HTMLElement;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
-
-    const ctrlOrMeta = e.ctrlKey || e.metaKey;
-
-    // [Issue #767 후속] Ctrl+N (chord 1번째 키) — InputHandler 활성 시점 영역 영역도
-    // textarea 미포커스 상태 (메뉴 바 / button 클릭 후 등) 영역 영역 브라우저 새 창 차단 +
-    // InputHandler chord 활성화 위임. InputHandler textarea keydown listener 영역 영역만
-    // chord 활성화 시 textarea 미포커스 상태 영역 영역 Ctrl+N 영역 영역 크롬 새 창 발동 결함.
-    if (ctrlOrMeta && !e.altKey && !e.shiftKey) {
-      if (e.key === 'n' || e.key === 'N' || e.key === 'ㅜ') {
-        if (inputHandler?.isActive()) {
-          e.preventDefault();
-          (inputHandler as any)._pendingChordN = true;
-          inputHandler.focus();
-          return;
-        }
-      }
-    }
-
     // InputHandler가 활성 상태이면 자체 처리에 맡김
     if (inputHandler?.isActive()) return;
+
+    const ctrlOrMeta = e.ctrlKey || e.metaKey;
 
     // Alt+N / Alt+ㅜ → 새 문서 (문서 미로드 상태에서도 동작)
     if (e.altKey && !ctrlOrMeta && !e.shiftKey) {
