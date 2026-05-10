@@ -81,7 +81,7 @@ export const insertCommands: CommandDef[] = [
   {
     id: 'insert:equation',
     label: '수식',
-    shortcutLabel: 'Ctrl+N,M',
+    shortcutLabel: 'Ctrl+M,M',
     canExecute: (ctx) => ctx.hasDocument && !ctx.inTable,
     execute(services) {
       const ih = services.getInputHandler();

@@ -52,8 +52,12 @@ const chordMapK: Record<string, string> = {
   ㅜ: 'format:para-num-shape', // 한글 IME 상태
 };
 
-/** 코드 단축키 → 커맨드 ID 매핑 (Ctrl+N,? 형태) */
-const chordMapN: Record<string, string> = {
+/** 코드 단축키 → 커맨드 ID 매핑 (Ctrl+M,? 형태)
+ *
+ * 한컴 표준 영역 영역 Ctrl+N 영역 영역 chord 시작 영역 영역 Chrome 영역 영역 reserved shortcut
+ * (새 창) 영역 영역 JS 차단 불가 영역 영역 Ctrl+M 영역 영역 변경 (PR #786 후속 정정).
+ */
+const chordMapM: Record<string, string> = {
   n: 'insert:footnote',
   ㅜ: 'insert:footnote', // 한글 IME
   s: 'page:hide',
@@ -85,7 +89,8 @@ const chordMapG: Record<string, string> = {
 /**
  * 키보드 이벤트 처리 순서:
  *
- * 1. 코드 단축키 2번째 키 (Ctrl+K → ?)
+
+ * 1. 코드 단축키 2번째 키 (Ctrl+K → ? / Ctrl+M → ?)
  * 2. 특수 모드 탈출 (연결선/다각형/이미지/글상자 배치 모드 → Escape)
  * 3. IME 조합 중 네비게이션 키 보류
  * 4. 편집 모드별 키 처리 (머리말꼬리말 / 각주)
@@ -101,7 +106,7 @@ const chordMapG: Record<string, string> = {
 export function onKeyDown(this: any, e: KeyboardEvent): void {
   if (!this.active) return;
 
-  // ─── 1. 코드 단축키 2번째 키 처리 (Ctrl+K → ? / Ctrl+N → ?) ───
+  // ─── 1. 코드 단축키 2번째 키 처리 (Ctrl+K → ? / Ctrl+M → ?) ───
   if (this._pendingChordK) {
     this._pendingChordK = false;
     const key = e.key.toLowerCase();
@@ -112,10 +117,10 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
       return;
     }
   }
-  if (this._pendingChordN) {
-    this._pendingChordN = false;
+  if (this._pendingChordM) {
+    this._pendingChordM = false;
     const key = e.key.toLowerCase();
-    const cmdId = chordMapN[key];
+    const cmdId = chordMapM[key];
     if (cmdId && this.dispatcher) {
       e.preventDefault();
       this.dispatcher.dispatch(cmdId);
@@ -881,15 +886,17 @@ export function handleCtrlKey(this: any, e: KeyboardEvent): void {
     }
   }
 
-  // ─── 코드 단축키 1번째 키 (Ctrl+K / Ctrl+N) ───
+  // ─── 코드 단축키 1번째 키 (Ctrl+K / Ctrl+M) ───
   if ((e.key === 'k' || e.key === 'K' || e.key === 'ㅏ') && !e.shiftKey && !e.altKey) {
     e.preventDefault();
     this._pendingChordK = true;
     return;
   }
-  if ((e.key === 'n' || e.key === 'N' || e.key === 'ㅜ') && !e.shiftKey && !e.altKey) {
+  // [PR #786 후속] Ctrl+N 영역 영역 Chrome reserved shortcut (새 창) 영역 영역 JS 차단 불가
+  // 영역 영역 Ctrl+M 영역 영역 chord 1번째 키 영역 영역 변경.
+  if ((e.key === 'm' || e.key === 'M' || e.key === 'ㅡ') && !e.shiftKey && !e.altKey) {
     e.preventDefault();
-    this._pendingChordN = true;
+    this._pendingChordM = true;
     return;
   }
   if ((e.key === 'g' || e.key === 'G' || e.key === 'ㅎ') && !e.shiftKey && !e.altKey) {

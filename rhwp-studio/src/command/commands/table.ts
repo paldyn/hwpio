@@ -501,7 +501,7 @@ export const tableCommands: CommandDef[] = [
   {
     id: 'table:formula',
     label: '계산식(F)...',
-    shortcutLabel: 'Ctrl+N,F',
+    shortcutLabel: 'Ctrl+M,F',
     canExecute: inTable,
     execute(services) { openFormulaDialog(services); },
   },
