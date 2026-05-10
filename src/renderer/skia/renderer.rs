@@ -1,5 +1,5 @@
 use skia_safe::{
-    font, paint, surfaces, Canvas, Color, EncodedImageFormat, Font, FontMgr, FontStyle, Paint,
+    paint, surfaces, Canvas, Color, EncodedImageFormat, Font, FontMgr, FontStyle, Paint,
     PathBuilder, PathEffect, RRect, Rect, Typeface,
 };
 use std::collections::HashMap;
@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use crate::error::HwpError;
 use crate::model::image::ImageEffect;
 use crate::model::ColorRef;
-use crate::paint::{LayerNode, LayerNodeKind, PageLayerTree, PaintOp};
+use crate::paint::{LayerNode, LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp};
 use crate::renderer::layer_renderer::{
     LayerRasterRenderer, LayerRenderResult, RasterOutputFormat, RasterRenderOptions,
     RasterRenderOutput,
@@ -16,6 +16,7 @@ use crate::renderer::{svg_arc_to_beziers, LineStyle, PathCommand, ShapeStyle, St
 
 use super::equation_conv::render_equation;
 use super::image_conv::{draw_image_bytes, draw_svg_fragment, ImageSampling};
+use super::text_replay::SkiaTextReplay;
 
 pub struct SkiaLayerRenderer {
     font_mgr: FontMgr,
@@ -47,7 +48,10 @@ impl SkiaLayerRenderer {
             if let Ok(entries) = std::fs::read_dir(dir) {
                 for entry in entries.flatten() {
                     let path = entry.path();
-                    let ext = path.extension().and_then(|s| s.to_str()).map(|s| s.to_lowercase());
+                    let ext = path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_lowercase());
                     if !matches!(ext.as_deref(), Some("ttf") | Some("otf") | Some("ttc")) {
                         continue;
                     }
@@ -136,7 +140,7 @@ impl SkiaLayerRenderer {
         if options.scale != 1.0 {
             canvas.scale((options.scale as f32, options.scale as f32));
         }
-        self.render_node(canvas, &tree.root, tree.output_options.clip_enabled);
+        self.render_node(canvas, &tree.root, &tree.output_options);
 
         let image = surface.image_snapshot();
         let data = image
@@ -152,7 +156,8 @@ impl SkiaLayerRenderer {
         })
     }
 
-    fn render_node(&self, canvas: &Canvas, node: &LayerNode, clip_enabled: bool) {
+    fn render_node(&self, canvas: &Canvas, node: &LayerNode, output_options: &LayerOutputOptions) {
+        let clip_enabled = output_options.clip_enabled;
         let apply_dash = |paint: &mut Paint, dash: StrokeDash| {
             let base_width = paint.stroke_width().max(1.0);
             let intervals: Option<[f32; 6]> = match dash {
@@ -263,162 +268,11 @@ impl SkiaLayerRenderer {
                 ImageSampling::linear(),
             );
         };
-        let draw_text = |text: &str,
-                         bbox: crate::renderer::render_tree::BoundingBox,
-                         style: &crate::renderer::TextStyle,
-                         baseline: f64,
-                         rotation: f64| {
-            if text.is_empty() {
-                return;
-            }
-            let font_size = if style.font_size > 0.0 {
-                style.font_size as f32
-            } else {
-                12.0
-            };
-            let font_style = match (style.bold, style.italic) {
-                (true, true) => FontStyle::bold_italic(),
-                (true, false) => FontStyle::bold(),
-                (false, true) => FontStyle::italic(),
-                (false, false) => FontStyle::normal(),
-            };
-            let mut families = Vec::new();
-            if !style.font_family.trim().is_empty() {
-                families.push(style.font_family.as_str());
-            }
-            // 한글 fallback (CJK glyph 미보유 폰트로 fallback 시 사각형 방지).
-            // SVG 경로의 CSS font chain 과 동일한 한글 폴백 폰트 순서.
-            families.extend([
-                "Noto Sans KR",
-                "Noto Serif KR",
-                "Noto Sans CJK KR",
-                "Noto Serif CJK KR",
-                "Nanum Gothic",
-                "Nanum Myeongjo",
-                "Malgun Gothic",
-                "맑은 고딕",
-                "Batang",
-                "바탕",
-                "Apple SD Gothic Neo",
-                "AppleMyungjo",
-                "DejaVu Sans",
-                "Arial",
-                "sans-serif",
-            ]);
-            // 1) 사용자 지정 폰트 (--font-path) 우선 검색
-            // 2) 시스템 FontMgr 검색 (한글 fallback chain 포함)
-            // 3) 마지막 fallback (legacy_make_typeface)
-            //
-            // 모든 후보를 chain 으로 보존 — char 단위 fallback 에 사용.
-            let typeface_chain: Vec<Typeface> = {
-                let mut chain: Vec<Typeface> = Vec::new();
-                let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-                let mut push = |chain: &mut Vec<Typeface>,
-                                seen: &mut std::collections::HashSet<String>,
-                                tf: Typeface| {
-                    let key = tf.family_name();
-                    if seen.insert(key) {
-                        chain.push(tf);
-                    }
-                };
-                for family in &families {
-                    if let Some(tf) = self.custom_typefaces.get(*family).cloned() {
-                        push(&mut chain, &mut seen, tf);
-                    }
-                }
-                for family in &families {
-                    if let Some(tf) = self.font_mgr.match_family_style(family, font_style) {
-                        push(&mut chain, &mut seen, tf);
-                    }
-                }
-                if let Some(tf) = self.font_mgr.legacy_make_typeface(None::<&str>, font_style) {
-                    push(&mut chain, &mut seen, tf);
-                }
-                chain
-            };
-            let primary_typeface = typeface_chain.first().cloned();
-            let mut primary_font = if let Some(ref tf) = primary_typeface {
-                Font::new(tf.clone(), font_size)
-            } else {
-                let mut f = Font::default();
-                f.set_size(font_size);
-                f
-            };
-            primary_font.set_edging(font::Edging::AntiAlias);
-            let mut paint = Paint::default();
-            paint.set_anti_alias(true);
-            paint.set_color(colorref_to_skia(style.color, 1.0));
-            let y = if baseline > 0.0 {
-                bbox.y + baseline
-            } else {
-                bbox.y + bbox.height
-            };
-            if rotation != 0.0 {
-                canvas.save();
-                canvas.rotate(
-                    rotation as f32,
-                    Some(
-                        (
-                            (bbox.x + bbox.width / 2.0) as f32,
-                            (bbox.y + bbox.height / 2.0) as f32,
-                        )
-                            .into(),
-                    ),
-                );
-            }
-            // char 단위 fallback 렌더링.
-            // primary typeface 에 글리프 미보유 (unichar_to_glyph==0) 시 chain 의 다른 typeface 시도.
-            // 모두 미보유 시 visible 글리프 렌더 skip (whitespace 류 NBSP/U+2007/U+200B 등 두부 방지).
-            // primary 가 글리프 보유 시 그대로 그림 (한컴 정합).
-            let mut cursor_x = bbox.x as f32;
-            for ch in text.chars() {
-                let codepoint = ch as i32;
-                // primary typeface 의 글리프 보유 여부
-                let primary_has = primary_typeface
-                    .as_ref()
-                    .map(|tf| tf.unichar_to_glyph(codepoint) != 0)
-                    .unwrap_or(false);
-                let chosen_font = if primary_has {
-                    &primary_font
-                } else {
-                    // chain 에서 글리프 보유한 typeface 찾기
-                    let fallback = typeface_chain
-                        .iter()
-                        .skip(1)
-                        .find(|tf| tf.unichar_to_glyph(codepoint) != 0)
-                        .cloned();
-                    if let Some(tf) = fallback {
-                        let mut f = Font::new(tf, font_size);
-                        f.set_edging(font::Edging::AntiAlias);
-                        // char 단위 임시 폰트 — 그리고 cursor 진행
-                        let s = ch.to_string();
-                        canvas.draw_str(&s, (cursor_x, y as f32), &f, &paint);
-                        let advance = f.measure_str(&s, Some(&paint)).0;
-                        cursor_x += advance;
-                        continue;
-                    } else {
-                        // 모두 미보유 — whitespace 류 (NBSP/U+2007/U+200B 등) 또는 unknown.
-                        // visible 글리프 그리지 않고 advance 만 진행.
-                        // 공백류 advance 추정: 일반 공백의 너비로 대체 (또는 font_size * 0.3).
-                        let space_advance = primary_font
-                            .measure_str(" ", Some(&paint))
-                            .0;
-                        cursor_x += if space_advance > 0.0 {
-                            space_advance
-                        } else {
-                            font_size * 0.3
-                        };
-                        continue;
-                    }
-                };
-                let s = ch.to_string();
-                canvas.draw_str(&s, (cursor_x, y as f32), chosen_font, &paint);
-                let advance = chosen_font.measure_str(&s, Some(&paint)).0;
-                cursor_x += advance;
-            }
-            if rotation != 0.0 {
-                canvas.restore();
-            }
+        let text_replay = SkiaTextReplay {
+            canvas,
+            font_mgr: &self.font_mgr,
+            custom_typefaces: &self.custom_typefaces,
+            output_options,
         };
         let open_shape_transform =
             |transform: crate::renderer::render_tree::ShapeTransform,
@@ -442,12 +296,12 @@ impl SkiaLayerRenderer {
         match &node.kind {
             LayerNodeKind::Group { children, .. } => {
                 for child in children {
-                    self.render_node(canvas, child, clip_enabled);
+                    self.render_node(canvas, child, output_options);
                 }
             }
             LayerNodeKind::ClipRect { clip, child, .. } => {
                 if !clip_enabled {
-                    self.render_node(canvas, child, clip_enabled);
+                    self.render_node(canvas, child, output_options);
                     return;
                 }
                 canvas.save();
@@ -461,7 +315,7 @@ impl SkiaLayerRenderer {
                     None,
                     Some(true),
                 );
-                self.render_node(canvas, child, clip_enabled);
+                self.render_node(canvas, child, output_options);
                 canvas.restore();
             }
             LayerNodeKind::Leaf { ops } => {
@@ -510,7 +364,22 @@ impl SkiaLayerRenderer {
                             }
                         }
                         PaintOp::TextRun { bbox, run } => {
-                            draw_text(&run.text, *bbox, &run.style, run.baseline, run.rotation);
+                            let is_marker = !matches!(
+                                run.field_marker,
+                                crate::renderer::render_tree::FieldMarkerType::None
+                            );
+                            text_replay.draw_text(
+                                &run.text,
+                                *bbox,
+                                &run.style,
+                                run.baseline,
+                                run.rotation,
+                                run.is_vertical,
+                                run.char_overlap.as_ref(),
+                                is_marker,
+                                run.is_para_end,
+                                run.is_line_break_end,
+                            );
                         }
                         PaintOp::FootnoteMarker { bbox, marker } => {
                             let style = crate::renderer::TextStyle {
@@ -519,7 +388,18 @@ impl SkiaLayerRenderer {
                                 color: marker.color,
                                 ..Default::default()
                             };
-                            draw_text(&marker.text, *bbox, &style, bbox.height * 0.4, 0.0);
+                            text_replay.draw_text(
+                                &marker.text,
+                                *bbox,
+                                &style,
+                                bbox.height * 0.4,
+                                0.0,
+                                false,
+                                None,
+                                false,
+                                false,
+                                false,
+                            );
                         }
                         PaintOp::Line { bbox, line } => {
                             if line.transform.has_transform() {
@@ -793,7 +673,13 @@ impl LayerRasterRenderer for SkiaLayerRenderer {
 impl SkiaLayerRenderer {
     fn make_form_font(&self, size: f32) -> Font {
         let style = FontStyle::default();
-        let cjk_families = ["Malgun Gothic", "맑은 고딕", "NanumGothic", "나눔고딕", "AppleGothic"];
+        let cjk_families = [
+            "Malgun Gothic",
+            "맑은 고딕",
+            "NanumGothic",
+            "나눔고딕",
+            "AppleGothic",
+        ];
         for family in &cjk_families {
             if let Some(tf) = self.custom_typefaces.get(*family).cloned() {
                 return Font::new(tf, size);
@@ -832,209 +718,215 @@ impl SkiaLayerRenderer {
         let fg_color = parse_css_color(&form.fore_color).unwrap_or(Color::from_rgb(0, 0, 0));
         let border_color = Color::from_rgb(160, 160, 160);
 
-    match form.form_type {
-        FormType::PushButton => {
-            let mut fill = Paint::default();
-            fill.set_anti_alias(true);
-            fill.set_style(paint::Style::Fill);
-            fill.set_color(bg_color);
-            let rrect = RRect::new_rect_xy(rect, 3.0, 3.0);
-            canvas.draw_rrect(rrect, &fill);
+        match form.form_type {
+            FormType::PushButton => {
+                let mut fill = Paint::default();
+                fill.set_anti_alias(true);
+                fill.set_style(paint::Style::Fill);
+                fill.set_color(bg_color);
+                let rrect = RRect::new_rect_xy(rect, 3.0, 3.0);
+                canvas.draw_rrect(rrect, &fill);
 
-            let mut stroke = Paint::default();
-            stroke.set_anti_alias(true);
-            stroke.set_style(paint::Style::Stroke);
-            stroke.set_stroke_width(1.0);
-            stroke.set_color(border_color);
-            canvas.draw_rrect(rrect, &stroke);
+                let mut stroke = Paint::default();
+                stroke.set_anti_alias(true);
+                stroke.set_style(paint::Style::Stroke);
+                stroke.set_stroke_width(1.0);
+                stroke.set_color(border_color);
+                canvas.draw_rrect(rrect, &stroke);
 
-            let label = if form.caption.is_empty() { &form.name } else { &form.caption };
-            if !label.is_empty() {
-                let font = self.make_form_font((h * 0.45).clamp(8.0, 14.0));
-                let mut tp = Paint::default();
-                tp.set_anti_alias(true);
-                tp.set_color(fg_color);
-                let text_w = font.measure_str(label, Some(&tp)).0;
-                let tx = x + (w - text_w) / 2.0;
-                let ty = y + h / 2.0 + font.size() * 0.35;
-                canvas.draw_str(label, (tx, ty), &font, &tp);
+                let label = if form.caption.is_empty() {
+                    &form.name
+                } else {
+                    &form.caption
+                };
+                if !label.is_empty() {
+                    let font = self.make_form_font((h * 0.45).clamp(8.0, 14.0));
+                    let mut tp = Paint::default();
+                    tp.set_anti_alias(true);
+                    tp.set_color(fg_color);
+                    let text_w = font.measure_str(label, Some(&tp)).0;
+                    let tx = x + (w - text_w) / 2.0;
+                    let ty = y + h / 2.0 + font.size() * 0.35;
+                    canvas.draw_str(label, (tx, ty), &font, &tp);
+                }
             }
-        }
-        FormType::CheckBox => {
-            let box_size = h.min(w).min(14.0);
-            let bx = x + 2.0;
-            let by = y + (h - box_size) / 2.0;
-            let box_rect = Rect::from_xywh(bx, by, box_size, box_size);
+            FormType::CheckBox => {
+                let box_size = h.min(w).min(14.0);
+                let bx = x + 2.0;
+                let by = y + (h - box_size) / 2.0;
+                let box_rect = Rect::from_xywh(bx, by, box_size, box_size);
 
-            let mut fill = Paint::default();
-            fill.set_anti_alias(true);
-            fill.set_style(paint::Style::Fill);
-            fill.set_color(bg_color);
-            canvas.draw_rect(box_rect, &fill);
+                let mut fill = Paint::default();
+                fill.set_anti_alias(true);
+                fill.set_style(paint::Style::Fill);
+                fill.set_color(bg_color);
+                canvas.draw_rect(box_rect, &fill);
 
-            let mut stroke = Paint::default();
-            stroke.set_anti_alias(true);
-            stroke.set_style(paint::Style::Stroke);
-            stroke.set_stroke_width(1.0);
-            stroke.set_color(border_color);
-            canvas.draw_rect(box_rect, &stroke);
+                let mut stroke = Paint::default();
+                stroke.set_anti_alias(true);
+                stroke.set_style(paint::Style::Stroke);
+                stroke.set_stroke_width(1.0);
+                stroke.set_color(border_color);
+                canvas.draw_rect(box_rect, &stroke);
 
-            if form.value != 0 {
-                let mut check = Paint::default();
-                check.set_anti_alias(true);
-                check.set_style(paint::Style::Stroke);
-                check.set_stroke_width(2.0);
-                check.set_color(fg_color);
-                check.set_stroke_cap(paint::Cap::Round);
-                let cx = bx + box_size * 0.2;
-                let cy = by + box_size * 0.55;
-                let mx = bx + box_size * 0.4;
-                let my = by + box_size * 0.75;
-                let ex = bx + box_size * 0.8;
-                let ey = by + box_size * 0.25;
+                if form.value != 0 {
+                    let mut check = Paint::default();
+                    check.set_anti_alias(true);
+                    check.set_style(paint::Style::Stroke);
+                    check.set_stroke_width(2.0);
+                    check.set_color(fg_color);
+                    check.set_stroke_cap(paint::Cap::Round);
+                    let cx = bx + box_size * 0.2;
+                    let cy = by + box_size * 0.55;
+                    let mx = bx + box_size * 0.4;
+                    let my = by + box_size * 0.75;
+                    let ex = bx + box_size * 0.8;
+                    let ey = by + box_size * 0.25;
+                    let mut builder = PathBuilder::new();
+                    builder.move_to((cx, cy));
+                    builder.line_to((mx, my));
+                    builder.line_to((ex, ey));
+                    let path = builder.detach();
+                    canvas.draw_path(&path, &check);
+                }
+
+                if !form.caption.is_empty() {
+                    let font = self.make_form_font((h * 0.6).clamp(8.0, 13.0));
+                    let mut tp = Paint::default();
+                    tp.set_anti_alias(true);
+                    tp.set_color(fg_color);
+                    let tx = bx + box_size + 4.0;
+                    let ty = y + h / 2.0 + font.size() * 0.35;
+                    canvas.draw_str(&form.caption, (tx, ty), &font, &tp);
+                }
+            }
+            FormType::RadioButton => {
+                let r = h.min(w).min(14.0) / 2.0;
+                let cx = x + 2.0 + r;
+                let cy = y + h / 2.0;
+
+                let mut fill = Paint::default();
+                fill.set_anti_alias(true);
+                fill.set_style(paint::Style::Fill);
+                fill.set_color(bg_color);
+                canvas.draw_circle((cx, cy), r, &fill);
+
+                let mut stroke = Paint::default();
+                stroke.set_anti_alias(true);
+                stroke.set_style(paint::Style::Stroke);
+                stroke.set_stroke_width(1.0);
+                stroke.set_color(border_color);
+                canvas.draw_circle((cx, cy), r, &stroke);
+
+                if form.value != 0 {
+                    let mut dot = Paint::default();
+                    dot.set_anti_alias(true);
+                    dot.set_style(paint::Style::Fill);
+                    dot.set_color(fg_color);
+                    canvas.draw_circle((cx, cy), r * 0.5, &dot);
+                }
+
+                if !form.caption.is_empty() {
+                    let font = self.make_form_font((h * 0.6).clamp(8.0, 13.0));
+                    let mut tp = Paint::default();
+                    tp.set_anti_alias(true);
+                    tp.set_color(fg_color);
+                    let tx = cx + r + 4.0;
+                    let ty = y + h / 2.0 + font.size() * 0.35;
+                    canvas.draw_str(&form.caption, (tx, ty), &font, &tp);
+                }
+            }
+            FormType::ComboBox => {
+                let mut fill = Paint::default();
+                fill.set_anti_alias(true);
+                fill.set_style(paint::Style::Fill);
+                fill.set_color(bg_color);
+                canvas.draw_rect(rect, &fill);
+
+                let mut stroke = Paint::default();
+                stroke.set_anti_alias(true);
+                stroke.set_style(paint::Style::Stroke);
+                stroke.set_stroke_width(1.0);
+                stroke.set_color(border_color);
+                canvas.draw_rect(rect, &stroke);
+
+                // 드롭다운 화살표 영역
+                let arrow_w = h.min(20.0);
+                let ax = x + w - arrow_w;
+                let arrow_rect = Rect::from_xywh(ax, y, arrow_w, h);
+                let mut abg = Paint::default();
+                abg.set_anti_alias(true);
+                abg.set_style(paint::Style::Fill);
+                abg.set_color(bg_color);
+                canvas.draw_rect(arrow_rect, &abg);
+                canvas.draw_line((ax, y), (ax, y + h), &stroke);
+
+                // 화살표 삼각형
+                let mut arrow = Paint::default();
+                arrow.set_anti_alias(true);
+                arrow.set_style(paint::Style::Fill);
+                arrow.set_color(Color::from_rgb(80, 80, 80));
+                let acx = ax + arrow_w / 2.0;
+                let acy = y + h / 2.0;
+                let as_ = (arrow_w * 0.25).min(5.0);
                 let mut builder = PathBuilder::new();
-                builder.move_to((cx, cy));
-                builder.line_to((mx, my));
-                builder.line_to((ex, ey));
+                builder.move_to((acx - as_, acy - as_ * 0.5));
+                builder.line_to((acx + as_, acy - as_ * 0.5));
+                builder.line_to((acx, acy + as_ * 0.5));
+                builder.close();
                 let path = builder.detach();
-                canvas.draw_path(&path, &check);
+                canvas.draw_path(&path, &arrow);
+
+                if !form.text.is_empty() {
+                    let font = self.make_form_font((h * 0.55).clamp(8.0, 13.0));
+                    let mut tp = Paint::default();
+                    tp.set_anti_alias(true);
+                    tp.set_color(fg_color);
+                    let tx = x + 4.0;
+                    let ty = y + h / 2.0 + font.size() * 0.35;
+                    canvas.draw_str(&form.text, (tx, ty), &font, &tp);
+                }
             }
+            FormType::Edit => {
+                let mut fill = Paint::default();
+                fill.set_anti_alias(true);
+                fill.set_style(paint::Style::Fill);
+                fill.set_color(bg_color);
+                canvas.draw_rect(rect, &fill);
 
-            if !form.caption.is_empty() {
-                let font = self.make_form_font((h * 0.6).clamp(8.0, 13.0));
-                let mut tp = Paint::default();
-                tp.set_anti_alias(true);
-                tp.set_color(fg_color);
-                let tx = bx + box_size + 4.0;
-                let ty = y + h / 2.0 + font.size() * 0.35;
-                canvas.draw_str(&form.caption, (tx, ty), &font, &tp);
-            }
-        }
-        FormType::RadioButton => {
-            let r = h.min(w).min(14.0) / 2.0;
-            let cx = x + 2.0 + r;
-            let cy = y + h / 2.0;
+                let mut stroke = Paint::default();
+                stroke.set_anti_alias(true);
+                stroke.set_style(paint::Style::Stroke);
+                stroke.set_stroke_width(1.0);
+                stroke.set_color(border_color);
+                canvas.draw_rect(rect, &stroke);
 
-            let mut fill = Paint::default();
-            fill.set_anti_alias(true);
-            fill.set_style(paint::Style::Fill);
-            fill.set_color(bg_color);
-            canvas.draw_circle((cx, cy), r, &fill);
-
-            let mut stroke = Paint::default();
-            stroke.set_anti_alias(true);
-            stroke.set_style(paint::Style::Stroke);
-            stroke.set_stroke_width(1.0);
-            stroke.set_color(border_color);
-            canvas.draw_circle((cx, cy), r, &stroke);
-
-            if form.value != 0 {
-                let mut dot = Paint::default();
-                dot.set_anti_alias(true);
-                dot.set_style(paint::Style::Fill);
-                dot.set_color(fg_color);
-                canvas.draw_circle((cx, cy), r * 0.5, &dot);
-            }
-
-            if !form.caption.is_empty() {
-                let font = self.make_form_font((h * 0.6).clamp(8.0, 13.0));
-                let mut tp = Paint::default();
-                tp.set_anti_alias(true);
-                tp.set_color(fg_color);
-                let tx = cx + r + 4.0;
-                let ty = y + h / 2.0 + font.size() * 0.35;
-                canvas.draw_str(&form.caption, (tx, ty), &font, &tp);
+                if !form.text.is_empty() {
+                    let font = self.make_form_font((h * 0.55).clamp(8.0, 13.0));
+                    let mut tp = Paint::default();
+                    tp.set_anti_alias(true);
+                    tp.set_color(fg_color);
+                    let tx = x + 4.0;
+                    let ty = y + h / 2.0 + font.size() * 0.35;
+                    canvas.draw_str(&form.text, (tx, ty), &font, &tp);
+                }
             }
         }
-        FormType::ComboBox => {
-            let mut fill = Paint::default();
-            fill.set_anti_alias(true);
-            fill.set_style(paint::Style::Fill);
-            fill.set_color(bg_color);
-            canvas.draw_rect(rect, &fill);
-
-            let mut stroke = Paint::default();
-            stroke.set_anti_alias(true);
-            stroke.set_style(paint::Style::Stroke);
-            stroke.set_stroke_width(1.0);
-            stroke.set_color(border_color);
-            canvas.draw_rect(rect, &stroke);
-
-            // 드롭다운 화살표 영역
-            let arrow_w = h.min(20.0);
-            let ax = x + w - arrow_w;
-            let arrow_rect = Rect::from_xywh(ax, y, arrow_w, h);
-            let mut abg = Paint::default();
-            abg.set_anti_alias(true);
-            abg.set_style(paint::Style::Fill);
-            abg.set_color(bg_color);
-            canvas.draw_rect(arrow_rect, &abg);
-            canvas.draw_line((ax, y), (ax, y + h), &stroke);
-
-            // 화살표 삼각형
-            let mut arrow = Paint::default();
-            arrow.set_anti_alias(true);
-            arrow.set_style(paint::Style::Fill);
-            arrow.set_color(Color::from_rgb(80, 80, 80));
-            let acx = ax + arrow_w / 2.0;
-            let acy = y + h / 2.0;
-            let as_ = (arrow_w * 0.25).min(5.0);
-            let mut builder = PathBuilder::new();
-            builder.move_to((acx - as_, acy - as_ * 0.5));
-            builder.line_to((acx + as_, acy - as_ * 0.5));
-            builder.line_to((acx, acy + as_ * 0.5));
-            builder.close();
-            let path = builder.detach();
-            canvas.draw_path(&path, &arrow);
-
-            if !form.text.is_empty() {
-                let font = self.make_form_font((h * 0.55).clamp(8.0, 13.0));
-                let mut tp = Paint::default();
-                tp.set_anti_alias(true);
-                tp.set_color(fg_color);
-                let tx = x + 4.0;
-                let ty = y + h / 2.0 + font.size() * 0.35;
-                canvas.draw_str(&form.text, (tx, ty), &font, &tp);
-            }
-        }
-        FormType::Edit => {
-            let mut fill = Paint::default();
-            fill.set_anti_alias(true);
-            fill.set_style(paint::Style::Fill);
-            fill.set_color(bg_color);
-            canvas.draw_rect(rect, &fill);
-
-            let mut stroke = Paint::default();
-            stroke.set_anti_alias(true);
-            stroke.set_style(paint::Style::Stroke);
-            stroke.set_stroke_width(1.0);
-            stroke.set_color(border_color);
-            canvas.draw_rect(rect, &stroke);
-
-            if !form.text.is_empty() {
-                let font = self.make_form_font((h * 0.55).clamp(8.0, 13.0));
-                let mut tp = Paint::default();
-                tp.set_anti_alias(true);
-                tp.set_color(fg_color);
-                let tx = x + 4.0;
-                let ty = y + h / 2.0 + font.size() * 0.35;
-                canvas.draw_str(&form.text, (tx, ty), &font, &tp);
-            }
-        }
-    }
     }
 }
 
 fn parse_css_color(s: &str) -> Option<Color> {
     let s = s.trim().trim_start_matches('#');
-    if s.len() != 6 { return None; }
+    if s.len() != 6 {
+        return None;
+    }
     let r = u8::from_str_radix(&s[0..2], 16).ok()?;
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
     Some(Color::from_rgb(r, g, b))
 }
 
-fn colorref_to_skia(color: ColorRef, alpha_scale: f32) -> Color {
+pub(super) fn colorref_to_skia(color: ColorRef, alpha_scale: f32) -> Color {
     let b = ((color >> 16) & 0xFF) as u8;
     let g = ((color >> 8) & 0xFF) as u8;
     let r = (color & 0xFF) as u8;
@@ -1046,8 +938,9 @@ fn colorref_to_skia(color: ColorRef, alpha_scale: f32) -> Color {
 mod tests {
     use super::*;
     use crate::model::control::FormType;
-    use crate::model::style::ImageFillMode;
+    use crate::model::style::{ImageFillMode, UnderlineType};
     use crate::paint::{CacheHint, GroupKind, LayerNode, LayerOutputOptions};
+    use crate::renderer::composer::CharOverlapInfo;
     use crate::renderer::equation::ast::EqNode;
     use crate::renderer::equation::layout::EqLayout;
     use crate::renderer::render_tree::{
@@ -1055,7 +948,7 @@ mod tests {
         PageBackgroundImage, PageBackgroundNode, PathNode, PlaceholderNode, RawSvgNode,
         RectangleNode, TextRunNode,
     };
-    use crate::renderer::{GradientFillInfo, PatternFillInfo, TextStyle};
+    use crate::renderer::{GradientFillInfo, PatternFillInfo, TabLeaderInfo, TextStyle};
     use image::{ImageFormat, Rgba, RgbaImage};
     use std::io::Cursor;
 
@@ -1786,6 +1679,198 @@ mod tests {
         let output = SkiaLayerRenderer::new()
             .render_raster_with_options(&tree, RasterRenderOptions::default())
             .expect("render text");
+        let image = decode_rgba(&output.bytes);
+
+        assert!(count_ink(&image) > 0);
+    }
+
+    #[test]
+    fn renders_char_overlap_text_run_as_ink() {
+        let run = TextRunNode {
+            text: "①".to_string(),
+            style: TextStyle {
+                font_size: 20.0,
+                color: 0x00000000,
+                ..Default::default()
+            },
+            char_shape_id: None,
+            para_shape_id: None,
+            section_index: None,
+            para_index: None,
+            char_start: None,
+            cell_context: None,
+            is_para_end: false,
+            is_line_break_end: false,
+            rotation: 0.0,
+            is_vertical: false,
+            char_overlap: Some(CharOverlapInfo {
+                border_type: 1,
+                inner_char_size: 90,
+            }),
+            border_fill_id: 0,
+            baseline: 22.0,
+            field_marker: Default::default(),
+        };
+        let tree = PageLayerTree::new(
+            40.0,
+            40.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 40.0, 40.0),
+                None,
+                vec![PaintOp::TextRun {
+                    bbox: BoundingBox::new(8.0, 8.0, 24.0, 24.0),
+                    run,
+                }],
+            ),
+        );
+        let output = SkiaLayerRenderer::new()
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render char overlap");
+        let image = decode_rgba(&output.bytes);
+
+        assert!(count_ink(&image) > 0);
+    }
+
+    #[test]
+    fn renders_tab_leader_for_empty_text_run() {
+        let run = TextRunNode {
+            text: String::new(),
+            style: TextStyle {
+                font_size: 18.0,
+                color: 0x00000000,
+                tab_leaders: vec![TabLeaderInfo {
+                    start_x: 8.0,
+                    end_x: 72.0,
+                    fill_type: 1,
+                }],
+                ..Default::default()
+            },
+            char_shape_id: None,
+            para_shape_id: None,
+            section_index: None,
+            para_index: None,
+            char_start: None,
+            cell_context: None,
+            is_para_end: false,
+            is_line_break_end: false,
+            rotation: 0.0,
+            is_vertical: false,
+            char_overlap: None,
+            border_fill_id: 0,
+            baseline: 22.0,
+            field_marker: Default::default(),
+        };
+        let tree = PageLayerTree::new(
+            88.0,
+            36.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 88.0, 36.0),
+                None,
+                vec![PaintOp::TextRun {
+                    bbox: BoundingBox::new(4.0, 4.0, 80.0, 28.0),
+                    run,
+                }],
+            ),
+        );
+        let output = SkiaLayerRenderer::new()
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render tab leader");
+        let image = decode_rgba(&output.bytes);
+
+        assert!(count_ink(&image) > 0);
+    }
+
+    #[test]
+    fn renders_output_control_marks_as_ink() {
+        let run = TextRunNode {
+            text: " \t".to_string(),
+            style: TextStyle {
+                font_size: 18.0,
+                color: 0x00000000,
+                ..Default::default()
+            },
+            char_shape_id: None,
+            para_shape_id: None,
+            section_index: None,
+            para_index: None,
+            char_start: None,
+            cell_context: None,
+            is_para_end: true,
+            is_line_break_end: false,
+            rotation: 0.0,
+            is_vertical: false,
+            char_overlap: None,
+            border_fill_id: 0,
+            baseline: 22.0,
+            field_marker: Default::default(),
+        };
+        let tree = PageLayerTree::new(
+            72.0,
+            36.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 72.0, 36.0),
+                None,
+                vec![PaintOp::TextRun {
+                    bbox: BoundingBox::new(4.0, 4.0, 60.0, 28.0),
+                    run,
+                }],
+            ),
+        )
+        .with_output_options(LayerOutputOptions {
+            show_control_codes: true,
+            ..Default::default()
+        });
+        let output = SkiaLayerRenderer::new()
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render control marks");
+        let image = decode_rgba(&output.bytes);
+
+        assert!(count_ink(&image) > 0);
+    }
+
+    #[test]
+    fn renders_decorated_text_as_ink() {
+        let run = TextRunNode {
+            text: "A".to_string(),
+            style: TextStyle {
+                font_size: 18.0,
+                color: 0x00000000,
+                underline: UnderlineType::Bottom,
+                strikethrough: true,
+                emphasis_dot: 1,
+                shade_color: 0x0000ffff,
+                ..Default::default()
+            },
+            char_shape_id: None,
+            para_shape_id: None,
+            section_index: None,
+            para_index: None,
+            char_start: None,
+            cell_context: None,
+            is_para_end: false,
+            is_line_break_end: false,
+            rotation: 0.0,
+            is_vertical: false,
+            char_overlap: None,
+            border_fill_id: 0,
+            baseline: 24.0,
+            field_marker: Default::default(),
+        };
+        let tree = PageLayerTree::new(
+            48.0,
+            40.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 48.0, 40.0),
+                None,
+                vec![PaintOp::TextRun {
+                    bbox: BoundingBox::new(8.0, 8.0, 32.0, 28.0),
+                    run,
+                }],
+            ),
+        );
+        let output = SkiaLayerRenderer::new()
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render decorated text");
         let image = decode_rgba(&output.bytes);
 
         assert!(count_ink(&image) > 0);
