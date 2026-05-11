@@ -26,7 +26,6 @@ import { CellSelectionRenderer } from '@/engine/cell-selection-renderer';
 import { TableObjectRenderer } from '@/engine/table-object-renderer';
 import { TableResizeRenderer } from '@/engine/table-resize-renderer';
 import { Ruler } from '@/view/ruler';
-import { initRhwpDev } from '@/core/rhwp-dev';
 
 const wasm = new WasmBridge();
 const eventBus = new EventBus();
