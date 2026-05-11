@@ -713,8 +713,17 @@ export function onKeyDown(this: any, e: KeyboardEvent): void {
     return;
   }
 
-  // Alt 조합 단축키 처리 (Alt+Arrow는 단어 이동 → 아래 Arrow case에서 처리)
-  if (e.altKey && !e.key.startsWith('Arrow') && this.dispatcher) {
+  // Alt 조합 단축키 처리
+  // - Alt+Arrow → 단어 이동 (아래 Arrow case)
+  // - Alt+Backspace → 이전 단어 삭제 (아래 Backspace/Delete case)
+  // - Alt+Delete → 표 안 영역 영역 'table:delete-col' (기존 동작 보존),
+  //                표 외 영역 영역 다음 단어 삭제 (아래 Backspace/Delete case)
+  const isAltWordKey = e.altKey && (
+    e.key.startsWith('Arrow') ||
+    e.key === 'Backspace' ||
+    (e.key === 'Delete' && !this.cursor.isInCell())
+  );
+  if (e.altKey && !isAltWordKey && this.dispatcher) {
     // Alt+V → Chord 대기 (보기 메뉴 단축키, 한컴 Alt+V,T 계승)
     if ((e.key === 'v' || e.key === 'V' || e.key === 'ㅍ') && !e.shiftKey && !e.ctrlKey) {
       e.preventDefault();
