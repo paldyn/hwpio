@@ -575,7 +575,7 @@ pub fn generic_fallback(font_family: &str) -> &'static str {
         // 영역 (U+1100-11FF, U+A960-A97F, U+D7B0-D7FF) 만 매칭하므로 일반 한글에 영향 없음.
         return "'Batang','바탕','Nanum Myeongjo','AppleMyungjo','Noto Serif KR','Noto Serif CJK KR','Source Han Serif K Old Hangul',serif";
     }
-    // 세리프 키워드 (영문) — "serif" 포함 but "sans-serif" 제외
+    // 세리프 키워드 (영문) — "serif" 포함하되 "sans" 부분 문자열을 가진 폰트명 전체 제외
     if lower.contains("times") || lower.contains("hymjre")
         || lower.contains("palatino") || lower.contains("georgia")
         || lower.contains("batang") || lower.contains("gungsuh")
@@ -972,6 +972,15 @@ mod tests {
         assert_eq!(generic_fallback("굴림체"), mono);
         assert_eq!(generic_fallback("바탕체"), mono);
         assert_eq!(generic_fallback("Courier New"), mono);
+        assert_eq!(generic_fallback("D2Coding ligature"), mono);
+        assert_eq!(generic_fallback("Noto Sans Mono"), mono);
+        // 영문 세리프 (issue #616)
+        assert_eq!(generic_fallback("Noto Serif CJK SC"), serif);
+        assert_eq!(generic_fallback("Liberation Serif"), serif);
+        assert_eq!(generic_fallback("Noto Serif KR"), serif);
+        // "sans" 포함 폰트는 세리프로 분류되지 않음
+        assert_eq!(generic_fallback("Liberation Sans"), sans);
+        assert_eq!(generic_fallback("Noto Sans KR"), sans);
         // 빈 문자열
         assert_eq!(generic_fallback(""), sans);
     }
