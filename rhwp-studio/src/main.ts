@@ -31,7 +31,7 @@ import { initRhwpDev } from '@/core/rhwp-dev';
 const wasm = new WasmBridge();
 const eventBus = new EventBus();
 
-// E2E 테스트용 전역 노출 (개발 모드 전���)
+// E2E 테스트용 전역 노출 (개발 모드 전용)
 if (import.meta.env.DEV) {
   (window as any).__wasm = wasm;
   (window as any).__eventBus = eventBus;
