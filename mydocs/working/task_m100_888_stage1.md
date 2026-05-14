@@ -42,7 +42,7 @@ cargo test --lib --quiet
 
 ## 3. 작업지시자 판정용 HWP 산출물
 
-아래 산출물은 `output/` 하위이므로 git 추적 대상이 아니다.
+아래 산출물은 프로젝트 루트 `/home/edward/mygithub/rhwp/output/` 하위에 배치한다. `output/` 하위이므로 git 추적 대상이 아니다.
 
 ```text
 output/poc/hwpx2hwp/task888/stage1/basic-table-01.hwp
@@ -78,3 +78,5 @@ output/poc/hwpx2hwp/task888/stage1/expense_report.hwp
 ## 5. 현재 판정
 
 자동 테스트 기준은 통과했다. 다음 단계는 작업지시자 환경에서 위 두 HWP 파일을 한컴 에디터와 rhwp-studio로 시각 판정하는 것이다.
+
+주의: 판정용 산출물은 worktree 내부 `/tmp/rhwp-task-888/output/` 가 아니라 작업지시자 프로젝트 루트 `/home/edward/mygithub/rhwp/output/` 에 배치해야 한다.
