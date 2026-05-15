@@ -936,10 +936,19 @@ impl LayoutEngine {
             // 정상 라인은 (sw + cs) ≈ col_w_hu 이므로 새 분기 미진입.
             // Picture/Shape Square wrap 은 cs=0 이라 기존 동작과 동일.
             let line_avail_hu = comp_line.segment_width.saturating_add(comp_line.column_start);
+            // [Task #901] cs > 0 + sw < col_w 인 경우도 effective_col_x 적용.
+            // pic2.hwp paragraph 0 의 ls[1] (cs=39123 sw=3397, avail=col_w) 같은
+            // wrap zone 우측 영역 case 의 X 위치 정합 — paragraph 0 의 한글 char
+            // ("우/리/나/라") 가 그림 사이/우측 좁은 영역에 그려져야 함.
+            // 기존 조건 `avail < col_w - 200` 만으로는 avail == col_w 인 wrap zone
+            // 라인이 분기 미진입 → col_area.x 좌측에 잘못 그려짐.
+            let cs_significant = comp_line.column_start > 0
+                && comp_line.segment_width > 0
+                && comp_line.segment_width < col_area_w_hu;
             let (effective_col_x, effective_col_w) = if (has_picture_shape_square_wrap
                 || line_has_inline_tac_table)
                 && comp_line.segment_width > 0
-                && line_avail_hu < col_area_w_hu - 200
+                && (line_avail_hu < col_area_w_hu - 200 || cs_significant)
             {
                 let cs_px = hwpunit_to_px(comp_line.column_start, self.dpi);
                 let sw_px = hwpunit_to_px(comp_line.segment_width, self.dpi);
@@ -2811,8 +2820,20 @@ impl LayoutEngine {
             //     과 정합. (Task #452: 이전 #332 의 layout-only trailing 제외 →
             //     pagination 과 1 ls drift 발생 → 회복)
             let is_cell_last_line = is_last_cell_para && line_idx + 1 >= end;
+            // [Task #901 Stage 5/6] wrap zone paragraph 의 empty-runs / whitespace-only
+            // line 은 y advance 건너뜀.
+            // pic2.hwp paragraph 0 case: 8 line_segs (4 visible "우/리/나/라" + 4 empty
+            // phantom lines for wrap zone 의 다른 column). 추가로 첫 idx=0 은 cs=24470
+            // (LEFT narrow wrap zone) 의 공백 한 글자만 가짐 — 한컴 viewer 가 wrap zone
+            // 좌측 영역에 텍스트 미배치한 결과. has_picture_shape_square_wrap 게이트로
+            // wrap zone 호스트 paragraph 만 영향.
+            let runs_all_whitespace = comp_line.runs.iter().all(|r| r.text.trim().is_empty());
+            let skip_advance_empty_wrap = has_picture_shape_square_wrap
+                && runs_all_whitespace;
             if is_cell_last_line && cell_ctx.is_some() {
                 y += line_height;
+            } else if skip_advance_empty_wrap {
+                // no advance
             } else {
                 let line_spacing_px = hwpunit_to_px(comp_line.line_spacing, self.dpi);
                 y += line_height + line_spacing_px;

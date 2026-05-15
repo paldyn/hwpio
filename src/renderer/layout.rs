@@ -1640,6 +1640,13 @@ impl LayoutEngine {
                 y_offset = bottom_y;
             }
         }
+        // [Task #901 Stage 8/10] TopAndBottom flow-around: anchor paragraph 의 text 가 picture
+        // 위에 fit 가능하면 pre-jump skip, render 후 post-jump 적용.
+        // (bottom_y, anchor_first_vpos) — Stage 10: vpos_lazy_base 를 anchor first vpos 로
+        // 직접 설정. file vpos 가 anchor 첫 줄 vpos 기준 누적이므로, lazy_base 를 anchor
+        // 첫 줄 vpos 로 두면 후속 paragraph 의 end_y = col_anchor_y + (vpos_end - first_vpos)
+        // → file 의 누적 vpos 가 정확히 visual y 로 매핑됨.
+        let mut pending_topbottom_post_jump: Option<(f64, i32)> = None;
         // [Task #412] vpos 보정 anchor: 첫 PageItem 이 실제 렌더링되는 y_offset.
         // body_wide_reserved 푸시 후의 y_offset 이 첫 항목의 vpos(=base) 에 대응됨.
         // 이를 anchor 로 사용해야 vpos→y 변환이 정확함 (col_area.y 는 단 영역 top
@@ -1708,12 +1715,81 @@ impl LayoutEngine {
                 PageItem::PartialTable { para_index, .. } => *para_index,
                 PageItem::Shape { para_index, .. } => *para_index,
             };
+            // [Task #901 Stage 8/10] post-jump 적용: 직전 anchor paragraph 가 flow-around 로
+            // 그림 위에 렌더된 경우 후속 paragraph 의 y_offset 을 picture bottom 으로 jump
+            // + vpos_lazy_base 를 anchor first_vpos 로 set → file vpos 누적이 visual y 와 정합.
+            // Shape/Table item 은 skip (vpos_lazy_base reset 회피).
+            let item_is_paragraph = matches!(item,
+                PageItem::FullParagraph { .. } | PageItem::PartialParagraph { .. });
+            if item_is_paragraph {
+                if let Some((bottom_y, anchor_first_vpos)) = pending_topbottom_post_jump.take() {
+                    // y_offset 이 bottom_y 보다 작으면 jump (예: iris Shape pre-jump 미적용 케이스)
+                    if bottom_y > y_offset {
+                        y_offset = bottom_y;
+                    }
+                    // vpos_lazy_base 는 항상 set (anchor first_vpos 기준 후속 paragraph 정합)
+                    vpos_lazy_base = Some(anchor_first_vpos);
+                    vpos_page_base = None;
+                }
+            }
             // TopAndBottom 글상자: 앵커 문단에 도달하면 y_offset을 글상자 하단 아래로 점프
             let mut shape_jumped = false;
             for &(anchor_pi, bottom_y) in &shape_reserved {
                 if item_para == anchor_pi && bottom_y > y_offset {
-                    y_offset = bottom_y;
-                    shape_jumped = true;
+                    // [Task #901 Stage 8] flow-around 시도: anchor 의 text height 가 picture 위
+                    // 영역 (col_area.y ~ picture_top_y) 에 fit 가능하면 pre-jump skip.
+                    use crate::model::shape::TextWrap;
+                    let anchor_para = &paragraphs[anchor_pi];
+                    let picture_top_y_opt: Option<f64> = anchor_para.controls.iter().find_map(|c| {
+                        let common = match c {
+                            Control::Picture(pic) if !pic.common.treat_as_char => Some(&pic.common),
+                            Control::Shape(s) if !s.common().treat_as_char => Some(s.common()),
+                            Control::Table(t) if !t.common.treat_as_char => Some(&t.common),
+                            _ => None,
+                        }?;
+                        if !matches!(common.text_wrap, TextWrap::TopAndBottom) { return None; }
+                        let (_bot, top) = self.calc_shape_bottom_y(common, col_area, &layout.body_area);
+                        Some(top)
+                    });
+                    let text_height = composed.get(anchor_pi).map(|comp| {
+                        comp.lines.iter().map(|line| {
+                            crate::renderer::hwpunit_to_px(line.line_height + line.line_spacing, self.dpi)
+                        }).sum::<f64>()
+                    }).unwrap_or(f64::MAX);
+                    let fits_above = picture_top_y_opt
+                        .map(|top_y| text_height + 4.0 <= (top_y - y_offset))
+                        .unwrap_or(false);
+                    if fits_above {
+                        // Stage 11: 후속 paragraph item 의 first vpos 를 peek 하여 base 직접 계산.
+                        // base = next_para_vpos - (bottom_y - col_area.y) * scale^-1
+                        // → end_y for next para = bottom_y (iris 직하 정합).
+                        let next_para_vpos: Option<i32> = col_content.items.iter()
+                            .skip_while(|it| match it {
+                                PageItem::FullParagraph { para_index } => *para_index != anchor_pi,
+                                PageItem::PartialParagraph { para_index, .. } => *para_index != anchor_pi,
+                                _ => true,
+                            })
+                            .skip(1)  // anchor item 자체 skip
+                            .find_map(|it| match it {
+                                PageItem::FullParagraph { para_index }
+                                | PageItem::PartialParagraph { para_index, .. } => {
+                                    paragraphs.get(*para_index)
+                                        .and_then(|p| p.line_segs.first())
+                                        .map(|s| s.vertical_pos)
+                                }
+                                _ => None,
+                            });
+                        let base_for_post = if let Some(npv) = next_para_vpos {
+                            let visual_diff_hu = ((bottom_y - col_area.y) / self.dpi * 7200.0).round() as i32;
+                            npv - visual_diff_hu
+                        } else {
+                            anchor_para.line_segs.first().map(|s| s.vertical_pos).unwrap_or(0)
+                        };
+                        pending_topbottom_post_jump = Some((bottom_y, base_for_post));
+                    } else {
+                        y_offset = bottom_y;
+                        shape_jumped = true;
+                    }
                 }
             }
 

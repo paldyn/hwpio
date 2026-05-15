@@ -614,10 +614,19 @@ impl TypesetEngine {
                         && para_sw > 0
                         && para_cs + para_sw <= body_w + 200
                 } else { false };
+                // [Task #901] cs 일치 + 합리적 sw 매칭 (anchor 의 wrap zone region 다양성).
+                // pic2.hwp paragraph 1 (cs=24470 sw=18050) vs anchor (wrap_around_cs=24470 sw=2570)
+                // — cs 같지만 sw 다름 (다른 wrap region). 기존 매칭 실패 → wrap_anchors 미등록
+                // → paragraph 좌측 그려짐. anchor_any_seg 가 활성이면 cs 정확 일치 만으로
+                // wrap zone 내부 paragraph 로 인정.
+                let cs_only_match = st.wrap_around_any_seg
+                    && para_cs == st.wrap_around_cs
+                    && para_sw > 0;
                 if (para_cs == st.wrap_around_cs && para_sw == st.wrap_around_sw)
                     || (any_seg_matches && (is_empty_para || st.wrap_around_any_seg))
                     || sw0_match
-                    || anchor_image_match {
+                    || anchor_image_match
+                    || cs_only_match {
                     // [Task #604 R3] wrap_around 매칭 분기를 anchor 종류 기반으로 본질화.
                     //
                     // - Picture (그림 Square wrap) anchor: wrap text 가 LineSeg cs/sw 로
@@ -1062,9 +1071,26 @@ impl TypesetEngine {
         let ls_type = para_style.map(|s| s.line_spacing_type)
             .unwrap_or(crate::model::style::LineSpacingType::Percent);
 
+        // [Task #901 Stage 7] wrap zone host paragraph 의 whitespace-only line 은 height 제외.
+        // paragraph_layout 의 skip_advance_empty_wrap 와 정합 — pagination 의 height 계산
+        // 이 시각 렌더링과 어긋나 paragraph 11 등이 잘못 다음 페이지로 분할되는 문제 해소.
+        let has_picture_shape_square_wrap = para.controls.iter().any(|c| {
+            use crate::model::shape::TextWrap;
+            let common_opt = match c {
+                Control::Picture(pic) if !pic.common.treat_as_char => Some(&pic.common),
+                Control::Shape(s) if !s.common().treat_as_char => Some(s.common()),
+                _ => None,
+            };
+            common_opt.map(|cm| matches!(cm.text_wrap, TextWrap::Square)).unwrap_or(false)
+        });
+
         let (line_heights, line_spacings): (Vec<f64>, Vec<f64>) = if let Some(comp) = composed {
             comp.lines.iter()
                 .map(|line| {
+                    let runs_all_whitespace = line.runs.iter().all(|r| r.text.trim().is_empty());
+                    if has_picture_shape_square_wrap && runs_all_whitespace {
+                        return (0.0, 0.0);
+                    }
                     let raw_lh = hwpunit_to_px(line.line_height, self.dpi);
                     let max_fs = line.runs.iter()
                         .map(|r| {
