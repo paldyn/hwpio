@@ -755,7 +755,8 @@ impl LayoutEngine {
         if let Some(pbf) = page_border_fill.filter(|p| p.border_fill_id > 0) {
             let bf_idx = (pbf.border_fill_id - 1) as usize;
             if let Some(bs) = styles.border_styles.get(bf_idx) {
-                let paper_based = (pbf.attr & 0x01) != 0;
+                // [Issue #920] 한글 스펙: attr bit 0 = 0이면 종이 기준, 1이면 본문 기준
+                let paper_based = (pbf.attr & 0x01) == 0;
                 let (base_x, base_y, base_w, base_h) = if paper_based {
                     (0.0, 0.0, layout.page_width, layout.page_height)
                 } else {
