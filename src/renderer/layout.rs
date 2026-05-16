@@ -564,11 +564,15 @@ impl LayoutEngine {
                             .get(para.para_shape_id as usize)
                             .map(|s| s.alignment)
                             .unwrap_or(Alignment::Left);
-                        // Task #445: 머리말/꼬리말 영역의 wrap=TopAndBottom + vert=Para 표는
+                        // Task #445: 꼬리말 영역의 wrap=TopAndBottom + vert=Para 표는
                         // 첫 라인의 line_height/2 만큼 아래로 anchor 됨 (HWP 가 line center
                         // 기준으로 표를 배치하는 동작과 일치). 이 보정이 없으면 페이지 번호
                         // 박스가 본문 바닥과 붙어 보이는 문제(Task #445) 발생.
-                        let line_anchor_offset = if matches!(t.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
+                        // [Issue #924] 머릿말에서는 적용하지 않음 — 표가 header_area 안에 정확히 위치해야 함.
+                        // 머릿말 판단: area 높이가 본문 높이보다 훨씬 작음 (17mm vs 200+mm)
+                        let is_small_area = area.height < 200.0;
+                        let line_anchor_offset = if !is_small_area
+                            && matches!(t.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
                             && matches!(t.common.vert_rel_to, crate::model::shape::VertRelTo::Para)
                             && i == 0
                         {
