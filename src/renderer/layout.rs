@@ -550,6 +550,7 @@ impl LayoutEngine {
         bin_data_content: &[BinDataContent],
         outer_section_index: Option<usize>,
         outer_hf_ref: Option<crate::renderer::render_tree::HeaderFooterImageRef>,
+        is_header: bool,
     ) {
         let mut y_offset = area.y;
         for (i, para) in hf_paragraphs.iter().enumerate() {
@@ -569,9 +570,8 @@ impl LayoutEngine {
                         // 기준으로 표를 배치하는 동작과 일치). 이 보정이 없으면 페이지 번호
                         // 박스가 본문 바닥과 붙어 보이는 문제(Task #445) 발생.
                         // [Issue #924] 머릿말에서는 적용하지 않음 — 표가 header_area 안에 정확히 위치해야 함.
-                        // 머릿말 판단: area 높이가 본문 높이보다 훨씬 작음 (17mm vs 200+mm)
-                        let is_small_area = area.height < 200.0;
-                        let line_anchor_offset = if !is_small_area
+                        // 꼬리말은 Task #445에서 필요하므로 유지.
+                        let line_anchor_offset = if !is_header
                             && matches!(t.common.text_wrap, crate::model::shape::TextWrap::TopAndBottom)
                             && matches!(t.common.vert_rel_to, crate::model::shape::VertRelTo::Para)
                             && i == 0
@@ -966,6 +966,7 @@ impl LayoutEngine {
                                 bin_data_content,
                                 Some(hf_ref.source_section_index),
                                 Some(outer_ref),
+                                true,
                             );
                         }
                     }
@@ -1081,6 +1082,7 @@ impl LayoutEngine {
                                 bin_data_content,
                                 Some(hf_ref.source_section_index),
                                 Some(outer_ref),
+                                false,
                             );
                         }
                     }
