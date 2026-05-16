@@ -1227,6 +1227,8 @@ fn parse_picture(
     let mut shape_attr = ShapeComponentAttr::default();
     let mut crop = CropInfo::default();
     let mut padding = crate::model::Padding::default();
+    let mut border_x = [0i32; 4];
+    let mut border_y = [0i32; 4];
 
     // <hp:pic> 요소 자체의 속성 파싱
     for attr in e.attributes().flatten() {
@@ -1254,6 +1256,9 @@ fn parse_picture(
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref ce)) if local_name(ce.name().as_ref()) == b"imgRect" => {
+                parse_picture_img_rect(reader, &mut border_x, &mut border_y)?;
+            }
             Ok(Event::Start(ref ce)) | Ok(Event::Empty(ref ce)) => {
                 let cname = ce.name();
                 let local = local_name(cname.as_ref());
@@ -1460,6 +1465,12 @@ fn parse_picture(
                         // 그룹 내 자식의 아핀 변환 행렬 파싱
                         parse_rendering_info(reader, &mut shape_attr)?;
                     }
+                    b"flip" => {
+                        parse_shape_flip(ce, &mut shape_attr);
+                    }
+                    b"rotationInfo" => {
+                        parse_shape_rotation_info(ce, &mut shape_attr);
+                    }
                     _ => {}
                 }
             }
@@ -1476,7 +1487,7 @@ fn parse_picture(
         buf.clear();
     }
 
-    materialize_shape_current_size_from_original(&mut common, &mut shape_attr);
+    materialize_shape_hwp_storage_defaults(&mut common, &mut shape_attr, ShapeStorageKind::Picture);
 
     let mut pic = crate::model::image::Picture::default();
     pic.image_attr = img_attr;
@@ -1484,11 +1495,20 @@ fn parse_picture(
     pic.shape_attr = shape_attr;
     pic.crop = crop;
     pic.padding = padding;
+    pic.border_x = border_x;
+    pic.border_y = border_y;
 
     Ok(Control::Picture(Box::new(pic)))
 }
 
 // ─── 그리기 객체 공통 속성 파싱 ───
+
+#[derive(Clone, Copy)]
+enum ShapeStorageKind {
+    Picture,
+    Group,
+    Drawing,
+}
 
 /// HWPX 일부 샘플은 `<hp:curSz width="0" height="0">`를 기록하면서 실제 크기는
 /// `<hp:orgSz>`와 `renderingInfo` scale로 표현한다. HWP 저장/재로드 경로에서는
@@ -1509,6 +1529,45 @@ fn materialize_shape_current_size_from_original(
         if common.height == 0 {
             common.height = shape_attr.original_height;
         }
+    }
+}
+
+/// HWP SHAPE_COMPONENT 저장 경로가 기대하는 storage 전용 필드를 materialize한다.
+///
+/// HWPX에는 같은 정보가 `flip`, `rotationInfo`, `imgRect` 같은 XML 자식 요소로
+/// 분산되어 있다. 이 값을 SHAPE_COMPONENT 레코드 필드에 싣지 않으면 한컴은 그림/그룹
+/// 개체 이후의 레코드 스트림을 정상적으로 이어 읽지 못하는 케이스가 있다.
+fn materialize_shape_hwp_storage_defaults(
+    common: &mut CommonObjAttr,
+    shape_attr: &mut ShapeComponentAttr,
+    kind: ShapeStorageKind,
+) {
+    materialize_shape_current_size_from_original(common, shape_attr);
+
+    if shape_attr.local_file_version == 0
+        && (shape_attr.original_width > 0
+            || shape_attr.original_height > 0
+            || shape_attr.current_width > 0
+            || shape_attr.current_height > 0
+            || common.width > 0
+            || common.height > 0)
+    {
+        shape_attr.local_file_version = 1;
+    }
+
+    if shape_attr.flip == 0 {
+        let mut flip = match kind {
+            ShapeStorageKind::Picture => 0x2400_0000,
+            ShapeStorageKind::Group => 0x0009_0000,
+            ShapeStorageKind::Drawing => 0,
+        };
+        if shape_attr.horz_flip {
+            flip |= 0x01;
+        }
+        if shape_attr.vert_flip {
+            flip |= 0x02;
+        }
+        shape_attr.flip = flip;
     }
 }
 
@@ -1691,8 +1750,95 @@ fn parse_object_layout_child(
                 }
             }
         }
+        b"flip" => parse_shape_flip(ce, shape_attr),
+        b"rotationInfo" => parse_shape_rotation_info(ce, shape_attr),
         _ => {}
     }
+}
+
+fn parse_shape_flip(e: &quick_xml::events::BytesStart, shape_attr: &mut ShapeComponentAttr) {
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"horizontal" => shape_attr.horz_flip = parse_bool(&attr),
+            b"vertical" => shape_attr.vert_flip = parse_bool(&attr),
+            _ => {}
+        }
+    }
+
+    if shape_attr.flip != 0 {
+        if shape_attr.horz_flip {
+            shape_attr.flip |= 0x01;
+        } else {
+            shape_attr.flip &= !0x01;
+        }
+        if shape_attr.vert_flip {
+            shape_attr.flip |= 0x02;
+        } else {
+            shape_attr.flip &= !0x02;
+        }
+    }
+}
+
+fn parse_shape_rotation_info(
+    e: &quick_xml::events::BytesStart,
+    shape_attr: &mut ShapeComponentAttr,
+) {
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"angle" => shape_attr.rotation_angle = parse_i16(&attr),
+            b"centerX" => shape_attr.rotation_center.x = parse_i32(&attr),
+            b"centerY" => shape_attr.rotation_center.y = parse_i32(&attr),
+            _ => {}
+        }
+    }
+}
+
+fn parse_picture_img_rect(
+    reader: &mut Reader<&[u8]>,
+    border_x: &mut [i32; 4],
+    border_y: &mut [i32; 4],
+) -> Result<(), HwpxError> {
+    let mut pts = [(0i32, 0i32); 4];
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref ce)) | Ok(Event::Empty(ref ce)) => {
+                let index = match local_name(ce.name().as_ref()) {
+                    b"pt0" => Some(0),
+                    b"pt1" => Some(1),
+                    b"pt2" => Some(2),
+                    b"pt3" => Some(3),
+                    _ => None,
+                };
+                if let Some(index) = index {
+                    for attr in ce.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"x" => pts[index].0 = parse_i32(&attr),
+                            b"y" => pts[index].1 = parse_i32(&attr),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(ref ee)) => {
+                if local_name(ee.name().as_ref()) == b"imgRect" {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(HwpxError::XmlError(format!("imgRect: {}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    // HWP SHAPE_PICTURE 레코드는 HWPX 꼭짓점을 x/y 배열이 아니라 4개 스칼라씩
+    // 앞뒤로 나누어 저장한다. 한컴 변환 정답지와 같은 순서로 materialize한다.
+    *border_x = [pts[0].0, pts[0].1, pts[1].0, pts[1].1];
+    *border_y = [pts[2].0, pts[2].1, pts[3].0, pts[3].1];
+
+    Ok(())
 }
 
 /// `<hp:renderingInfo>` 파싱: 아핀 변환 행렬 합성 → shape_attr.render_*
@@ -2017,7 +2163,8 @@ fn parse_shape_object(
                 let cname = ce.name();
                 let local = local_name(cname.as_ref());
                 match local {
-                    b"sz" | b"curSz" | b"orgSz" | b"pos" | b"offset" | b"outMargin" => {
+                    b"sz" | b"curSz" | b"orgSz" | b"pos" | b"offset" | b"outMargin" | b"flip"
+                    | b"rotationInfo" => {
                         parse_object_layout_child(
                             local,
                             ce,
@@ -2096,7 +2243,7 @@ fn parse_shape_object(
         buf.clear();
     }
 
-    materialize_shape_current_size_from_original(&mut common, &mut shape_attr);
+    materialize_shape_hwp_storage_defaults(&mut common, &mut shape_attr, ShapeStorageKind::Drawing);
 
     let drawing = DrawingObjAttr {
         shape_attr,
@@ -2172,7 +2319,8 @@ fn parse_container(
                 let cname = ce.name();
                 let local = local_name(cname.as_ref());
                 match local {
-                    b"sz" | b"curSz" | b"orgSz" | b"pos" | b"offset" | b"outMargin" => {
+                    b"sz" | b"curSz" | b"orgSz" | b"pos" | b"offset" | b"outMargin" | b"flip"
+                    | b"rotationInfo" => {
                         parse_object_layout_child(
                             local,
                             ce,
@@ -2221,7 +2369,7 @@ fn parse_container(
         buf.clear();
     }
 
-    materialize_shape_current_size_from_original(&mut common, &mut shape_attr);
+    materialize_shape_hwp_storage_defaults(&mut common, &mut shape_attr, ShapeStorageKind::Group);
 
     let group = GroupShape {
         common,

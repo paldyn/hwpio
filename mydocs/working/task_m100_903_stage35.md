@@ -1,108 +1,194 @@
-# Task m100 #903 Stage 35
+# Task m100 #903 Stage 35 작업 기록
 
-## 1. 단계 목적
+## 1. 목적
 
-Stage 34 판정:
+Stage34에서 한컴 파일 읽기 오류의 남은 차이가 CFB stream 누락이 아니라
+`DocInfo`와 `BodyText` record payload 차이임을 확인했다.
 
-```text
-01 clean adapter: 파일 읽기 오류
-02 clean + section_count/ParaShape: 파일 읽기 오류
-03 clean + reference DocInfo: 파일 읽기 오류
-04 Stage27 baseline + section_count/ParaShape: 정상
-05 Stage27 baseline + reference DocInfo: 정상
-```
+Stage35는 그중 `DocInfo` 축만 먼저 분리한다.
 
-따라서 원인은 DocInfo가 아니라 Stage 27 baseline에 누적된 BodyText materialization이다.
-
-Stage 35는 Stage 27의 누적 materialization을 다음 블록으로 나누어 적용한다.
-
-## 2. 핵심 가설
-
-한컴 에디터가 파일을 읽지 못하는 원인은 clean adapter가 만드는 BodyText record 구조가 한컴이 기대하는 HWP record tuple과 일부 다르기 때문이다.
-
-검증할 축:
-
-- top-level paragraph record raw materialization
-- table/object full materialization
-- final region/section1 경계 materialization
-
-## 3. 산출물
+확인 대상:
 
 ```text
-output/poc/hwpx2hwp/task903/stage35_stage27_block_probe/
+1. HWPTAG_BIN_DATA metadata
+2. HWPTAG_PARA_SHAPE payload
 ```
 
-## 4. Variant 계획
+## 2. 기준 파일
 
-| variant | 적용 내용 | 목적 |
-|---|---|---|
-| 01_top_level_para_records_only | Stage 27에서 복사했던 top-level paragraph record만 적용 | 문단 record raw tuple만으로 읽기 오류가 사라지는지 확인 |
-| 02_table_object_records_only | Stage 27에서 복사했던 table/object full record만 적용 | 표/그림/묶음 object tuple만으로 읽기 오류가 사라지는지 확인 |
-| 03_para_plus_table_object_records | 01 + 02 | 문단/표 object tuple 조합이 필요한지 확인 |
-| 04_common_stage27_without_section1 | Stage 27 공통 baseline + final region table까지 적용, section1 제외 | 0구역 전체 BodyText가 충분한지 확인 |
-| 05_full_stage27_control | Stage 27 baseline 09와 동등한 전체 control | Stage34 04/05 정상 판정 재현 |
-
-모든 variant에는 Stage 30의 최소 안정화 축을 함께 적용한다.
+Positive:
 
 ```text
-section_count = 실제 section 수
-ParaShape = 정답 HWP 기준 재직렬화(no raw)
-FileHeader = compressed HWP
+output/poc/hwpx2hwp/task903/stage30_minimal_docinfo_probe/05_section_count_para_shapes_no_raw.hwp
 ```
 
-## 5. 작업지시자 판정 항목
-
-생성 명령:
-
-```bash
-cargo test --test hwpx_to_hwp_adapter task903_stage35_generate_stage27_block_probe_variants -- --nocapture
-```
-
-실행 결과:
+Failing baseline:
 
 ```text
-=> ok. 1 passed
-
-01_top_level_para_records_only.hwp: bytes=374272, changed=42, pages=9, section_count=2
-02_table_object_records_only.hwp: bytes=375808, changed=30, pages=9, section_count=2
-03_para_plus_table_object_records.hwp: bytes=375808, changed=72, pages=9, section_count=2
-04_common_stage27_without_section1.hwp: bytes=375808, changed=73, pages=9, section_count=2
-05_full_stage27_control.hwp: bytes=375808, changed=74, pages=9, section_count=2
+output/poc/hwpx2hwp/task903/stage33_shape_attr_probe/01_shape_common_attr_only.hwp
 ```
+
+출력 폴더:
 
 ```text
-- 한컴 에디터 파일 읽기 오류/파일손상/정상 여부
-- 출력 페이지 수: 8페이지에서 멈추는지, 9페이지까지 출력되는지
-- 표/셀 배치가 정상인지
-- 꼬리말 페이지수 색이 기존 결함인 빨간색인지, 정상 검정색인지
-- rhwp-studio에서 9페이지로 재로드되는지
+output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/
 ```
 
-판정 기록:
+## 3. 생성 파일
 
-| variant | 한컴 판정 유형 | 한컴 출력 페이지 | 마지막 페이지 출력 | 표/셀 배치 | 꼬리말 페이지수 색 | rhwp-studio 판정 | 비고 |
+```text
+output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/01_bin_data_model_fields_only.hwp
+output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/02_bin_data_raw_records_only.hwp
+output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/03_para_shape_model_fields_no_raw.hwp
+output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/04_para_shape_raw_records_only.hwp
+output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/05_bin_data_model_plus_para_shape_model.hwp
+output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/06_bin_data_raw_plus_para_shape_raw.hwp
+```
+
+## 4. 내부 검증
+
+생성 테스트:
+
+```text
+cargo test --test hwpx_to_hwp_adapter task903_stage35_generate_docinfo_payload_probe_variants -- --nocapture
+```
+
+결과:
+
+```text
+test task903_stage35_generate_docinfo_payload_probe_variants ... ok
+```
+
+모든 파일은 rhwp 재로드 기준 9페이지다.
+
+| variant | bytes | rhwp reload |
+|---|---:|---|
+| 01_bin_data_model_fields_only | 374272 | ok, pages=9 |
+| 02_bin_data_raw_records_only | 374272 | ok, pages=9 |
+| 03_para_shape_model_fields_no_raw | 374272 | ok, pages=9 |
+| 04_para_shape_raw_records_only | 374272 | ok, pages=9 |
+| 05_bin_data_model_plus_para_shape_model | 374272 | ok, pages=9 |
+| 06_bin_data_raw_plus_para_shape_raw | 374272 | ok, pages=9 |
+
+해시:
+
+| variant | sha256 |
+|---|---|
+| 01_bin_data_model_fields_only | `e411578415e43f3cc64a9b4296ff77c771d330b55c107c2ce35f36ecd372fd6c` |
+| 02_bin_data_raw_records_only | `e411578415e43f3cc64a9b4296ff77c771d330b55c107c2ce35f36ecd372fd6c` |
+| 03_para_shape_model_fields_no_raw | `26f070169b5b690df07235d7e85273835eb76755a30dfb194193e14c35e21e89` |
+| 04_para_shape_raw_records_only | `26f070169b5b690df07235d7e85273835eb76755a30dfb194193e14c35e21e89` |
+| 05_bin_data_model_plus_para_shape_model | `3c3d33ab370a3a2629e0fd2bce1065a71ea14d3b18cb068253f52896a3a6b4ee` |
+| 06_bin_data_raw_plus_para_shape_raw | `3c3d33ab370a3a2629e0fd2bce1065a71ea14d3b18cb068253f52896a3a6b4ee` |
+
+관찰:
+
+```text
+01 == 02
+03 == 04
+05 == 06
+```
+
+즉 현재 serializer 기준에서는 positive의 모델 필드만 복사해도 positive raw record payload와 동일한 바이트를 만든다.
+DocInfo의 `BIN_DATA`와 `PARA_SHAPE`에 한해서는 raw_data 복사가 별도 효과를 만들지 않았다.
+
+대표 variant IR 비교:
+
+```text
+target/debug/rhwp ir-diff \
+  output/poc/hwpx2hwp/task903/stage35_docinfo_payload_probe/05_bin_data_model_plus_para_shape_model.hwp \
+  output/poc/hwpx2hwp/task903/stage30_minimal_docinfo_probe/05_section_count_para_shapes_no_raw.hwp \
+  --summary
+```
+
+결과:
+
+```text
+=== 비교 완료: 차이 0 건 ===
+```
+
+## 5. 작업지시자 판정 요청
+
+| variant | 한컴 판정 유형 | 한컴 출력 위치 | 마지막 페이지 출력 | 표/셀 배치 | 이미지 출력 | rhwp-studio 판정 | 비고 |
 |---|---|---|---|---|---|---|---|
-| 01_top_level_para_records_only | 파일 읽기 오류 |  |  |  |  |  |  |
-| 02_table_object_records_only | 정상 | 정상 | 정상 |  |  |  |  |
-| 03_para_plus_table_object_records | 정상 | 정상 | 정상 |  |  |  |  |
-| 04_common_stage27_without_section1 | 정상 | 정상 | 정상 |  |  |  |  |
-| 05_full_stage27_control | 정상 | 정상 | 정상 |  |  |  |  |
+| 01_bin_data_model_fields_only | 파일 읽기 오류 | 실패 | 실패 | 실패 | 성공 | 성공 | rhwp-studio 이미지 렌더링 버그 |
+| 02_bin_data_raw_records_only | 파일 읽기 오류 | 실패 | 실패 | 실패 | 성공 | 성공 | rhwp-studio 이미지 렌더링 버그 |
+| 03_para_shape_model_fields_no_raw | 파일 읽기 오류 | 실패 | 실패 | 실패 | 실패 | 성공 | rhwp-studio 이미지 렌더링 하지 않음 |
+| 04_para_shape_raw_records_only | 파일 읽기 오류 | 실패 | 실패 | 실패 | 실패 | 성공 | rhwp-studio 이미지 렌더링 하지 않음 |
+| 05_bin_data_model_plus_para_shape_model | 파일 읽기 오류 | 실패 | 실패 | 실패 | 성공 | 성공 | rhwp-studio 이미지 렌더링 버그 |
+| 06_bin_data_raw_plus_para_shape_raw | 파일 읽기 오류 | 실패 | 실패 | 실패 | 성공 | 성공 | rhwp-studio 이미지 렌더링 버그 |
 
-## 6. 해석 기준
+추가 관찰:
 
-- 01만 정상: top-level paragraph record materialization이 핵심.
-- 02만 정상: table/object full tuple이 핵심.
-- 03부터 정상: 문단 record와 table/object tuple의 조합이 필요.
-- 04부터 정상: final region 또는 0구역 후반 경계가 필요.
-- 05만 정상: section1 시작 경계 또는 final region + section1 조합이 필요.
+```text
+- 1페이지 표 안의 이미지 2개 중 1개만 렌더링된다.
+- 2페이지 이미지 개체 묶기가 처리되지 않는다.
+```
 
-실제 판정:
+판정 포인트:
 
-- 01만 파일 읽기 오류.
-- 02/03/04/05는 정상.
+```text
+- 01/02에서 rhwp-studio 이미지 렌더링이 회복되는지
+- 03/04에서 표/셀 배치가 회복되는지
+- 05/06에서 한컴 파일 읽기 오류가 사라지는지
+```
 
-결론:
+## 6. 현재 해석
 
-- top-level paragraph record raw materialization은 한컴 파일 읽기 오류 해결에 필요하지 않다.
-- Stage35의 `table/object records only` bundle만으로 한컴 호환성이 회복된다.
-- 다음 단계는 Stage35 02 bundle 내부를 table/object 그룹별로 더 분해한다.
+Stage35가 한컴 파일 읽기 오류를 해결하지 못하면,
+DocInfo의 `BIN_DATA`와 `PARA_SHAPE`만으로는 부족하다는 뜻이다.
+
+그 경우 Stage34에서 관찰된 BodyText record payload 차이로 이동한다.
+
+우선 후보:
+
+```text
+- CTRL_HEADER 47/246 bytes vs 28/46 bytes
+- LIST_HEADER 65/47 bytes vs 34 bytes
+- PARA_HEADER 24 bytes vs 22 bytes
+```
+
+## 7. 판정 해석
+
+Stage35 판정으로 다음을 확정한다.
+
+```text
+1. DocInfo BIN_DATA payload만 보정해도 한컴 파일 읽기 오류는 사라지지 않는다.
+2. DocInfo ParaShape payload만 보정해도 한컴 파일 읽기 오류는 사라지지 않는다.
+3. BIN_DATA + ParaShape를 함께 보정해도 한컴 파일 읽기 오류는 사라지지 않는다.
+4. 따라서 한컴 파일 읽기 오류의 직접 원인은 DocInfo 단독이 아니라 BodyText record payload 차이에 있다.
+```
+
+rhwp-studio 이미지 렌더링은 `BIN_DATA` 보정 여부에 영향을 받는다.
+
+```text
+BIN_DATA 보정 있음: 1페이지 표 안 이미지 2개 중 1개만 렌더링
+BIN_DATA 보정 없음: 이미지 렌더링 하지 않음
+```
+
+따라서 이미지 문제는 두 층으로 나뉜다.
+
+```text
+1. DocInfo BIN_DATA metadata: 일부 이미지 참조 회복에 필요
+2. BodyText shape/group picture payload: 남은 이미지/묶음 개체 렌더링에 필요
+```
+
+다음 단계는 BodyText record payload를 좁혀야 한다.
+
+Stage34에서 이미 확인한 우선 후보:
+
+```text
+1. CTRL_HEADER 확장 payload
+   - positive: 47/246 bytes
+   - failing: 28/46 bytes
+
+2. LIST_HEADER 확장 payload
+   - positive: 65/47 bytes
+   - failing: 34 bytes
+
+3. PARA_HEADER extra payload
+   - positive: 24 bytes
+   - failing: 22 bytes
+```
+
+Stage36은 이 세 축을 분리한다.

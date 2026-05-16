@@ -515,8 +515,13 @@ fn parse_para_shape_child(
     match local {
         b"align" => {
             for attr in ce.attributes().flatten() {
-                if attr.key.as_ref() == b"horizontal" {
-                    ps.alignment = parse_alignment(&attr);
+                match attr.key.as_ref() {
+                    b"horizontal" => ps.alignment = parse_alignment(&attr),
+                    b"vertical" => {
+                        ps.attr1 = (ps.attr1 & !(0x03 << 20))
+                            | (parse_vertical_alignment_bits(&attr) << 20);
+                    }
+                    _ => {}
                 }
             }
             ParaShapeChildKind::Other
@@ -597,17 +602,9 @@ fn parse_para_shape_child(
             ParaShapeChildKind::Other
         }
         b"autoSpacing" => {
-            for attr in ce.attributes().flatten() {
-                match attr.key.as_ref() {
-                    b"eAsianEng" => if parse_bool(&attr) {
-                        ps.attr1 |= 1 << 20;
-                    },
-                    b"eAsianNum" => if parse_bool(&attr) {
-                        ps.attr1 |= 1 << 21;
-                    },
-                    _ => {}
-                }
-            }
+            // HWPX autoSpacing은 HWP ParaShape.attr1 bits 20..21이 아니다.
+            // 해당 비트는 문단 세로 정렬이며, <align vertical="...">에서 채운다.
+            // autoSpacing의 HWP 저장 위치는 별도 검증 전까지 attr1에 반영하지 않는다.
             ParaShapeChildKind::Other
         }
         b"switch" => ParaShapeChildKind::Switch,
@@ -1231,6 +1228,16 @@ fn parse_alignment(attr: &quick_xml::events::attributes::Attribute) -> Alignment
     }
 }
 
+fn parse_vertical_alignment_bits(attr: &quick_xml::events::attributes::Attribute) -> u32 {
+    match attr_str(attr).as_str() {
+        "TOP" => 1,
+        "CENTER" => 2,
+        "BOTTOM" => 3,
+        "BASELINE" => 0,
+        _ => 0,
+    }
+}
+
 fn parse_border_line_type(attr: &quick_xml::events::attributes::Attribute) -> BorderLineType {
     match attr_str(attr).as_str() {
         "NONE" => BorderLineType::None,
@@ -1310,6 +1317,20 @@ mod tests {
             for attr in e.attributes().flatten() {
                 if attr.key.as_ref() == b"horizontal" {
                     assert_eq!(parse_alignment(&attr), Alignment::Center);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_parse_vertical_alignment_bits() {
+        let xml = r#"<e vertical="CENTER"/>"#;
+        let mut reader = Reader::from_str(xml);
+        let mut buf = Vec::new();
+        if let Ok(Event::Empty(ref e)) = reader.read_event_into(&mut buf) {
+            for attr in e.attributes().flatten() {
+                if attr.key.as_ref() == b"vertical" {
+                    assert_eq!(parse_vertical_alignment_bits(&attr), 2);
                 }
             }
         }

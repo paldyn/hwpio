@@ -1,101 +1,215 @@
-# Task m100 #903 Stage 34
+# Task m100 #903 Stage 34 작업 기록
 
-## 1. 단계 목적
+## 1. 목적
 
-Stage 33에서 TABLE attr/payload 3개 variant가 모두 한컴 에디터에서 파일 읽기 실패로 판정되었다.
+Stage33에서 `01_shape_common_attr_only.hwp`는 Stage30 positive control과 `ir-diff --summary` 기준 0건 차이였지만,
+한컴 에디터에서는 여전히 파일 읽기 오류였다.
 
-이 결과는 Stage 31 이후의 clean adapter 산출물과 Stage 30 성공 판정을 직접 연결한 접근이 잘못되었음을 의미한다.
+Stage34는 IR 비교를 중단하고, 같은 IR처럼 보이는 두 HWP 파일의 CFB/stream/record payload 차이를 확인한다.
 
-핵심 재정렬:
+## 2. 비교 대상
 
-- Stage 30 성공 판정은 clean adapter 산출물이 아니라 Stage 27 baseline 위에서 만든 probe였다.
-- Stage 27 baseline에는 여러 BodyText object/table/paragraph raw materialization이 이미 들어가 있었다.
-- 따라서 먼저 Stage 30 계열의 성공 조건이 현재 코드에서도 재현되는지 확인해야 한다.
-
-## 2. 산출물
+정상 positive:
 
 ```text
-output/poc/hwpx2hwp/task903/stage34_baseline_reconcile/
+output/poc/hwpx2hwp/task903/stage30_minimal_docinfo_probe/05_section_count_para_shapes_no_raw.hwp
 ```
 
-## 3. Variant
-
-| variant | 목적 |
-|---|---|
-| 01_clean_adapter_compressed | 현재 clean HWPX -> adapter -> compressed HWP 기준선 |
-| 02_clean_adapter_plus_section_count_para_shapes_no_raw | clean adapter에 Stage 30 최소 성공 축(`section_count + ParaShape`)만 적용 |
-| 03_clean_adapter_plus_reference_docinfo_no_raw | clean adapter에 정답 HWP DocInfo 모델 전체를 재직렬화 적용 |
-| 04_stage27_baseline_plus_section_count_para_shapes_no_raw | Stage 27 baseline에 Stage 30 최소 성공 축을 재적용한 control |
-| 05_stage27_baseline_plus_reference_docinfo_no_raw | Stage 27 baseline에 정답 HWP DocInfo 모델 전체를 재직렬화 적용한 control |
-
-## 4. 생성 명령
-
-```bash
-cargo test --test hwpx_to_hwp_adapter task903_stage34_generate_baseline_reconcile_variants -- --nocapture
-```
-
-실행 결과:
+실패 candidate:
 
 ```text
-=> ok. 1 passed
-
-01_clean_adapter_compressed.hwp: bytes=374272, pages=9, section_count=2
-02_clean_adapter_plus_section_count_para_shapes_no_raw.hwp: bytes=374272, pages=9, section_count=2
-03_clean_adapter_plus_reference_docinfo_no_raw.hwp: bytes=375808, pages=9, section_count=2
-04_stage27_baseline_plus_section_count_para_shapes_no_raw.hwp: bytes=375808, pages=9, section_count=2
-05_stage27_baseline_plus_reference_docinfo_no_raw.hwp: bytes=377344, pages=9, section_count=2
+output/poc/hwpx2hwp/task903/stage33_shape_attr_probe/01_shape_common_attr_only.hwp
 ```
 
-## 5. 작업지시자 판정 요청
+## 3. 산출물
 
-다음 파일을 한컴 에디터와 rhwp-studio에서 판정한다.
+진단 리포트:
 
 ```text
-output/poc/hwpx2hwp/task903/stage34_baseline_reconcile/01_clean_adapter_compressed.hwp
-output/poc/hwpx2hwp/task903/stage34_baseline_reconcile/02_clean_adapter_plus_section_count_para_shapes_no_raw.hwp
-output/poc/hwpx2hwp/task903/stage34_baseline_reconcile/03_clean_adapter_plus_reference_docinfo_no_raw.hwp
-output/poc/hwpx2hwp/task903/stage34_baseline_reconcile/04_stage27_baseline_plus_section_count_para_shapes_no_raw.hwp
-output/poc/hwpx2hwp/task903/stage34_baseline_reconcile/05_stage27_baseline_plus_reference_docinfo_no_raw.hwp
+output/poc/hwpx2hwp/task903/stage34_stream_compare/stage34_stream_compare.md
 ```
 
-판정 항목:
+생성 테스트:
 
 ```text
-- 한컴 에디터 파일 읽기 오류/파일손상/정상 여부
-- 출력 페이지 수: 8페이지에서 멈추는지, 9페이지까지 출력되는지
-- 표/셀 배치가 정상인지
-- 꼬리말 페이지수 색이 기존 결함인 빨간색인지, 정상 검정색인지
-- rhwp-studio에서 9페이지로 재로드되는지
+cargo test --test hwpx_to_hwp_adapter task903_stage34_compare_streams_for_ir_equal_files -- --nocapture
 ```
 
-판정 기록:
+결과:
 
-| variant | 한컴 판정 유형 | 한컴 출력 페이지 | 마지막 페이지 출력 | 표/셀 배치 | 꼬리말 페이지수 색 | rhwp-studio 판정 | 비고 |
-|---|---|---|---|---|---|---|---|
-| 01_clean_adapter_compressed | 파일 읽기 오류 |  |  |  |  |  |  |
-| 02_clean_adapter_plus_section_count_para_shapes_no_raw | 파일 읽기 오류 |  |  |  |  |  |  |
-| 03_clean_adapter_plus_reference_docinfo_no_raw | 파일 읽기 오류 |  |  |  |  |  |  |
-| 04_stage27_baseline_plus_section_count_para_shapes_no_raw | 정상 | 정상 | 정상 |  |  |  |  |
-| 05_stage27_baseline_plus_reference_docinfo_no_raw | 정상 | 정상 | 정상 |  |  |  |  |
+```text
+test task903_stage34_compare_streams_for_ir_equal_files ... ok
+```
 
-## 6. 해석 기준
+## 4. 파일/스트림 요약
 
-예상 해석:
+| role | bytes | flags | compressed |
+|---|---:|---:|---|
+| Stage30 positive | 375808 | `0x00000001` | true |
+| Stage33 failing | 374272 | `0x00000001` | true |
 
-- 04/05가 정상이고 01~03이 실패하면, clean adapter BodyText/object materialization이 아직 Stage 27 baseline 수준에 도달하지 못한 것이다.
-- 04/05도 실패하면, Stage 30 성공 조건이 현재 코드에서 재현되지 않는 것이므로 이전 성공 기준선부터 다시 고정해야 한다.
-- 03이 정상이고 01/02가 실패하면, clean adapter의 주 원인은 BodyText보다 DocInfo 계열이다.
+CFB stream 목록:
 
-실제 판정:
+```text
+positive streams: 9
+failing streams: 9
+union: 9
+```
 
-- 01/02/03은 모두 파일 읽기 오류.
-- 04/05는 정상.
+동일한 stream:
 
-결론:
+```text
+/FileHeader
+/BinData/BIN0001.jpg
+/BinData/BIN0002.png
+/BinData/BIN0003.jpg
+/BinData/BIN0004.jpg
+/BinData/BIN0005.jpg
+```
 
-- FileHeader/압축 축 아님.
-- DocInfo 단독 축 아님.
-- `section_count + ParaShape` 단독 축도 아님.
-- Stage 27 baseline에 누적되어 있던 BodyText object/table/paragraph materialization 중 하나 이상의 블록이 한컴 호환성 회복에 필요하다.
+다른 stream:
 
-다음 단계는 Stage 27 baseline의 누적 materialization을 블록 단위로 분리한다.
+```text
+/DocInfo
+/BodyText/Section0
+/BodyText/Section1
+```
+
+## 5. 중요한 관찰
+
+### 5.1 CFB 컨테이너/stream 누락 문제는 아니다
+
+두 파일은 같은 stream 목록을 갖는다.
+`FileHeader`도 동일하고 압축 플래그도 동일하다.
+
+```text
+FileHeader: same bytes
+flags: 0x00000001
+compressed: true
+```
+
+따라서 Stage33 실패는 CFB stream 누락, FileHeader flags, compressed bit 문제가 아니다.
+
+### 5.2 BinData 실제 이미지 바이트는 동일하다
+
+모든 `/BinData/BINxxxx.ext` stream은 바이트 단위로 동일했다.
+
+```text
+/BinData/BIN0001.jpg same
+/BinData/BIN0002.png same
+/BinData/BIN0003.jpg same
+/BinData/BIN0004.jpg same
+/BinData/BIN0005.jpg same
+```
+
+따라서 rhwp-studio의 이미지 렌더링 실패는 실제 이미지 stream 손상이 아니라,
+DocInfo의 `HWPTAG_BIN_DATA` metadata 또는 BodyText의 그림 참조 payload 문제로 보는 것이 맞다.
+
+### 5.3 DocInfo는 record 수는 같지만 payload가 다르다
+
+압축 해제 후:
+
+| stream | positive bytes | failing bytes | positive records | failing records |
+|---|---:|---:|---:|---:|
+| `/DocInfo` | 26474 | 26474 | 523 | 523 |
+
+차이:
+
+```text
+DocInfo record count는 같다.
+하지만 BIN_DATA 5개와 PARA_SHAPE 다수의 data payload가 다르다.
+```
+
+주요 차이:
+
+```text
+records 2~6: BIN_DATA data byte0 = positive 0x01, failing 0x00
+records 380~: PARA_SHAPE data payload 다수 차이
+```
+
+해석:
+
+```text
+1. HWPX -> HWP 경로에서 BinData metadata가 HWP 저장 기대값과 다르다.
+2. Stage30에서 정상화된 ParaShape는 ir-diff가 보던 일부 필드보다 더 넓은 payload 차이를 갖는다.
+```
+
+### 5.4 BodyText는 record 수는 같지만 compact payload로 재생성되고 있다
+
+압축 해제 후:
+
+| stream | positive bytes | failing bytes | positive records | failing records |
+|---|---:|---:|---:|---:|
+| `/BodyText/Section0` | 225296 | 216725 | 7879 | 7879 |
+| `/BodyText/Section1` | 3994 | 3928 | 88 | 88 |
+
+대표 차이:
+
+```text
+Section0 record 4:  CTRL_HEADER 47 bytes vs 28 bytes
+Section0 record 15: LIST_HEADER 65 bytes vs 34 bytes
+Section0 record 16: PARA_HEADER 24 bytes vs 22 bytes
+Section0 record 20: CTRL_HEADER 246 bytes vs 46 bytes
+Section0 record 21: SHAPE_COMPONENT same size but data differs
+Section0 record 22: SHAPE_PICTURE same size but data differs
+```
+
+해석:
+
+```text
+Stage33 failing은 모델에서 재직렬화된 compact payload를 쓴다.
+Stage30 positive는 한컴 정답지 기반 graft 단계의 raw-tail/확장 payload가 남아 있다.
+ir-diff는 이 raw-tail/확장 payload를 비교하지 않으므로 0건으로 보였지만, 한컴은 이 차이를 읽기 단계에서 민감하게 본다.
+```
+
+## 6. Stage33 결론 보정
+
+Stage33에서 “IR diff 0”이라는 말은 정확하지만 충분하지 않았다.
+
+정확한 표현은 다음이다.
+
+```text
+현재 ir-diff가 비교하는 IR 필드 기준으로는 0건이다.
+하지만 HWP record payload 기준으로는 DocInfo/BodyText가 다르다.
+```
+
+따라서 Stage34 이후부터는 다음을 별도 축으로 둔다.
+
+```text
+1. 모델 IR 필드 차이
+2. HWP record payload 차이
+3. raw_data/raw_extra 보존 또는 합성 차이
+```
+
+## 7. 다음 단계 후보
+
+Stage35에서는 무작정 광범위 probe를 만들지 않는다.
+Stage34에서 실제로 갈라진 축만 분리한다.
+
+우선순위:
+
+```text
+1. DocInfo BIN_DATA metadata 보정
+   - 실제 BinData stream은 같지만 HWPTAG_BIN_DATA record payload가 다르다.
+   - rhwp-studio 이미지 렌더링 실패와 직접 연결될 가능성이 높다.
+
+2. DocInfo ParaShape payload 보정
+   - Stage30의 "ParaShape" 정상화는 ir-diff 비교 범위보다 넓은 payload를 포함한다.
+   - HWPX paraPr/margin 파싱만으로 충분한지 재검증해야 한다.
+
+3. BodyText raw-tail/확장 payload 보존 또는 합성
+   - CTRL_HEADER, LIST_HEADER, PARA_HEADER의 compact 재직렬화가 positive와 다르다.
+   - 특히 LIST_HEADER 65/47 vs 34, CTRL_HEADER 47/246 vs 28/46 차이는 한컴 읽기 오류 후보이다.
+```
+
+Stage35의 첫 probe는 다음처럼 좁히는 것이 합리적이다.
+
+```text
+A. Stage33 failing + positive DocInfo BIN_DATA record payload만 graft
+B. Stage33 failing + positive DocInfo ParaShape payload만 graft
+C. Stage33 failing + A+B
+D. Stage33 failing + positive BodyText Section0/1 header-tail class payload 일부
+```
+
+단, D는 구현 가능성이 낮은 reference graft이므로 A/B/C를 먼저 판정한다.
+
