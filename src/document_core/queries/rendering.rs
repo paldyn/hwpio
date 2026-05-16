@@ -1227,7 +1227,7 @@ impl DocumentCore {
         // 벡터 크기 동기화
         let sec_count = self.document.sections.len();
         while self.pagination.len() < sec_count {
-            self.pagination.push(PaginationResult { pages: Vec::new(), wrap_around_paras: Vec::new(), hidden_empty_paras: std::collections::HashSet::new() });
+            self.pagination.push(PaginationResult { pages: Vec::new(), wrap_around_paras: Vec::new(), hidden_empty_paras: std::collections::HashSet::new(), endnotes: Vec::new() });
         }
         self.pagination.truncate(sec_count);
         while self.para_column_map.len() < sec_count {

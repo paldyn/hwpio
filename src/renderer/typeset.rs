@@ -20,7 +20,7 @@ use crate::renderer::style_resolver::ResolvedStyleSet;
 use crate::renderer::{hwpunit_to_px, DEFAULT_DPI};
 use super::pagination::{
     PaginationResult, PageContent, ColumnContent, PageItem,
-    HeaderFooterRef, FootnoteRef, FootnoteSource,
+    HeaderFooterRef, FootnoteRef, FootnoteSource, EndnoteRef,
 };
 
 // ========================================================
@@ -132,6 +132,8 @@ struct TypesetState {
     hidden_empty_page_idx: usize,
     /// [Task #362] hide_empty_line 으로 감춘 paragraph 인덱스 (PaginationResult 에 포함).
     hidden_empty_paras: std::collections::HashSet<usize>,
+    /// [Task #836] 미주 목록 (섹션별 수집, 문서 끝에 렌더).
+    endnotes: Vec<EndnoteRef>,
     /// [Task #362] Square wrap 표의 column_start (HU). -1 = 비활성. 후속 같은 cs/sw paragraph 흡수용.
     wrap_around_cs: i32,
     /// [Task #362] Square wrap 표의 segment_width (HU). -1 = 비활성.
@@ -198,6 +200,7 @@ impl TypesetState {
             hidden_empty_lines: 0,
             hidden_empty_page_idx: usize::MAX,
             hidden_empty_paras: std::collections::HashSet::new(),
+            endnotes: Vec::new(),
             wrap_around_cs: -1,
             wrap_around_sw: -1,
             wrap_around_table_para: 0,
@@ -1025,6 +1028,15 @@ impl TypesetEngine {
                             st.add_footnote_height(fn_height);
                         }
                     }
+                    Control::Endnote(en_ctrl) => {
+                        // [Task #836] 미주 수집 — 문서 끝에 모아서 렌더
+                        st.endnotes.push(EndnoteRef {
+                            number: en_ctrl.number,
+                            section_index,
+                            para_index: para_idx,
+                            control_index: ctrl_idx,
+                        });
+                    }
                     _ => {}
                 }
             }
@@ -1042,7 +1054,7 @@ impl TypesetEngine {
             &new_page_numbers, &page_hides, section_index,
         );
 
-        PaginationResult { pages: st.pages, wrap_around_paras: Vec::new(), hidden_empty_paras: st.hidden_empty_paras }
+        PaginationResult { pages: st.pages, wrap_around_paras: Vec::new(), hidden_empty_paras: st.hidden_empty_paras, endnotes: st.endnotes }
     }
 
     // ========================================================
