@@ -1052,12 +1052,43 @@ impl TypesetEngine {
         // 미주 paragraphs를 endnote_paragraphs Vec에 모으고, ENDNOTE_PARA_BASE 이상 인덱스로 마킹
         if !st.endnotes.is_empty() {
             let endnote_refs: Vec<EndnoteRef> = st.endnotes.clone();
+            // 본문 마지막 paragraph의 vpos 끝 위치 계산
+            let mut vpos_offset: i32 = paragraphs.last()
+                .and_then(|p| p.line_segs.last())
+                .map(|ls| ls.vertical_pos + ls.line_height + ls.line_spacing)
+                .unwrap_or(0);
+
             for en_ref in &endnote_refs {
                 if let Some(para) = paragraphs.get(en_ref.para_index) {
                     if let Some(Control::Endnote(en_ctrl)) = para.controls.get(en_ref.control_index) {
-                        for en_para in en_ctrl.paragraphs.iter() {
+                        // endnote 단위로 시작점 결정
+                        let endnote_start = vpos_offset;
+                        for (ep_idx, en_para) in en_ctrl.paragraphs.iter().enumerate() {
                             let en_para_idx = paragraphs.len() + st.endnote_paragraphs.len();
-                            st.endnote_paragraphs.push(en_para.clone());
+                            let mut en_para_copy = en_para.clone();
+                            // line_segs vpos를 endnote 시작점 기준으로 오프셋
+                            for ls in &mut en_para_copy.line_segs {
+                                ls.vertical_pos += endnote_start;
+                            }
+                            // 첫 paragraph에 미주 번호 prepend ("문N) ")
+                            if ep_idx == 0 {
+                                let prefix = format!("문{}) ", en_ref.number);
+                                en_para_copy.text = format!("{}{}", prefix, en_para_copy.text);
+                                en_para_copy.char_count += prefix.encode_utf16().count() as u32;
+                                let shift = prefix.encode_utf16().count() as u32;
+                                for off in &mut en_para_copy.char_offsets {
+                                    *off += shift;
+                                }
+                                let mut new_offsets: Vec<u32> = (0..shift).collect();
+                                new_offsets.extend_from_slice(&en_para_copy.char_offsets);
+                                en_para_copy.char_offsets = new_offsets;
+                            }
+                            // endnote 끝 위치 추적
+                            if let Some(last_ls) = en_para.line_segs.last() {
+                                let end = endnote_start + last_ls.vertical_pos + last_ls.line_height + last_ls.line_spacing;
+                                if end > vpos_offset { vpos_offset = end; }
+                            }
+                            st.endnote_paragraphs.push(en_para_copy);
 
                             let composed = crate::renderer::composer::compose_paragraph(en_para);
                             let fmt = self.format_paragraph(en_para, Some(&composed), &styles);
