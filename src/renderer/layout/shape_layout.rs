@@ -22,6 +22,7 @@ fn measure_composed_text_range_width(
     styles: &ResolvedStyleSet,
     start: usize,
     end: usize,
+    space_advance_override: Option<f64>,
 ) -> f64 {
     if start >= end {
         return 0.0;
@@ -47,6 +48,14 @@ fn measure_composed_text_range_width(
                     .skip(seg_start - run_start)
                     .take(seg_end - seg_start)
                     .collect();
+                if let Some(space_advance) = space_advance_override {
+                    let space_count = seg_text.chars().filter(|&ch| ch == ' ').count();
+                    if space_count > 0 && seg_text.chars().all(|ch| ch == ' ') {
+                        width += space_advance * space_count as f64;
+                        run_start = run_end;
+                        continue;
+                    }
+                }
                 let mut style = resolved_to_text_style(styles, run.char_style_id, run.lang_index);
                 style.default_tab_width = tab_width;
                 width += estimate_text_width(&seg_text, &style);
@@ -57,6 +66,55 @@ fn measure_composed_text_range_width(
     }
 
     width
+}
+
+fn textbox_tac_space_advance_override(
+    para: &Paragraph,
+    composed: &ComposedParagraph,
+    total_inline_width: f64,
+    alignment: Alignment,
+    dpi: f64,
+) -> Option<f64> {
+    if !matches!(alignment, Alignment::Left) || total_inline_width <= 0.0 {
+        return None;
+    }
+
+    let first_line = composed.lines.first()?;
+    let mut space_count = 0usize;
+    let mut has_non_space_text = false;
+    for run in &first_line.runs {
+        for ch in run.text.chars() {
+            if ch == ' ' {
+                space_count += 1;
+            } else {
+                has_non_space_text = true;
+            }
+        }
+    }
+    if space_count == 0 || has_non_space_text {
+        return None;
+    }
+
+    let line_width_hu = para
+        .line_segs
+        .first()
+        .map(|seg| seg.segment_width)
+        .unwrap_or(first_line.segment_width);
+    if line_width_hu <= 0 {
+        return None;
+    }
+
+    // HWPX 글상자 안의 TAC 그림 사이 공백은 직접 run charPr의 음수 자간으로
+    // 압축하지 않고, 문단 스타일(예: 바탕글)로 이미 조판된 lineSeg 폭을 따른다.
+    // 순수 공백 + TAC 컨트롤만 있는 라인은 lineSeg.horzsize가 한컴의 공백
+    // advance 계약값이므로, 남은 폭을 공백 개수로 나눠 사용한다.
+    let line_width = hwpunit_to_px(line_width_hu, dpi);
+    let remaining = line_width - total_inline_width;
+    if remaining > 0.0 {
+        Some(remaining / space_count as f64)
+    } else {
+        None
+    }
 }
 
 impl LayoutEngine {
@@ -1576,6 +1634,18 @@ impl LayoutEngine {
                 _ => inner_area.x,
             };
 
+            let space_advance_override = if pi < composed_paras.len() {
+                textbox_tac_space_advance_override(
+                    para,
+                    &composed_paras[pi],
+                    total_inline_width,
+                    para_alignment,
+                    self.dpi,
+                )
+            } else {
+                None
+            };
+
             let control_text_positions = para.control_text_positions();
             let mut text_cursor = 0usize;
 
@@ -1591,6 +1661,7 @@ impl LayoutEngine {
                             styles,
                             text_cursor,
                             ctrl_text_pos,
+                            space_advance_override,
                         );
                         text_cursor = ctrl_text_pos;
                     }

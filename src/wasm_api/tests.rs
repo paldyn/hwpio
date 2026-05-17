@@ -12046,12 +12046,14 @@
                 .iter()
                 .find_map(|(id, x)| (*id == 3).then_some(*x))
                 .expect("BinData 3 should be rendered");
+            let gap = image3_x - image2_x;
             assert!(
-                image3_x > image2_x + 300.0,
-                "{}: text box TAC pictures should preserve text advance between controls (x2={:.1}, x3={:.1})",
+                (525.0..=550.0).contains(&gap),
+                "{}: text box TAC pictures should preserve Hancom-width space advance between controls (x2={:.1}, x3={:.1}, gap={:.1})",
                 path,
                 image2_x,
-                image3_x
+                image3_x,
+                gap
             );
         }
 
