@@ -11977,12 +11977,12 @@
         use crate::model::shape::ShapeObject;
         use crate::renderer::render_tree::{RenderNode, RenderNodeType};
 
-        fn collect_image_ids(node: &RenderNode, out: &mut Vec<u16>) {
+        fn collect_image_positions(node: &RenderNode, out: &mut Vec<(u16, f64)>) {
             if let RenderNodeType::Image(img) = &node.node_type {
-                out.push(img.bin_data_id);
+                out.push((img.bin_data_id, node.bbox.x));
             }
             for child in &node.children {
-                collect_image_ids(child, out);
+                collect_image_positions(child, out);
             }
         }
 
@@ -12027,13 +12027,31 @@
             );
 
             let tree = doc.build_page_tree(1).unwrap();
-            let mut rendered_image_ids = Vec::new();
-            collect_image_ids(&tree.root, &mut rendered_image_ids);
+            let mut rendered_images = Vec::new();
+            collect_image_positions(&tree.root, &mut rendered_images);
+            let rendered_image_ids: Vec<u16> =
+                rendered_images.iter().map(|(id, _)| *id).collect();
             assert!(
                 rendered_image_ids.contains(&2) && rendered_image_ids.contains(&3),
                 "{}: page 2 render tree should contain text box images BinData 2 and 3 (actual: {:?})",
                 path,
                 rendered_image_ids
+            );
+
+            let image2_x = rendered_images
+                .iter()
+                .find_map(|(id, x)| (*id == 2).then_some(*x))
+                .expect("BinData 2 should be rendered");
+            let image3_x = rendered_images
+                .iter()
+                .find_map(|(id, x)| (*id == 3).then_some(*x))
+                .expect("BinData 3 should be rendered");
+            assert!(
+                image3_x > image2_x + 300.0,
+                "{}: text box TAC pictures should preserve text advance between controls (x2={:.1}, x3={:.1})",
+                path,
+                image2_x,
+                image3_x
             );
         }
 
