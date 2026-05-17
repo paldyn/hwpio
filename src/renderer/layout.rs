@@ -771,10 +771,13 @@ impl LayoutEngine {
                 let sp_r = hwpunit_to_px(pbf.spacing_right as i32, self.dpi);
                 let sp_t = hwpunit_to_px(pbf.spacing_top as i32, self.dpi);
                 let sp_b = hwpunit_to_px(pbf.spacing_bottom as i32, self.dpi);
-                let bx = base_x + sp_l;
-                let by = base_y + sp_t;
-                let bw = base_w - sp_l - sp_r;
-                let bh = base_h - sp_t - sp_b;
+                // 종이 기준: 종이 가장자리에서 안쪽(+)으로 spacing
+                // 쪽 기준: 본문 영역에서 바깥쪽(-)으로 spacing
+                let (bx, by, bw, bh) = if paper_based {
+                    (base_x + sp_l, base_y + sp_t, base_w - sp_l - sp_r, base_h - sp_t - sp_b)
+                } else {
+                    (base_x - sp_l, base_y - sp_t, base_w + sp_l + sp_r, base_h + sp_t + sp_b)
+                };
 
                 let borders = &bs.borders;
                 let top_nodes = create_border_line_nodes(tree, &borders[2], bx, by, bx + bw, by);
