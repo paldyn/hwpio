@@ -2354,7 +2354,8 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
         // HWP3 last-line tolerance: 한글97은 마지막 줄이 본문 영역을 약간 넘어도 해당 페이지에 배치한다.
         // margin_bottom 을 직접 줄이면 쪽 테두리/페이지 번호 위치까지 영향받으므로
         // pagination_bottom_tolerance 로 paginator 에게만 추가 공간을 허용한다.
-        pagination_bottom_tolerance: 1600,
+        // min(1600, margin_bottom) 으로 clamp: 기존 saturating_sub 동작과 동일한 상한 유지.
+        pagination_bottom_tolerance: 1600u32.min((doc_info.bottom_margin as u32) * 4),
         landscape: doc_info.paper_direction != 0,
         ..Default::default()
     };
