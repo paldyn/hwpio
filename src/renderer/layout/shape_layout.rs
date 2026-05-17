@@ -570,7 +570,7 @@ impl LayoutEngine {
                 // 이미지 채우기가 있으면 자식으로 이미지 노드 추가
                 self.add_image_fill_node(tree, &mut node, &rect.drawing, render_x, render_y, render_w, render_h, bin_data_content);
                 // TextBox가 있으면 자식으로 텍스트 레이아웃
-                self.layout_textbox_content(tree, &mut node, &rect.drawing, render_x, render_y, render_w, render_h, section_index, para_index, control_index, styles, bin_data_content, overflow_map, parent_cell_path);
+                self.layout_textbox_content(tree, &mut node, &rect.drawing, render_x, render_y, render_w, render_h, section_index, para_index, control_index, styles, bin_data_content, overflow_map, parent_cell_path, shape.common().treat_as_char);
                 parent.children.push(node);
             }
             ShapeObject::Line(line) => {
@@ -763,7 +763,7 @@ impl LayoutEngine {
                 );
                 self.add_image_fill_node(tree, &mut node, &ellipse.drawing, render_x, render_y, render_w, render_h, bin_data_content);
                 let empty_map = std::collections::HashMap::new();
-                self.layout_textbox_content(tree, &mut node, &ellipse.drawing, render_x, render_y, render_w, render_h, section_index, para_index, control_index, styles, bin_data_content, &empty_map, parent_cell_path);
+                self.layout_textbox_content(tree, &mut node, &ellipse.drawing, render_x, render_y, render_w, render_h, section_index, para_index, control_index, styles, bin_data_content, &empty_map, parent_cell_path, shape.common().treat_as_char);
                 parent.children.push(node);
             }
             ShapeObject::Arc(arc) => {
@@ -889,7 +889,7 @@ impl LayoutEngine {
                 );
                 self.add_image_fill_node(tree, &mut node, &poly.drawing, render_x, render_y, render_w, render_h, bin_data_content);
                 let empty_map = std::collections::HashMap::new();
-                self.layout_textbox_content(tree, &mut node, &poly.drawing, base_x, base_y, w, h, section_index, para_index, control_index, styles, bin_data_content, &empty_map, parent_cell_path);
+                self.layout_textbox_content(tree, &mut node, &poly.drawing, base_x, base_y, w, h, section_index, para_index, control_index, styles, bin_data_content, &empty_map, parent_cell_path, shape.common().treat_as_char);
                 parent.children.push(node);
             }
             ShapeObject::Curve(curve) => {
@@ -911,7 +911,7 @@ impl LayoutEngine {
                 );
                 self.add_image_fill_node(tree, &mut node, &curve.drawing, render_x, render_y, render_w, render_h, bin_data_content);
                 let empty_map = std::collections::HashMap::new();
-                self.layout_textbox_content(tree, &mut node, &curve.drawing, base_x, base_y, w, h, section_index, para_index, control_index, styles, bin_data_content, &empty_map, parent_cell_path);
+                self.layout_textbox_content(tree, &mut node, &curve.drawing, base_x, base_y, w, h, section_index, para_index, control_index, styles, bin_data_content, &empty_map, parent_cell_path, shape.common().treat_as_char);
                 parent.children.push(node);
             }
             ShapeObject::Group(group) => {
@@ -1177,6 +1177,7 @@ impl LayoutEngine {
         bin_data_content: &[BinDataContent],
         overflow_map: &std::collections::HashMap<(usize, usize), Vec<Paragraph>>,
         parent_cell_path: &[CellPathEntry],
+        parent_treat_as_char: bool,
     ) {
         let text_box = match &drawing.text_box {
             Some(tb) => tb,
@@ -1194,6 +1195,53 @@ impl LayoutEngine {
             width: (w - margin_left - margin_right).max(0.0),
             height: (h - margin_top - margin_bottom).max(0.0),
         };
+
+        // [Task #874 #3 / #930] shortcut.hwp 1 페이지 우측하단 자동번호 "1" 시각 정합:
+        // 도형이 원본 (sa.original_*) 대비 확대된 마스터 페이지 글상자는 한컴이 내부
+        // 글꼴을 축소 렌더링한다. base_size 가 25400 (254 pt) 인 자동번호 글상자가 현재
+        // 좌표계에서 그대로 339 px 로 그려지면 본문 우측 단축키 행과 겹친다.
+        //
+        // [#930] 발동 조건을 두 축 모두 1.5× 초과 (= min_ratio > 1.5, 등방 확대) 로
+        // 좁힌다. table-in-tbox.hwp 2 페이지처럼 한 축만 강하게 늘어난 이방 확��
+        // 글상자 (sx≈1.07, sy≈8.2) 는 내부 문단이 이미 current 박스 기준으로 조판된
+        // 일반 본문이므로 축소하면 안 된다 (글꼴이 1/8 로 깨짐).
+        //
+        // [#930] 축소 계수는 2.0 / max_ratio. #874 의 1.0 / max_ratio 는 한컴 2022
+        // PDF 측정 대비 자동번호를 약 2× 과축소했다 (글리프 93 px vs PDF 187 px).
+        // 단일 샘플 (shortcut.hwp 자동번호) 기반 경험적 보정이므로, 다른 등방 확대
+        // 글상자 샘플이 확보되면 재검증한다.
+        let sa = &drawing.shape_attr;
+        let local_styles_scaled: Option<ResolvedStyleSet> = {
+            let sw_ratio = if sa.original_width > 0 && sa.current_width > 0 {
+                sa.current_width as f64 / sa.original_width as f64
+            } else { 1.0 };
+            let sh_ratio = if sa.original_height > 0 && sa.current_height > 0 {
+                sa.current_height as f64 / sa.original_height as f64
+            } else { 1.0 };
+            let max_ratio = sw_ratio.max(sh_ratio);
+            let min_ratio = sw_ratio.min(sh_ratio);
+            // [Task #928] 인라인 도형 (treat_as_char=true) 은 폰트 자동 축소 적용 안 함.
+            // exam_kor 5p 다이어그램의 사각형 [A 단계] 가 original=(2925, 975) HU →
+            // current=(6518, 1983) HU 로 2.2배 확대된 채 IR 인코딩되어 있으나 한컴은
+            // 폰트를 11.5pt 그대로 유지한다. 본 ratio 축소 (#874 #3) 가 잘못 발동하여
+            // 폰트가 6.88px 로 축소되던 회귀를 차단. shortcut.hwp 마스터 페이지
+            // 글상자는 tac=false 라 ratio 적용 유지.
+            if min_ratio > 1.5 && !parent_treat_as_char {
+                let inv = (2.0 / max_ratio).min(1.0);
+                let mut local = styles.clone();
+                for cs in local.char_styles.iter_mut() {
+                    cs.font_size *= inv;
+                    cs.letter_spacing *= inv;
+                    for ls in cs.letter_spacings.iter_mut() {
+                        *ls *= inv;
+                    }
+                }
+                Some(local)
+            } else {
+                None
+            }
+        };
+        let styles: &ResolvedStyleSet = local_styles_scaled.as_ref().unwrap_or(styles);
 
         // 세로쓰기 판정: 글상자 list_attr bit 0~2 = text_direction
         // (0=가로, 1=영문 눕힘, 2=영문 세움)
@@ -1562,38 +1610,65 @@ impl LayoutEngine {
                         // 글상자 내 수식: 항상 글자처럼 인라인 배치
                         let eq_w = hwpunit_to_px(eq.common.width as i32, self.dpi);
                         let eq_h = hwpunit_to_px(eq.common.height as i32, self.dpi);
-                        let (eq_x, eq_y) = {
-                            let x = inline_x;
-                            inline_x += eq_w;
-                            (x, para_start_y)
+                        // [Task #962] 글상자 내부 paragraph 의 inline equation 은
+                        // paragraph_layout 가 layout_composed_paragraph 경로에서 정확한
+                        // gap 위치 (text 사이) 에 emit 한다. 본 두번째 loop 는
+                        // paragraph_layout 미지원 이전의 legacy fallback. paragraph_layout
+                        // 가 이미 inline_shape_position 으로 등록한 경우 중복 emit 차단.
+                        // (시험지 page 2 문14 <보기> textbox 의 6개 inline 수식이
+                        //  paragraph_layout + 본 분기 양쪽에서 각각 emit → 중복).
+                        let equiv_cell_ctx = CellContext {
+                            parent_para_index: para_index,
+                            path: {
+                                let mut p = parent_cell_path.to_vec();
+                                p.push(CellPathEntry {
+                                    control_index,
+                                    cell_index: 0,
+                                    cell_para_index: pi,
+                                    text_direction: 0,
+                                });
+                                p
+                            },
                         };
+                        if tree.get_inline_shape_position(
+                            section_index, pi, ctrl_idx_in_para, Some(&equiv_cell_ctx)
+                        ).is_some() {
+                            // paragraph_layout 가 이미 emit — inline_x 만 advance
+                            inline_x += eq_w;
+                        } else {
+                            let (eq_x, eq_y) = {
+                                let x = inline_x;
+                                inline_x += eq_w;
+                                (x, para_start_y)
+                            };
 
-                        let tokens = super::super::equation::tokenizer::tokenize(&eq.script);
-                        let ast = super::super::equation::parser::EqParser::new(tokens).parse();
-                        let font_size_px = hwpunit_to_px(eq.font_size as i32, self.dpi);
-                        let layout_box = super::super::equation::layout::EqLayout::new(font_size_px).layout(&ast);
-                        let color_str = super::super::equation::svg_render::eq_color_to_svg(eq.color);
-                        let svg_content = super::super::equation::svg_render::render_equation_svg(
-                            &layout_box, &color_str, font_size_px,
-                        );
+                            let tokens = super::super::equation::tokenizer::tokenize(&eq.script);
+                            let ast = super::super::equation::parser::EqParser::new(tokens).parse();
+                            let font_size_px = hwpunit_to_px(eq.font_size as i32, self.dpi);
+                            let layout_box = super::super::equation::layout::EqLayout::new(font_size_px).layout(&ast);
+                            let color_str = super::super::equation::svg_render::eq_color_to_svg(eq.color);
+                            let svg_content = super::super::equation::svg_render::render_equation_svg(
+                                &layout_box, &color_str, font_size_px,
+                            );
 
-                        let eq_node = RenderNode::new(
-                            tree.next_id(),
-                            RenderNodeType::Equation(EquationNode {
-                                svg_content,
-                                layout_box,
-                                color_str,
-                                color: eq.color,
-                                font_size: font_size_px,
-                                section_index: Some(section_index),
-                                para_index: Some(para_index),
-                                control_index: Some(ctrl_idx_in_para),
-                                cell_index: None,
-                                cell_para_index: None,
-                            }),
-                            BoundingBox::new(eq_x, eq_y, eq_w, eq_h),
-                        );
-                        shape_node.children.push(eq_node);
+                            let eq_node = RenderNode::new(
+                                tree.next_id(),
+                                RenderNodeType::Equation(EquationNode {
+                                    svg_content,
+                                    layout_box,
+                                    color_str,
+                                    color: eq.color,
+                                    font_size: font_size_px,
+                                    section_index: Some(section_index),
+                                    para_index: Some(para_index),
+                                    control_index: Some(ctrl_idx_in_para),
+                                    cell_index: None,
+                                    cell_para_index: None,
+                                }),
+                                BoundingBox::new(eq_x, eq_y, eq_w, eq_h),
+                            );
+                            shape_node.children.push(eq_node);
+                        }
                     }
                     Control::Table(table) => {
                         // TextBox 내 인라인 표 렌더링
@@ -2052,8 +2127,8 @@ impl LayoutEngine {
         result
     }
 
-    /// TopAndBottom 개체의 하단 y 좌표와 상단 y 좌표를 계산
-    fn calc_shape_bottom_y(
+    /// TopAndBottom 개체의 하단 y 좌표와 상단 y 좌표를 계산 (pub(crate) — Task #901 Stage 8 flow-around)
+    pub(crate) fn calc_shape_bottom_y(
         &self,
         common: &CommonObjAttr,
         col_area: &LayoutRect,

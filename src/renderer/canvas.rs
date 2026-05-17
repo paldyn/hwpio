@@ -247,6 +247,12 @@ impl CanvasRenderer {
                             self.close_shape_transform_value(&path.transform);
                         }
                         PaintOp::FootnoteMarker { .. }
+                        | PaintOp::GlyphRun { .. }
+                        | PaintOp::GlyphOutline { .. }
+                        | PaintOp::CharOverlap { .. }
+                        | PaintOp::TextControlMark { .. }
+                        | PaintOp::TabLeader { .. }
+                        | PaintOp::TextDecoration { .. }
                         | PaintOp::Equation { .. }
                         | PaintOp::FormObject { .. }
                         | PaintOp::Placeholder { .. }
@@ -318,8 +324,9 @@ impl Renderer for CanvasRenderer {
     }
 
     fn draw_text(&mut self, text: &str, x: f64, y: f64, _style: &TextStyle) {
+        let text = crate::renderer::composer::expand_pua_render_text(text);
         self.commands
-            .push(CanvasCommand::FillText(text.to_string(), x, y));
+            .push(CanvasCommand::FillText(text, x, y));
     }
 
     fn draw_rect(

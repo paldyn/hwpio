@@ -178,33 +178,37 @@ pub fn compose_paragraph(para: &Paragraph) -> ComposedParagraph {
     // PUA 테두리 숫자(사각형/원형 안의 숫자) → CharOverlap 런으로 변환
     convert_pua_enclosed_numbers(&mut composed);
 
-    // Hanyang-PUA 옛한글 → KS X 1026-1:2007 자모 시퀀스 (Task #528)
-    convert_pua_old_hangul(&mut composed);
+    // Hanyang-PUA 옛한글 / 한컴 PUA 표시 문자열 변환 (렌더링·측정용)
+    convert_pua_display_text(&mut composed);
 
     composed
 }
 
-/// Hanyang-PUA 옛한글 코드포인트를 KS X 1026-1:2007 자모 시퀀스로 변환한다.
+/// Hanyang-PUA 옛한글 코드포인트와 한컴 PUA 표시 문자열을 렌더링용 텍스트로 변환한다.
 ///
 /// 한컴 자체 폰트 (함초롬바탕 LVT 등) 는 PUA 영역에 옛한글 글리프를 직접
 /// 보유하나, OFL 폰트 (Noto Serif KR / Source Han Serif K 등) 는 KS X 1026-1
 /// 자모 영역만 지원하므로 PUA → 자모 변환 후 합자 렌더링이 필요.
 ///
-/// 본 함수는 `run.text` 를 변경하지 않고 `run.display_text` 에만 변환 결과를
-/// 저장한다. 이는 `char_offsets`, `line.char_start`, `line_chars` 등 인덱싱
-/// 불변성을 유지하기 위함이다 (PUA 1 char = display N jamos).
+/// `U+F012B` 같은 한컴 전용 PUA 기호는 표준 Unicode 단일 문자 대응이 없어서
+/// 표시 문자열(`(인)`)로 확장한다. 본 함수는 `run.text` 를 변경하지 않고
+/// `run.display_text` 에만 변환 결과를 저장한다. 이는 `char_offsets`,
+/// `line.char_start`, `line_chars` 등 인덱싱 불변성을 유지하기 위함이다
+/// (PUA 1 char = display N chars).
 ///
 /// 매핑 표: KTUG HanyangPuaTableProject (Public Domain).
-fn convert_pua_old_hangul(composed: &mut ComposedParagraph) {
+fn convert_pua_display_text(composed: &mut ComposedParagraph) {
     use super::pua_oldhangul::map_pua_old_hangul;
     for line in composed.lines.iter_mut() {
         for run in line.runs.iter_mut() {
-            if !run.text.chars().any(|ch| map_pua_old_hangul(ch).is_some()) {
+            if !run.text.chars().any(|ch| pua_plain_text_display(ch).is_some() || map_pua_old_hangul(ch).is_some()) {
                 continue;
             }
             let mut display = String::with_capacity(run.text.len() * 3);
             for ch in run.text.chars() {
-                if let Some(jamos) = map_pua_old_hangul(ch) {
+                if let Some(replacement) = pua_plain_text_display(ch) {
+                    display.push_str(replacement);
+                } else if let Some(jamos) = map_pua_old_hangul(ch) {
                     display.extend(jamos.iter().copied());
                 } else {
                     display.push(ch);
@@ -505,43 +509,27 @@ fn split_by_char_shapes(
     }
 
     // 이 줄 범위에 영향을 미치는 CharShapeRef 찾기
-    // CharShapeRef.start_pos는 UTF-16 위치이므로 텍스트 인덱스로 변환해야 함
-    let line_utf16_start = if text_start < char_offsets.len() {
-        char_offsets[text_start]
-    } else if !char_offsets.is_empty() {
-        *char_offsets.last().unwrap() + 1
-    } else {
-        text_start as u32
-    };
-
-    let line_utf16_end = if text_end < char_offsets.len() {
-        char_offsets[text_end]
-    } else if !char_offsets.is_empty() {
-        *char_offsets.last().unwrap() + 1
-    } else {
-        text_end as u32
-    };
-
-    // 이 줄에 적용되는 CharShapeRef 구간 수집
-    // 각 구간: (텍스트 내 시작 인덱스, char_style_id)
+    //
+    // [Task #884] CharShapeRef.start_pos 를 visible char index 로 해석 (해석 B).
+    // 이전 해석 A (u16 stream 위치) 는 inline picture 등 다단위 컨트롤이 있는
+    // paragraph 에서 char_shape 적용 영역이 어긋났다 (예: table-in-tbox.hwp
+    // Shape.TextBox > Table > cell[0] " 충남중부권지사장" 의 id=20 HY수평선B 가
+    // visible[1] 부터 잘못 적용).
+    //
+    // 한컴 PDF 정합 확인된 해석:
+    //   text_idx = (cs.start_pos as usize) - text_start
+    //   단 cs.start_pos ≥ text.chars().count() 이면 미적용.
+    let total_chars = char_offsets.len();
     let mut segments: Vec<(usize, u32)> = Vec::new();
 
     for cs in char_shapes {
-        if cs.start_pos < line_utf16_end {
-            // 이 CharShapeRef의 시작 위치를 줄 내 텍스트 인덱스로 변환
-            let text_idx = if cs.start_pos <= line_utf16_start {
-                0 // 줄 시작 이전이면 0
-            } else {
-                // char_offsets에서 cs.start_pos에 해당하는 텍스트 인덱스 찾기
-                let global_idx = char_offsets
-                    .iter()
-                    .position(|&off| off >= cs.start_pos)
-                    .unwrap_or(text_end);
-                global_idx.saturating_sub(text_start)
-            };
-
-            segments.push((text_idx, cs.char_shape_id));
+        let cs_visible_idx = (cs.start_pos as usize).min(total_chars);
+        // cs 가 이 줄 범위 밖이면 skip
+        if cs_visible_idx >= text_end {
+            continue;
         }
+        let text_idx = cs_visible_idx.saturating_sub(text_start);
+        segments.push((text_idx, cs.char_shape_id));
     }
 
     // 시작 인덱스로 정렬 (동일 인덱스 내에서는 원래 순서 유지)
@@ -556,7 +544,7 @@ fn split_by_char_shapes(
     // segments가 비어있으면 첫 번째 CharShapeRef 사용
     if segments.is_empty() {
         // 줄 시작 위치 이전의 마지막 CharShapeRef 찾기
-        let style_id = find_active_char_shape(char_shapes, line_utf16_start);
+        let style_id = find_active_char_shape_visible(char_shapes, text_start);
         return split_runs_by_lang(vec![ComposedTextRun {
             text: line_text.to_string(),
             char_style_id: style_id,
@@ -595,7 +583,7 @@ fn split_by_char_shapes(
 
     // 첫 번째 segment가 0이 아닌 경우, 앞 부분 처리
     if !segments.is_empty() && segments[0].0 > 0 {
-        let style_id = find_active_char_shape(char_shapes, line_utf16_start);
+        let style_id = find_active_char_shape_visible(char_shapes, text_start);
         let end_idx = segments[0].0.min(chars.len());
         let prefix_text: String = chars[..end_idx].iter().collect();
         if !prefix_text.is_empty() {
@@ -613,7 +601,7 @@ fn split_by_char_shapes(
     }
 
     if runs.is_empty() {
-        let style_id = find_active_char_shape(char_shapes, line_utf16_start);
+        let style_id = find_active_char_shape_visible(char_shapes, text_start);
         runs.push(ComposedTextRun {
             text: line_text.to_string(),
             char_style_id: style_id,
@@ -628,10 +616,21 @@ fn split_by_char_shapes(
 }
 
 /// 주어진 UTF-16 위치에서 활성화된 CharShapeRef의 char_shape_id를 찾는다.
+///
+/// [Task #884] 해석 B 적용으로 start_pos 는 visible char index 이므로 이 함수의
+/// utf16_pos 인자는 의미가 모호해진다. 호출자가 char_offsets 통해 utf16 → visible
+/// idx 변환 후 [`find_active_char_shape_visible`] 사용 권장. 본 함수는 호환성을
+/// 위해 유지하나 향후 deprecate 예정.
 pub(crate) fn find_active_char_shape(char_shapes: &[CharShapeRef], utf16_pos: u32) -> u32 {
+    // utf16_pos 를 visible idx 로 직접 비교 (해석 B)
+    find_active_char_shape_visible(char_shapes, utf16_pos as usize)
+}
+
+/// [Task #884] visible char index 로 활성 char_shape 찾기
+pub(crate) fn find_active_char_shape_visible(char_shapes: &[CharShapeRef], visible_idx: usize) -> u32 {
     let mut active_id = char_shapes.first().map(|cs| cs.char_shape_id).unwrap_or(0);
     for cs in char_shapes {
-        if cs.start_pos <= utf16_pos {
+        if (cs.start_pos as usize) <= visible_idx {
             active_id = cs.char_shape_id;
         } else {
             break;
@@ -1113,6 +1112,12 @@ fn split_composed_line_by_width(
 ///
 /// 단일 룰 (분기/허용오차 없음): 비-PUA 텍스트는 fallback 으로 동일 동작.
 pub fn effective_text_for_metrics(run: &ComposedTextRun) -> &str {
+    // Issue #677: U+F081C 는 HWP TAC filler 이며 text_measurement 경로에서
+    // 시각 폭 0으로 처리해야 한다. display_text 로 바꾸면 이 0폭 규칙을
+    // 우회하므로 원문을 유지한다.
+    if run.text.contains('\u{F081C}') {
+        return &run.text;
+    }
     run.display_text.as_deref().unwrap_or(&run.text)
 }
 
@@ -1176,11 +1181,43 @@ fn pua_enclosed_border_type(ch: char) -> Option<u8> {
     None
 }
 
-/// PUA 테두리 숫자 문자를 표시 문자열로 변환한다. (렌더러 전용)
+fn pua_plain_text_display(ch: char) -> Option<&'static str> {
+    match ch as u32 {
+        0xF012B => Some("(인)"),
+        _ => None,
+    }
+}
+
+/// 일반 텍스트 렌더링 경로에서 한컴 PUA 문자를 표시 문자열로 확장한다.
+///
+/// HWP TAC filler `U+F081C` 는 레이아웃 측정에는 원문으로 남겨 0폭 규칙을
+/// 적용하되, 실제 출력에서는 글리프가 없어 깨진 문자로 보이지 않도록 숨긴다.
+///
+/// CharOverlap 전용 숫자(`U+F02CE..=U+F02E1`)는 여기서 확장하지 않는다.
+/// 해당 문자는 `pua_to_display_text()`가 글자겹침 렌더러에서만 처리한다.
+pub fn expand_pua_render_text(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch == '\u{F081C}' {
+            continue;
+        }
+        if let Some(replacement) = pua_plain_text_display(ch) {
+            out.push_str(replacement);
+        } else {
+            out.push(super::layout::map_pua_bullet_char(ch));
+        }
+    }
+    out
+}
+
+/// PUA 테두리 숫자와 한컴 PUA 기호를 표시 문자열로 변환한다. (렌더러 전용)
 ///
 /// draw_char_overlap()에서 호출하여, 실제 렌더링 시에만 변환한다.
 pub fn pua_to_display_text(ch: char) -> Option<String> {
     let cp = ch as u32;
+    if let Some(replacement) = pua_plain_text_display(ch) {
+        return Some(replacement.to_string());
+    }
     // U+F02B1~F02C4 는 map_pua_bullet_char 에서 ①~⑳ 으로 매핑 — 여기 도달 불가
     // 반전 사각형 안의 숫자: U+F02CE(1) ~ U+F02E1(20)
     if (0xF02CE..=0xF02E1).contains(&cp) {

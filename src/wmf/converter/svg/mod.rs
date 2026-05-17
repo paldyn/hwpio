@@ -68,10 +68,38 @@ impl crate::wmf::converter::Player for SVGPlayer {
     fn generate(self) -> Result<Vec<u8>, PlayError> {
         let Self { context_current, definitions, elements, .. } = self;
 
-        let (x, y, width, height) = context_current.window.as_view_box();
+        // [Task #860] WMF binary 의 SetWindowExt 가 actual element 의 bbox 보다 작은 경우
+        // (예: HWP3 sample14 의 WMF 가 1189 인데 image y+height=2304) viewBox 가 element
+        // 를 cover 못 해 rsvg-convert 렌더 시 잘림. element 들의 max x+width / y+height
+        // 까지 viewBox 확장 (한컴 SVG 변환의 자동 확장 시멘틱 정합).
+        let (raw_vb_x, raw_vb_y, mut vb_w, mut vb_h) = context_current.window.as_view_box();
+        let mut vb_x = i32::from(raw_vb_x);
+        let mut vb_y = i32::from(raw_vb_y);
+        let mut vb_w_i32 = i32::from(vb_w);
+        let mut vb_h_i32 = i32::from(vb_h);
+        let mut vb_right = vb_x + vb_w_i32;
+        let mut vb_bottom = vb_y + vb_h_i32;
+        for elem in elements.iter() {
+            let max_x = element_max_x(elem);
+            let max_y = element_max_y(elem);
+            let min_x = element_min_x(elem);
+            let min_y = element_min_y(elem);
+            if let Some(mx) = max_x { if mx > vb_right { vb_right = mx; } }
+            if let Some(my) = max_y { if my > vb_bottom { vb_bottom = my; } }
+            // [Task #860 Stage D] element 의 min y 가 viewBox y 보다 작으면 viewBox 위쪽
+            // 확장 (HWP3 sample14 의 WMF: BoundingBox origin (329, 1536) 인데 element
+            // y=1008 — Placeable header 의 BoundingBox 와 element 좌표 mismatch 보정).
+            if let Some(nx) = min_x { if nx < vb_x { vb_x = nx; } }
+            if let Some(ny) = min_y { if ny < vb_y { vb_y = ny; } }
+        }
+        vb_w_i32 = vb_right - vb_x;
+        vb_h_i32 = vb_bottom - vb_y;
+        // 사용 안 함 (호환성)
+        let _ = (&mut vb_w, &mut vb_h);
+
         let mut document = Node::new("svg")
             .set("xmlns", "http://www.w3.org/2000/svg")
-            .set("viewBox", format!("{x} {y} {width} {height}"));
+            .set("viewBox", format!("{vb_x} {vb_y} {vb_w_i32} {vb_h_i32}"));
 
         if !definitions.is_empty() {
             let mut defs = Node::new("defs");
@@ -82,8 +110,24 @@ impl crate::wmf::converter::Player for SVGPlayer {
             document = document.add(defs);
         }
 
-        for v in elements {
-            document = document.add(v);
+        // [Task #860 Stage D] WMF SetWindowExt y < 0 (Cartesian, bottom-up) 인 경우
+        // SVG (top-down) 정합 위해 y-flip transform 적용:
+        //   transform="translate(0, vb_h) scale(1, -1)"
+        // 이는 viewBox 안 element 의 y 좌표를 flip 하여 한컴 정합.
+        // HWP3 sample14 의 WMF 가 bottom-up 좌표계 사용 (캡션 outline 위, BMP 박스 아래
+        // 의 시각이 한컴과 반대로 나타나는 결함 정정).
+        if context_current.window.y_inverted {
+            let group = Node::new("g")
+                .set("transform", format!("translate(0,{vb_h_i32}) scale(1,-1)"));
+            let mut group = group;
+            for v in elements {
+                group = group.add(v);
+            }
+            document = document.add(group);
+        } else {
+            for v in elements {
+                document = document.add(v);
+            }
         }
 
         Ok(document.to_string().into_bytes())
@@ -114,10 +158,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 target,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     height,
                     width,
                 );
@@ -140,10 +186,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 x_dest,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     height,
                     width,
                 );
@@ -189,10 +237,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 target,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     height,
                     width,
                 );
@@ -215,10 +265,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 x_dest,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     height,
                     width,
                 );
@@ -264,10 +316,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 target,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     dest_height,
                     dest_width,
                 );
@@ -290,10 +344,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 x_dest,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     dest_height,
                     dest_width,
                 );
@@ -353,10 +409,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 target,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     dest_height,
                     dest_width,
                 );
@@ -379,10 +437,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 x_dest,
                 ..
             } => {
+                let pt = self.context_current
+                    .point_s_to_absolute_point(&PointS { x: x_dest, y: y_dest });
                 let mut operator = TernaryRasterOperator::new(
                     raster_operation,
-                    x_dest,
-                    y_dest,
+                    pt.x,
+                    pt.y,
                     dest_height,
                     dest_width,
                 );
@@ -428,10 +488,12 @@ impl crate::wmf::converter::Player for SVGPlayer {
             ..
         } = record;
 
+        let pt = self.context_current
+            .point_s_to_absolute_point(&PointS { x: x_dst, y: y_dst });
         let mut operator = TernaryRasterOperator::new(
             raster_operation,
-            x_dst,
-            y_dst,
+            pt.x,
+            pt.y,
             dest_height,
             dest_width,
         );
@@ -749,19 +811,25 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 } else {
                     record.y
                 } + match self.context_current.text_align_vertical {
-                    // VTA_TOP: y 좌표에 font ascent를 더해 alphabetic baseline으로 변환
-                    // (dominant-baseline="text-top"은 SVG 렌더러 호환성이 낮음)
+                    // [Task #965 / PR #918 Stage 33-A] WMF 의 ExtTextOut y 는
+                    // text_align_vertical 에 따라 reference point 가 결정된다:
+                    //   VTA_BASELINE (default): y 가 baseline — 그대로 사용
+                    //   VTA_TOP: y 가 cell 의 top — baseline = y + ascent
+                    //   VTA_BOTTOM: y 가 cell 의 bottom — baseline = y - descent
+                    // font.height 의 부호는 magnitude 의 해석 (cell vs char) 만 바꾸며
+                    // reference point 와 무관하다 (이전 구현이 font.height < 0 일 때
+                    // -font.height 만큼 y 를 더했던 것은 잘못된 보정으로, 텍스트가 박스
+                    // 하단으로 baseline shift 되는 원인).
                     VerticalTextAlignmentMode::VTA_TOP => {
-                        // font.height가 음수면 절대값이 em height, 양수면 cell height
-                        // ascent ≈ 0.8 × em height 근사
                         let em = font.height.abs();
                         (em as f64 * 0.8) as i16
                     }
-                    VerticalTextAlignmentMode::VTA_BASELINE
-                        | VerticalTextAlignmentMode::VTA_BOTTOM
-                        if font.height < 0 => {
-                        -font.height
+                    VerticalTextAlignmentMode::VTA_BOTTOM => {
+                        let em = font.height.abs();
+                        -((em as f64 * 0.2) as i16)
                     }
+                    VerticalTextAlignmentMode::VTA_BASELINE => 0,
+                    // VTA_CENTER / VTA_LEFT: 드물게 사용; baseline 과 동일 처리
                     _ => 0,
                 },
             };
@@ -1477,16 +1545,17 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 x: record.x_start,
                 y: record.y_start
                     + match self.context_current.text_align_vertical {
-                        // VTA_TOP: y 좌표에 font ascent를 더해 alphabetic baseline으로 변환
+                        // [Task #965 / PR #918 Stage 33-A] META_TEXTOUT 의 y 도 동일.
+                        // ext_text_out 의 baseline 보정과 일관성 유지.
                         VerticalTextAlignmentMode::VTA_TOP => {
                             let em = font.height.abs();
                             (em as f64 * 0.8) as i16
                         }
-                        VerticalTextAlignmentMode::VTA_BASELINE
-                            | VerticalTextAlignmentMode::VTA_BOTTOM
-                            if font.height < 0 => {
-                            -font.height
+                        VerticalTextAlignmentMode::VTA_BOTTOM => {
+                            let em = font.height.abs();
+                            -((em as f64 * 0.2) as i16)
                         }
+                        VerticalTextAlignmentMode::VTA_BASELINE => 0,
                         _ => 0,
                     },
             };
@@ -2126,13 +2195,27 @@ impl crate::wmf::converter::Player for SVGPlayer {
                 .into_iter()
                 .find(|a| record.text_alignment_mode & (*a as u16) == *a as u16)
                 .unwrap_or(TextAlignmentMode::TA_LEFT);
-        let align_vertical = [
-            VerticalTextAlignmentMode::VTA_BOTTOM,
-            VerticalTextAlignmentMode::VTA_TOP,
-        ]
-        .into_iter()
-        .find(|a| record.text_alignment_mode & (*a as u16) == *a as u16)
-        .unwrap_or(VerticalTextAlignmentMode::VTA_BASELINE);
+        // [Task #965 / PR #918 Stage 33-A] SetTextAlign vertical bits 정합.
+        // WMF [MS-WMF] 2.1.2.18 TextAlignmentMode 의 vertical 부분:
+        //   TA_TOP = 0x0000 (default)
+        //   TA_BOTTOM = 0x0008
+        //   TA_BASELINE = 0x0018 (TA_BOTTOM | extra bit)
+        // 우리 enum 의 VTA_* 매핑:
+        //   VTA_TOP = 0x0000, VTA_BOTTOM = 0x0002, VTA_LEFT = 0x0008, VTA_BASELINE = 0x0018.
+        // 이전 구현은 `mode & VTA_TOP(=0)` 가 항상 true 라서 BASELINE/BOTTOM 인 mode 도
+        // VTA_TOP 으로 매핑되어 baseline 이 cell-top 보정 (+ascent) 만큼 아래로 shift 되는
+        // 박스 외부 표시 회귀의 원인. 우선순위: BASELINE → BOTTOM → TOP.
+        let v_bits = record.text_alignment_mode & 0x0018;
+        let align_vertical = if v_bits == 0x0018 {
+            VerticalTextAlignmentMode::VTA_BASELINE
+        } else if v_bits == 0x0008 {
+            // TA_BOTTOM — 우리 enum 의 가장 가까운 대응은 VTA_LEFT (값 0x0008) 이지만
+            // 의미상 BOTTOM 이므로 VTA_BOTTOM 으로 매핑 (ext_text_out 의 baseline
+            // 계산 로직에서 동일 처리).
+            VerticalTextAlignmentMode::VTA_BOTTOM
+        } else {
+            VerticalTextAlignmentMode::VTA_TOP
+        };
 
         self.context_current = self
             .context_current
@@ -2265,4 +2348,51 @@ impl crate::wmf::converter::Player for SVGPlayer {
     ) -> Result<Self, PlayError> {
         Ok(self)
     }
+}
+
+/// [Task #860] Node 의 x+width attribute 합산 (viewBox 자동 확장용).
+/// `<image>`, `<rect>`, `<polygon>` 등의 좌표 attribute 를 parse 하여
+/// 최대 x+width 위치 반환. attribute 미존재 시 None.
+fn element_max_x(elem: &Node) -> Option<i32> {
+    let s = elem.to_string();
+    let x = parse_attr_i32(&s, "x").unwrap_or(0);
+    let w = parse_attr_i32(&s, "width").unwrap_or(0);
+    if w > 0 { Some(x + w) } else { None }
+}
+
+/// [Task #860] Node 의 y+height attribute 합산 (viewBox 자동 확장용).
+/// [Task #864] text 는 height 미보유 → font-size 사용.
+fn element_max_y(elem: &Node) -> Option<i32> {
+    let s = elem.to_string();
+    let y = parse_attr_i32(&s, "y").unwrap_or(0);
+    let h = parse_attr_i32(&s, "height").unwrap_or(0);
+    if h > 0 { return Some(y + h); }
+    // text element: y + font-size (approx)
+    if s.starts_with("<text ") {
+        if let Some(fs) = parse_attr_i32(&s, "font-size") {
+            return Some(y + fs);
+        }
+    }
+    None
+}
+
+/// [Task #860 Stage D] Node 의 x attribute (viewBox 위쪽 확장 용).
+fn element_min_x(elem: &Node) -> Option<i32> {
+    let s = elem.to_string();
+    parse_attr_i32(&s, "x")
+}
+
+/// [Task #860 Stage D] Node 의 y attribute (viewBox 위쪽 확장 용).
+fn element_min_y(elem: &Node) -> Option<i32> {
+    let s = elem.to_string();
+    parse_attr_i32(&s, "y")
+}
+
+/// 단순 SVG attribute 값 parse (i32). 미존재 또는 parse 실패 시 None.
+fn parse_attr_i32(s: &str, attr: &str) -> Option<i32> {
+    let needle = format!(" {attr}=\"");
+    let start = s.find(&needle)?;
+    let val_start = start + needle.len();
+    let val_end = s[val_start..].find('"')?;
+    s[val_start..val_start + val_end].parse().ok()
 }

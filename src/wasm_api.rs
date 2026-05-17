@@ -371,6 +371,26 @@ impl HwpDocument {
             .map_err(|e| e.into())
     }
 
+    /// CanvasKit direct replay/compat overlay 정책 진단을 JSON 문자열로 반환한다.
+    ///
+    /// `mode` 는 `"default"` 또는 `"compat"` 를 받는다. 빈 문자열은 `"default"` 로 처리한다.
+    #[wasm_bindgen(js_name = getCanvasKitReplayPlan)]
+    pub fn get_canvaskit_replay_plan(
+        &self,
+        page_num: u32,
+        mode: &str,
+    ) -> Result<String, JsValue> {
+        self.get_canvaskit_replay_plan_native(page_num, mode)
+            .map_err(|e| e.into())
+    }
+
+    /// 페이지 overlay 이미지 정보만 JSON 문자열로 반환한다.
+    #[wasm_bindgen(js_name = getPageOverlayImages)]
+    pub fn get_page_overlay_images(&self, page_num: u32) -> Result<String, JsValue> {
+        self.get_page_overlay_images_native(page_num)
+            .map_err(|e| e.into())
+    }
+
     /// 페이지 정보를 JSON 문자열로 반환한다.
     #[wasm_bindgen(js_name = getPageInfo)]
     pub fn get_page_info(&self, page_num: u32) -> Result<String, JsValue> {
@@ -1182,6 +1202,27 @@ impl HwpDocument {
             section_idx as usize,
             para_idx as usize,
             char_offset as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// 새 번호 지정 컨트롤 삽입 (쪽 > 새 번호로 시작)
+    #[wasm_bindgen(js_name = insertNewNumber)]
+    pub fn insert_new_number(
+        &mut self,
+        section_idx: u32,
+        para_idx: u32,
+        char_offset: u32,
+        start_num: u32,
+    ) -> Result<String, JsValue> {
+        if start_num == 0 || start_num > 65535 {
+            return Err(JsValue::from_str("start_num must be 1~65535"));
+        }
+        self.insert_new_number_native(
+            section_idx as usize,
+            para_idx as usize,
+            char_offset as usize,
+            start_num as u16,
         )
         .map_err(|e| e.into())
     }
@@ -2279,6 +2320,28 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// [Task #825] 머리말/꼬리말 안 그림의 속성 조회.
+    /// path: section[si].paragraphs[outer_para].controls[outer_ctrl] = Header/Footer
+    ///       → .paragraphs[inner_para].controls[inner_ctrl] = Picture
+    #[wasm_bindgen(js_name = getHeaderFooterPictureProperties)]
+    pub fn get_header_footer_picture_properties(
+        &self,
+        section_idx: u32,
+        outer_para_idx: u32,
+        outer_control_idx: u32,
+        inner_para_idx: u32,
+        inner_control_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.get_header_footer_picture_properties_native(
+            section_idx as usize,
+            outer_para_idx as usize,
+            outer_control_idx as usize,
+            inner_para_idx as usize,
+            inner_control_idx as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 그림 컨트롤의 속성을 변경한다.
     ///
     /// 반환: JSON `{"ok":true}`
@@ -2294,6 +2357,28 @@ impl HwpDocument {
             section_idx as usize,
             parent_para_idx as usize,
             control_idx as usize,
+            props_json,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// [Task #825] 머리말/꼬리말 안 그림 속성 변경.
+    #[wasm_bindgen(js_name = setHeaderFooterPictureProperties)]
+    pub fn set_header_footer_picture_properties(
+        &mut self,
+        section_idx: u32,
+        outer_para_idx: u32,
+        outer_control_idx: u32,
+        inner_para_idx: u32,
+        inner_control_idx: u32,
+        props_json: &str,
+    ) -> Result<String, JsValue> {
+        self.set_header_footer_picture_properties_native(
+            section_idx as usize,
+            outer_para_idx as usize,
+            outer_control_idx as usize,
+            inner_para_idx as usize,
+            inner_control_idx as usize,
             props_json,
         )
         .map_err(|e| e.into())
@@ -3084,6 +3169,19 @@ impl HwpDocument {
                 forward,
                 case_sensitive,
             )
+            .map_err(|e| e.into())
+    }
+
+    /// 문서 전체 검색 (모든 매치 반환)
+    #[wasm_bindgen(js_name = searchAllText)]
+    pub fn search_all_text(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+        include_cells: bool,
+    ) -> Result<String, JsValue> {
+        self.core
+            .search_all_text_native(query, case_sensitive, include_cells)
             .map_err(|e| e.into())
     }
 

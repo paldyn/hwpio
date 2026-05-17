@@ -5,7 +5,7 @@
 
 use super::{Renderer, TextStyle, ShapeStyle, LineStyle, PathCommand, GradientFillInfo, PatternFillInfo, StrokeDash};
 use super::render_tree::{PageRenderTree, RenderNode, RenderNodeType, ImageNode, FormObjectNode, ShapeTransform, BoundingBox};
-use super::composer::{CharOverlapInfo, pua_to_display_text, decode_pua_overlap_number};
+use super::composer::{CharOverlapInfo, decode_pua_overlap_number, expand_pua_render_text, pua_to_display_text};
 use super::pua_oldhangul::map_pua_old_hangul;
 
 /// Hanyang-PUA 옛한글 코드포인트를 KS X 1026-1:2007 자모 시퀀스로 확장.
@@ -247,6 +247,7 @@ impl SvgRenderer {
                     let mut attrs = format!("font-family=\"{}\" font-size=\"{}\" fill=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\"",
                         escape_xml(&font_family), font_size, color);
                     if run.style.is_visually_bold() { attrs.push_str(" font-weight=\"bold\""); }
+                    else if run.style.is_medium_weight() { attrs.push_str(" font-weight=\"500\""); }
                     if run.style.italic { attrs.push_str(" font-style=\"italic\""); }
                     for c in run.text.chars() {
                         if c == ' ' { continue; }
@@ -1452,10 +1453,12 @@ impl SvgRenderer {
         let font_family_str = if style.font_family.is_empty() {
             "sans-serif".to_string()
         } else {
-            format!("{},sans-serif", style.font_family)
+            let fb = super::generic_fallback(&style.font_family);
+            format!("{},{}", style.font_family, fb)
         };
         let mut font_attrs = format!("font-family=\"{}\" font-size=\"{:.2}\"", escape_xml(&font_family_str), inner_font_size);
         if style.is_visually_bold() { font_attrs.push_str(" font-weight=\"bold\""); }
+        else if style.is_medium_weight() { font_attrs.push_str(" font-weight=\"500\""); }
         if style.italic { font_attrs.push_str(" font-style=\"italic\""); }
 
         for (i, ch) in chars.iter().enumerate() {
@@ -1526,10 +1529,12 @@ impl SvgRenderer {
         let font_family_str = if style.font_family.is_empty() {
             "sans-serif".to_string()
         } else {
-            format!("{},sans-serif", style.font_family)
+            let fb = super::generic_fallback(&style.font_family);
+            format!("{},{}", style.font_family, fb)
         };
         let mut font_attrs = format!("font-family=\"{}\" font-size=\"{:.2}\"", escape_xml(&font_family_str), inner_font_size);
         if style.is_visually_bold() { font_attrs.push_str(" font-weight=\"bold\""); }
+        else if style.is_medium_weight() { font_attrs.push_str(" font-weight=\"500\""); }
         if style.italic { font_attrs.push_str(" font-style=\"italic\""); }
 
         let cx = bbox_x + box_size / 2.0;
@@ -1899,10 +1904,7 @@ impl Renderer for SvgRenderer {
         // [Task #509] 한컴은 폰트 지정과 상관없이 PUA 를 자체 처리. 지정 폰트에 글리프
         // 부재 시 한컴 내부 매핑이 발행. rhwp 도 동일 동작 모방 — 일반 텍스트도 PUA
         // 변환 적용 (PR #251 정합). 매핑 표는 한컴 PDF 정답지 기준.
-        let text = &text
-            .chars()
-            .map(crate::renderer::layout::map_pua_bullet_char)
-            .collect::<String>();
+        let text = &expand_pua_render_text(text);
         // [Task #528] Hanyang-PUA 옛한글 → KS X 1026-1:2007 자모 시퀀스.
         // 한/글 2010 이전 옛한글 PUA 인코딩을 표준 자모로 변환 (KTUG 매핑).
         let text = &expand_pua_old_hangul(text);
@@ -1926,6 +1928,8 @@ impl Renderer for SvgRenderer {
         );
         if style.is_visually_bold() {
             base_attrs.push_str(" font-weight=\"bold\"");
+        } else if style.is_medium_weight() {
+            base_attrs.push_str(" font-weight=\"500\"");
         }
         if style.italic {
             base_attrs.push_str(" font-style=\"italic\"");
