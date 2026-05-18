@@ -81,13 +81,38 @@ body 기준 테두리 + 테두리 실제 그려질 때만 적용, 그 외는 기
 | `cargo test --lib test_634` | ✅ 8 passed (aift 회귀 없음) |
 | `cargo clippy -- -D warnings` | ✅ 0 warnings |
 
-## 시각 판정 요청
+## 정답지 정밀 측정 (한글 2022 PDF)
 
-sample16 페이지 3 쪽 번호 "- 1 -" 를 꼬리말 영역(footer_area) 세로 중앙
-공식으로 배치. 한컴 정답지(꼬리말 영역 내 출력)와 위치 정합 여부
-작업지시자 시각 판정 요청. (SVG baseline 변환으로 footer_area 하단을
-약 5px 넘는 점 — 한컴 실측과 비교 필요)
+`pdf/hwp3-sample16-hwp5-2022.pdf` 3페이지 `pdftotext -bbox` 추출:
+
+- PDF 페이지 595×841pt (A4), 쪽 번호 "- 1 -" bbox:
+  yMin=803.68 yMax=814.63 pt
+- rhwp 좌표 환산 (×1122.51/841): **yMin=1072.7 ~ yMax=1087.3 px**
+
+| 항목 | y (px) |
+|------|--------|
+| **정답지 쪽 번호** | **1072.7 ~ 1087.3** |
+| rhwp 쪽 테두리 하변 (body 기준) | 1086.1 ~ 1088.2 |
+| rhwp 현재 출력 (footer 중앙) | 1089.8 |
+
+**결론**: 한컴 정답지 자체가 쪽 번호를 쪽 테두리 하변(1086~1088)에
+**걸치게** 출력한다. rhwp 현재 구현(1089.8)과 정답지(1087.3)는
+**2.5px(0.7mm) 차이로 사실상 일치**.
+
+작업지시자 판정: **현재 구현 수용 (정답지 일치)**.
+
+## 최종 검증
+
+| 항목 | 결과 |
+|------|------|
+| `cargo test` | ✅ 1476 passed, 0 failed |
+| `cargo test --lib test_634` | ✅ 8 passed (aift 회귀 없음) |
+| `cargo clippy -- -D warnings` | ✅ 0 warnings |
+| sample16 쪽 번호 vs 정답지 | ✅ 1089.8 vs 1087.3 (0.7mm, 정답지 일치) |
+| aift.hwp 쪽 번호 | ✅ 1079.16 (Task #634 정합 유지) |
+
+Stage 5 완료. 작업지시자 정답지 대조 판정 통과.
 
 ## 다음 단계
 
-시각 판정 통과 시 최종 보고서 작성 + Stage 1~5 통합 + PR #971 stash 복귀.
+최종 보고서 작성 (Stage 1~5 통합) + PR #971 stash 복귀.
