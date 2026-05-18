@@ -75,7 +75,8 @@ impl PageLayoutInfo {
         // 다단 영역 계산
         let column_areas = calculate_column_areas(&body_area, column_def, dpi);
 
-        let pagination_tolerance_px = hwpunit_to_px(page_def.pagination_bottom_tolerance as i32, dpi);
+        let pagination_tolerance_px =
+            hwpunit_to_px(page_def.pagination_bottom_tolerance as i32, dpi);
 
         Self {
             page_width,
