@@ -143,7 +143,7 @@ fn compose_image_filter(
 #[cfg(target_arch = "wasm32")]
 fn real_picture_watermark_tone_filter() -> String {
     format!(
-        "saturate({:.0}%) contrast({:.0}%) brightness({:.0}%)",
+        "saturate({:.6}%) contrast({:.6}%) brightness({:.6}%)",
         REAL_PICTURE_WATERMARK_SATURATION * 100.0,
         REAL_PICTURE_WATERMARK_CONTRAST * 100.0,
         REAL_PICTURE_WATERMARK_BRIGHTNESS * 100.0
