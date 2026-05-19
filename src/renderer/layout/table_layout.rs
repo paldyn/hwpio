@@ -1903,6 +1903,30 @@ impl LayoutEngine {
                         .iter()
                         .any(|c| matches!(c, Control::Table(t) if !t.common.treat_as_char));
 
+                    // HWP/HWPX가 셀 내부 문단의 LINE_SEG.vpos를 제공하는 경우에는
+                    // 누적 y 대신 그 절대 위치를 우선한다. 조직도형 표처럼 셀 하나에
+                    // 여러 짧은 문단이 있고 paraPr spacing/lineSpacing이 함께 지정된
+                    // 문서는 한컴이 각 문단 top을 vpos로 고정해 둔다. 누적 y만 쓰면
+                    // spacing_before가 중복되거나 음수 line_spacing이 누적되어 줄 위치가
+                    // 점점 어긋난다.
+                    if !has_nested_table {
+                        if let Some(first_seg) = para.line_segs.first() {
+                            if first_seg.vertical_pos >= 0 {
+                                let spacing_before = styles
+                                    .para_styles
+                                    .get(para.para_shape_id as usize)
+                                    .map(|s| s.spacing_before)
+                                    .unwrap_or(0.0);
+                                let anchored_y = cell_y
+                                    + pad_top
+                                    + hwpunit_to_px(first_seg.vertical_pos, self.dpi);
+                                // layout_composed_paragraph()가 spacing_before를 더하므로
+                                // 호출 전에 그 값을 빼서 최종 line top이 vpos와 일치하게 한다.
+                                para_y = anchored_y - spacing_before;
+                            }
+                        }
+                    }
+
                     let para_y_before_compose = para_y;
 
                     // 줄별 TAC 컨트롤 너비 합산: 각 TAC가 속한 줄을 판별하여 줄별 최대 너비 계산
