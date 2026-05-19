@@ -857,9 +857,8 @@ fn render_trace_report(
     for variant in variants {
         let _ = writeln!(
             report,
-            "| `{}` |  |  |  |  | {} |",
-            format!("{}.hwp", variant.name),
-            variant.description
+            "| `{}.hwp` |  |  |  |  | {} |",
+            variant.name, variant.description
         );
     }
     let _ = writeln!(report);
