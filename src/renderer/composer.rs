@@ -154,11 +154,15 @@ fn synthesize_marker_paragraph(para: &Paragraph) -> Option<Paragraph> {
     // 좁힘 조건:
     //   - inline_ctrl_count >= 3 (pi=394 = 3 TAC controls 기준)
     //   - n_leading >= 2 (leading gap 에 2+ ctrl)
-    let first_off = para.char_offsets.first().copied().unwrap_or(0) as usize;
+    let offsets = &para.char_offsets;
+    let first_off = offsets.first().copied().unwrap_or(0) as usize;
     let n_leading = first_off / 8;
     if n_leading < 2 || inline_ctrl_count < 3 {
         return None;
     }
+    // 좁힘 조건 (n_leading >= 2) 통과 ⇒ offsets 비어있지 않음.
+    // 따라서 빈 paragraph (offsets/chars empty) 경로는 본 좁힘 하에 도달 불가 —
+    // 별도 분기 두지 않음 (검토 PR #995 §3.3 b).
 
     // HWP5 path — char_offsets gap 분석으로 누락된 마커 위치 합성
     let chars: Vec<char> = para.text.chars().collect();
@@ -167,22 +171,7 @@ fn synthesize_marker_paragraph(para: &Paragraph) -> Option<Paragraph> {
     let mut new_offsets: Vec<u32> =
         Vec::with_capacity(para.char_offsets.len() + (inline_ctrl_count - existing_markers));
 
-    let offsets = &para.char_offsets;
-    if offsets.is_empty() && chars.is_empty() {
-        // 빈 paragraph + controls — 모든 control 을 위해 마커 push
-        for i in 0..inline_ctrl_count {
-            new_offsets.push((i * 8) as u32);
-            new_text.push('\u{FFFC}');
-        }
-        let mut synth = para.clone();
-        synth.text = new_text;
-        synth.char_offsets = new_offsets;
-        return Some(synth);
-    }
-
-    // 첫 visible char 전 leading gap
-    let first_off = offsets.first().copied().unwrap_or(0) as usize;
-    let n_leading = first_off / 8;
+    // 첫 visible char 전 leading gap (좁힘 가드에서 계산한 n_leading 재사용)
     for i in 0..n_leading {
         new_offsets.push((i * 8) as u32);
         new_text.push('\u{FFFC}');
