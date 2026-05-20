@@ -36,6 +36,16 @@ const FALLBACK_DOC_OPTIONS_LINK_DOC: &[u8] =
     include_bytes!("blank2010_assets/doc_options_link_doc.bin");
 const FALLBACK_SCRIPTS_JSCRIPT_VERSION: &[u8] =
     include_bytes!("blank2010_assets/scripts_jscript_version.bin");
+/// [Task #852 Stage 2.2] HWPX 컨테이너에 `Scripts/sourceScripts` 가 없는 경우
+/// (form-002.hwpx 등 다수 케이스) 의 빈 스크립트 fallback. `saved/blank2010.hwp`
+/// 추출 — 한컴 정답지가 모든 HWP 에 Scripts/DefaultJScript 요구하므로 contract
+/// 보장용. 16 byte 빈 스크립트.
+const FALLBACK_SCRIPTS_DEFAULT_JSCRIPT: &[u8] =
+    include_bytes!("blank2010_assets/scripts_default_jscript.bin");
+/// HWPX 컨테이너에 `Preview/PrvText.txt` 가 없을 때 fallback (4 byte).
+const FALLBACK_PRV_TEXT: &[u8] = include_bytes!("blank2010_assets/prvtext.bin");
+/// HWPX 컨테이너에 `Preview/PrvImage.png` 가 없을 때 fallback (5126 byte, blank PNG).
+const FALLBACK_PRV_IMAGE: &[u8] = include_bytes!("blank2010_assets/prvimage.bin");
 
 /// HWPX 컨테이너 → HWP OLE 스트림 매핑 결과
 pub(super) struct ContractStreams {
@@ -55,26 +65,32 @@ pub(super) struct ContractStreams {
 pub(super) fn extract_contract_streams(reader: &mut HwpxReader) -> ContractStreams {
     let mut streams = Vec::new();
 
-    // PrvText.txt (UTF-8) → /PrvText (UTF-16 LE, HWP5 spec)
-    if let Ok(prv_text_utf8) = reader.read_file("Preview/PrvText.txt") {
-        let utf16_bytes: Vec<u8> = prv_text_utf8
-            .encode_utf16()
-            .flat_map(|c| c.to_le_bytes())
-            .collect();
-        streams.push(("/PrvText".to_string(), utf16_bytes));
-    }
+    // PrvText.txt (UTF-8) → /PrvText (UTF-16 LE, HWP5 spec).
+    // HWPX 에 Preview 가 없으면 fallback (blank2010 추출).
+    let prv_text = match reader.read_file("Preview/PrvText.txt") {
+        Ok(utf8) => utf8.encode_utf16().flat_map(|c| c.to_le_bytes()).collect(),
+        Err(_) => FALLBACK_PRV_TEXT.to_vec(),
+    };
+    streams.push(("/PrvText".to_string(), prv_text));
 
-    // PrvImage.png → /PrvImage (PNG passthrough)
-    if let Ok(prv_image_bytes) = reader.read_file_bytes("Preview/PrvImage.png") {
-        streams.push(("/PrvImage".to_string(), prv_image_bytes));
-    }
+    // PrvImage.png → /PrvImage (PNG passthrough). 미존재 시 blank2010 fallback.
+    let prv_image = reader
+        .read_file_bytes("Preview/PrvImage.png")
+        .unwrap_or_else(|_| FALLBACK_PRV_IMAGE.to_vec());
+    streams.push(("/PrvImage".to_string(), prv_image));
 
-    // Scripts/sourceScripts → /Scripts/DefaultJScript (zlib deflate)
-    if let Ok(source_scripts_bytes) = reader.read_file_bytes("Scripts/sourceScripts") {
-        if let Some(compressed) = zlib_deflate(&source_scripts_bytes) {
-            streams.push(("/Scripts/DefaultJScript".to_string(), compressed));
+    // Scripts/sourceScripts → /Scripts/DefaultJScript (zlib deflate).
+    // HWPX 컨테이너에 sourceScripts 가 없으면 (form-002.hwpx 등) fallback.
+    let scripts_default_jscript = match reader.read_file_bytes("Scripts/sourceScripts") {
+        Ok(bytes) => {
+            zlib_deflate(&bytes).unwrap_or_else(|| FALLBACK_SCRIPTS_DEFAULT_JSCRIPT.to_vec())
         }
-    }
+        Err(_) => FALLBACK_SCRIPTS_DEFAULT_JSCRIPT.to_vec(),
+    };
+    streams.push((
+        "/Scripts/DefaultJScript".to_string(),
+        scripts_default_jscript,
+    ));
 
     // [Stage 2.2] HWPX 컨테이너에 동등 데이터가 없는 contract 3 스트림 fallback.
     // 한컴 정답지가 모든 HWP 파일에 요구하는 최소 OLE Property Set / 메타.

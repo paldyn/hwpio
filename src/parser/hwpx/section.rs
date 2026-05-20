@@ -3486,6 +3486,7 @@ fn parse_form_object(
     };
 
     // 요소 속성 파싱 (AbstractFormObjectType + AbstractButtonObjectType)
+    // [Task #852 Stage 2.4] HWP5 직렬화에 필요한 ComboBox/Edit/Button 속성 보존
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"name" => form.name = attr_str(&attr),
@@ -3495,6 +3496,52 @@ fn parse_form_object(
             b"enabled" => form.enabled = parse_bool(&attr),
             b"value" => form.value = if attr_str(&attr) == "CHECKED" { 1 } else { 0 },
             b"selectedValue" => form.text = attr_str(&attr), // comboBox 선택값
+            // ComboBox 전용 속성 (HWP5 ComboBoxSet 직렬화에 필요)
+            b"listBoxRows" => {
+                form.properties
+                    .insert("ListBoxRows".to_string(), attr_str(&attr));
+            }
+            b"listBoxWidth" => {
+                form.properties
+                    .insert("ListBoxWidth".to_string(), attr_str(&attr));
+            }
+            b"editEnable" => {
+                form.properties
+                    .insert("EditEnable".to_string(), attr_str(&attr));
+            }
+            // 공통 속성 (HWP5 CommonSet 직렬화에 필요)
+            b"groupName" => {
+                form.properties
+                    .insert("GroupName".to_string(), attr_str(&attr));
+            }
+            b"tabStop" => {
+                form.properties
+                    .insert("TabStop".to_string(), attr_str(&attr));
+            }
+            b"editable" => {
+                form.properties
+                    .insert("Editable".to_string(), attr_str(&attr));
+            }
+            b"tabOrder" => {
+                form.properties
+                    .insert("TabOrder".to_string(), attr_str(&attr));
+            }
+            b"borderTypeIDRef" => {
+                form.properties
+                    .insert("BorderType".to_string(), attr_str(&attr));
+            }
+            b"drawFrame" => {
+                form.properties
+                    .insert("DrawFrame".to_string(), attr_str(&attr));
+            }
+            b"printable" => {
+                form.properties
+                    .insert("Printable".to_string(), attr_str(&attr));
+            }
+            b"command" => {
+                form.properties
+                    .insert("Command".to_string(), attr_str(&attr));
+            }
             _ => {}
         }
     }
@@ -3557,7 +3604,32 @@ fn parse_form_object(
                             }
                         }
                     }
-                    _ => {} // formCharPr 등 무시
+                    b"formCharPr" => {
+                        // <hp:formCharPr charPrIDRef="0" followContext="0" autoSz="1" wordWrap="0"/>
+                        // [Task #852 Stage 2.4] HWP5 CharShapeSet 직렬화에 필요한 속성 보존
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"charPrIDRef" => {
+                                    form.properties
+                                        .insert("CharShapeID".to_string(), attr_str(&attr));
+                                }
+                                b"followContext" => {
+                                    form.properties
+                                        .insert("FollowContext".to_string(), attr_str(&attr));
+                                }
+                                b"autoSz" => {
+                                    form.properties
+                                        .insert("AutoSize".to_string(), attr_str(&attr));
+                                }
+                                b"wordWrap" => {
+                                    form.properties
+                                        .insert("WordWrap".to_string(), attr_str(&attr));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             Ok(Event::End(ref ee)) => {
