@@ -944,8 +944,7 @@ impl LayoutEngine {
         font_size: f64,
     ) -> Option<f64> {
         let pbf = page_border_fill.filter(|p| p.border_fill_id > 0)?;
-        use crate::model::page::PageBorderBasis;
-        let paper_based = matches!(pbf.basis, PageBorderBasis::PaperBased);
+        let paper_based = (pbf.attr & 0x01) != 0;
         if paper_based {
             return None;
         }
@@ -963,25 +962,22 @@ impl LayoutEngine {
         if let Some(pbf) = page_border_fill.filter(|p| p.border_fill_id > 0) {
             let bf_idx = (pbf.border_fill_id - 1) as usize;
             if let Some(bs) = styles.border_styles.get(bf_idx) {
-                // 외곽선 위치 기준: PageBorderFill.basis (PaperBased/BodyBased).
+                // 외곽선 위치 기준: attr bit 0 (textBorder=PAPER) 존중.
+                //   bit0 = 1 → paper 기준, bit0 = 0 → body 기준 (HWPX/HWP5 본래 의미).
                 // 회귀 history:
                 //   - task877: paper_based = (attr & 0x01) != 0 — sample16 정합, 시험지 회귀
                 //   - #920: paper_based = (attr & 0x01) == 0 — 시험지 정합, sample16 회귀
                 //   - #952: paper_based = true 전역 — 당시 모든 sample 정합 판정
-                //   - #987: bfid 정정 + attr 존중 — 변환본 logo overlap 회귀 (#1006)
-                // 정답 (#1006): 포맷별 분리 (PageBorderFill.basis) + 모두 PaperBased.
-                // 작업지시자 Hancom Office close-up 시각 판정: HWP3/HWP5/HWPX 모두
-                // logo 가 outline 내부 top-left 위치 → 세 포맷 모두 PaperBased contract.
-                // 또한 머리말 conditional clip 제거 (그림 이동 시 외곽선 shrink 회귀 해소),
-                // 꼬리말 clip 은 유지 (페이지 번호 외곽선 안쪽 회귀 해소 — PR #1011).
-                use crate::model::page::PageBorderBasis;
-                let paper_based = matches!(pbf.basis, PageBorderBasis::PaperBased);
-                let footer_inside = (pbf.attr & 0x04) != 0;
+                // [Task #987] #952 의 "sample16 = paper 정합" 은 bfid off-by-one
+                //   (mod.rs:2816) 으로 잘못된 border_fill 을 읽던 상태의 착시였음.
+                //   off-by-one 수정 후 sample16 한컴 정답지 = body 기준으로 재판정.
+                //   attr 존중 복원: HWPX/HWP5 는 자신의 attr bit0 의미 그대로,
+                //   HWP3 는 파서가 attr=0(body) 주입 (CLAUDE.md HWP3 격리 규칙).
+                let paper_based = (pbf.attr & 0x01) != 0;
                 if std::env::var("RHWP_DEBUG_PAGE_BORDER").is_ok() {
                     eprintln!(
-                        "PAGE_BORDER: attr=0x{:08x} bit0={} bit1={} bit2={} paper_based={} footer_inside={} bfid={} spacing(L={},R={},T={},B={})",
-                        pbf.attr, pbf.attr & 0x01, (pbf.attr >> 1) & 0x01, (pbf.attr >> 2) & 0x01,
-                        paper_based, footer_inside, pbf.border_fill_id,
+                        "PAGE_BORDER: attr=0x{:08x} bit0={} paper_based={} bfid={} spacing(L={},R={},T={},B={})",
+                        pbf.attr, pbf.attr & 0x01, paper_based, pbf.border_fill_id,
                         pbf.spacing_left, pbf.spacing_right, pbf.spacing_top, pbf.spacing_bottom,
                     );
                 }
@@ -1002,7 +998,7 @@ impl LayoutEngine {
                 let sp_b = hwpunit_to_px(pbf.spacing_bottom as i32, self.dpi);
                 // 종이 기준: 종이 가장자리에서 안쪽(+)으로 spacing
                 // 쪽 기준: 본문 영역에서 바깥쪽(-)으로 spacing
-                let (bx, mut by, bw, mut bh) = if paper_based {
+                let (bx, by, bw, bh) = if paper_based {
                     (
                         base_x + sp_l,
                         base_y + sp_t,
@@ -1017,18 +1013,6 @@ impl LayoutEngine {
                         base_h + sp_t + sp_b,
                     )
                 };
-                // [Task #1006 part 2] header_inside 는 clip 미적용 (cover logo
-                // 가 외곽선 내부 top-left 위치 — 작업지시자 Hancom Office close-up
-                // 시각 판정), footer_inside 만 clip 적용 (페이지 번호가 외곽선 바깥
-                // 위치 — 한컴 viewer 정합 — PR #1011). attr bit 1 (header) 무시,
-                // bit 2 (footer) 존중. spec 정의와 다르지만 한컴 실제 동작 정합 우선.
-                if !footer_inside {
-                    let footer_top = layout.body_area.y + layout.body_area.height;
-                    if by + bh > footer_top {
-                        bh = footer_top - by;
-                    }
-                }
-                let _ = &mut by;
 
                 let borders = &bs.borders;
                 let top_nodes = create_border_line_nodes(tree, &borders[2], bx, by, bx + bw, by);
@@ -4707,7 +4691,30 @@ impl LayoutEngine {
                         if !has_real_text {
                             let shape_w = hwpunit_to_px(common.width as i32, self.dpi);
                             let shape_h = hwpunit_to_px(common.height as i32, self.dpi);
-                            let shape_y = y_offset;
+                            // [Task #990] 해당 문단에 PageItem::FullParagraph 가
+                            // 발행되었으면(빈 문단이 호스트인 RFP 형) layout_paragraph
+                            // 가 이미 LINE_SEG advance 를 마쳤으므로, Shape 항목은
+                            // 글상자를 호스트 문단 시작(para_start)에 배치하고 재진행
+                            // 하지 않는다 — 이중 가산 방지(Task #974 c3e32151 회귀).
+                            // FullParagraph 항목이 없으면(선행 표 등에 이어 붙은
+                            // Shape, 예: hy-001 pi=27) Task #974 동작을 유지한다.
+                            let has_full_para_item =
+                                page_content.column_contents.iter().any(|cc| {
+                                    cc.items.iter().any(|it| {
+                                        matches!(
+                                            it,
+                                            PageItem::FullParagraph { para_index: pi }
+                                                if *pi == para_index
+                                        )
+                                    })
+                                });
+                            let para_start =
+                                para_start_y.get(&para_index).copied().unwrap_or(y_offset);
+                            let shape_y = if has_full_para_item {
+                                para_start
+                            } else {
+                                y_offset
+                            };
 
                             if !already_registered {
                                 let comp = composed.get(para_index);
@@ -4755,20 +4762,19 @@ impl LayoutEngine {
                                 );
                             }
 
-                            // [Task #1001 격차 D revert] line_spacing × 3 heuristic 은
-                            // non-variant 문서 (table-vpos-01 등) 의 treat_as_char Shape
-                            // 가 본 분기 통해 result_y 가 작아져 후속 paragraph (Table 등)
-                            // 위치 어긋남 (issue_table_vpos_01_page5 cell hit-test 회귀).
-                            // 이전 동작 (shape_y + line_advance.max(shape_h)) 으로 복원.
-                            // sample16-hwp5 variant cover 의 시각 breathing room 은 별도
-                            // follow-up — variant flag 를 layout 까지 thread 한 후 variant
-                            // -only 분기 적용 (PR #1005 scope 외).
-                            let line_advance = para
-                                .line_segs
-                                .first()
-                                .map(|ls| hwpunit_to_px(ls.line_height + ls.line_spacing, self.dpi))
-                                .unwrap_or(shape_h);
-                            result_y = shape_y + line_advance.max(shape_h);
+                            // [Task #990] FullParagraph 항목이 없는 경우에만
+                            // LINE_SEG 1회분을 진행한다. FullParagraph 가 있으면
+                            // 이미 진행되었으므로 result_y(=y_offset)를 유지한다.
+                            if !has_full_para_item {
+                                let line_advance = para
+                                    .line_segs
+                                    .first()
+                                    .map(|ls| {
+                                        hwpunit_to_px(ls.line_height + ls.line_spacing, self.dpi)
+                                    })
+                                    .unwrap_or(shape_h);
+                                result_y = shape_y + line_advance.max(shape_h);
+                            }
                         }
                     }
                 }
