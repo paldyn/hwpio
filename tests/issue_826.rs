@@ -53,6 +53,10 @@ fn issue_826_other_pua_existing_unchanged() {
     // → raw passthrough 로 변경. fallback chain 의 함초롬바탕 family 가
     // PUA 글리프 매칭 (사각 안 ①, 한컴 권위 정합). 단언 기대값을 raw
     // passthrough 로 정정.
-    assert_eq!(map_pua_bullet_char('\u{F02B1}'), '\u{F02B1}', "사각 안 ① (raw passthrough)");
+    assert_eq!(
+        map_pua_bullet_char('\u{F02B1}'),
+        '\u{F02B1}',
+        "사각 안 ① (raw passthrough)"
+    );
     assert_eq!(map_pua_bullet_char('\u{F0854}'), '\u{300A}', "《");
 }
