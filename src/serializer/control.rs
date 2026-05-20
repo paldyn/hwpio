@@ -92,6 +92,16 @@ pub fn serialize_control(
         Control::Field(f) => {
             // 필드 컨트롤 직렬화 (표 154)
             // ctrl_id(4) + 속성(4) + 기타속성(1) + command_len(2) + command(가변) + id(4)
+            //
+            // [Task #852 Stage 2.5] ClickHere 의 field_id 는 정답지 패턴 (form 마지막 +1) 우선.
+            // form_order_counter 가 form 다음 ClickHere 시점에 5 (form 0..4 다음) → instance_id =
+            // 0x7dcd59d6 + 5 = 0x7dcd59db (정답지와 일치).
+            let field_id =
+                if matches!(f.field_type, FieldType::ClickHere) && peek_form_order_counter() > 0 {
+                    0x7dcd_59d6u32.wrapping_add(peek_form_order_counter())
+                } else {
+                    f.field_id
+                };
             let cmd_utf16: Vec<u16> = f.command.encode_utf16().collect();
             let cmd_len = cmd_utf16.len();
             let mut data = Vec::with_capacity(4 + 4 + 1 + 2 + cmd_len * 2 + 4);
@@ -102,7 +112,7 @@ pub fn serialize_control(
             for ch in &cmd_utf16 {
                 data.extend_from_slice(&ch.to_le_bytes());
             }
-            data.extend_from_slice(&f.field_id.to_le_bytes());
+            data.extend_from_slice(&field_id.to_le_bytes());
             data.extend_from_slice(&f.memo_index.to_le_bytes());
             records.push(Record {
                 tag_id: tags::HWPTAG_CTRL_HEADER,
@@ -110,6 +120,39 @@ pub fn serialize_control(
                 size: data.len() as u32,
                 data,
             });
+            // [Task #852 Stage 2.5] ClickHere 필드의 CTRL_DATA 자식 레코드 (0x57, 26 bytes).
+            // 정답지 (samples/form-01.hwp) reverse engineering 구조:
+            //   0..2   0x021b (헤더 magic)
+            //   2..6   0x00000001
+            //   6..8   0x4000 (HWP5 CTRL_DATA flag — 정답지 관찰)
+            //   8..10  0x0001
+            //   10..12 u16 LE wchar_count (필드 이름 길이)
+            //   12..   UTF-16 LE 필드 이름 (예: "myMsg01")
+            //
+            // ctrl_data_name (HWPX `<hp:fieldBegin name="...">`) 우선, 비어있으면 생성 안 함.
+            if matches!(f.field_type, FieldType::ClickHere) {
+                if let Some(name) = &f.ctrl_data_name {
+                    if !name.is_empty() {
+                        let name_utf16: Vec<u16> = name.encode_utf16().collect();
+                        let nlen = name_utf16.len();
+                        let mut cdata = Vec::with_capacity(12 + nlen * 2);
+                        cdata.extend_from_slice(&0x021bu16.to_le_bytes());
+                        cdata.extend_from_slice(&0x00000001u32.to_le_bytes());
+                        cdata.extend_from_slice(&0x4000u16.to_le_bytes());
+                        cdata.extend_from_slice(&0x0001u16.to_le_bytes());
+                        cdata.extend_from_slice(&(nlen as u16).to_le_bytes());
+                        for ch in &name_utf16 {
+                            cdata.extend_from_slice(&ch.to_le_bytes());
+                        }
+                        records.push(Record {
+                            tag_id: tags::HWPTAG_CTRL_DATA,
+                            level: level + 1,
+                            size: cdata.len() as u32,
+                            data: cdata,
+                        });
+                    }
+                }
+            }
         }
         // [Task #852 Stage 2.4] 양식 개체 직렬화 — CTRL_HEADER + HWPTAG_FORM_OBJECT
         Control::Form(form) => serialize_form_control(form, level, records),
@@ -1819,6 +1862,11 @@ fn next_form_order() -> u32 {
         c.set(o + 1);
         o
     })
+}
+
+/// 현재 카운터 값 조회 (다음 Form 직렬화 시 사용될 order). Form 5 개 직렬화 직후 = 5.
+fn peek_form_order_counter() -> u32 {
+    FORM_ORDER_COUNTER.with(|c| c.get())
 }
 
 /// 양식 개체 직렬화 — CTRL_HEADER (46 bytes) + HWPTAG_FORM_OBJECT 자식

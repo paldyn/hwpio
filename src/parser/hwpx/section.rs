@@ -24,6 +24,7 @@ use crate::model::shape::{
 use crate::model::style::{Fill, ShapeBorderLine};
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
 use crate::model::HwpUnit16;
+use crate::parser::tags;
 
 use super::utils::{
     attr_str, local_name, parse_bool, parse_color, parse_gradient_type, parse_hatch_style,
@@ -2834,12 +2835,64 @@ fn parse_autonum_attrs(e: &quick_xml::events::BytesStart) -> AutoNumber {
 
 fn parse_field_begin_attrs(e: &quick_xml::events::BytesStart) -> Field {
     let mut f = Field::default();
+    let mut field_name: Option<String> = None;
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"type" => f.field_type = parse_field_type(&attr_str(&attr)),
-            b"name" => f.command = attr_str(&attr),
+            b"name" => field_name = Some(attr_str(&attr)),
+            // [Task #852 Stage 2.5] HWP5 직렬화에 필요한 필드 메타
+            b"id" => {
+                if let Ok(v) = attr_str(&attr).parse::<u32>() {
+                    f.field_id = v;
+                }
+            }
+            b"fieldid" => {
+                if let Ok(v) = attr_str(&attr).parse::<u32>() {
+                    // fieldid (instance ID) — 정답지의 CTRL_HEADER 끝에 저장
+                    f.field_id = v;
+                }
+            }
+            b"editable" => {
+                // properties bit 0 = editable in form
+                if attr_str(&attr) == "1" {
+                    f.properties |= 1;
+                }
+            }
             _ => {}
         }
+    }
+    // [Task #852 Stage 2.5] field_type → ctrl_id 매핑.
+    // 정답지 (samples/form-01.hwp) reverse engineering: ClickHere CTRL_HEADER 의 ctrl_id 가
+    // "%clk" (FIELD_CLICKHERE). HWPX parser 가 이전엔 ctrl_id 미설정 → serializer 가
+    // 0x00000000 작성 → 한컴이 무효 컨트롤로 인식 (JS 핸들러 reference 끊김).
+    f.ctrl_id = match f.field_type {
+        FieldType::Date => tags::FIELD_DATE,
+        FieldType::DocDate => tags::FIELD_DOCDATE,
+        FieldType::Path => tags::FIELD_PATH,
+        FieldType::Bookmark => tags::FIELD_BOOKMARK,
+        FieldType::MailMerge => tags::FIELD_MAILMERGE,
+        FieldType::CrossRef => tags::FIELD_CROSSREF,
+        FieldType::Formula => tags::FIELD_FORMULA,
+        FieldType::ClickHere => tags::FIELD_CLICKHERE,
+        FieldType::Summary => tags::FIELD_SUMMARY,
+        FieldType::UserInfo => tags::FIELD_USERINFO,
+        FieldType::Hyperlink => tags::FIELD_HYPERLINK,
+        FieldType::Memo => tags::FIELD_MEMO,
+        FieldType::PrivateInfoSecurity => tags::FIELD_PRIVATE_INFO,
+        FieldType::TableOfContents => tags::FIELD_TOC,
+        FieldType::Unknown => 0,
+    };
+    // ClickHere 의 extra_properties 정답지 관찰값: 0x09
+    if matches!(f.field_type, FieldType::ClickHere) {
+        f.extra_properties = 0x09;
+    }
+    // command 가 비어있으면 fieldBegin 의 name 사용 (CTRL_DATA name 으로도 활용)
+    if f.command.is_empty() {
+        if let Some(name) = field_name.as_ref() {
+            f.ctrl_data_name = Some(name.clone());
+        }
+    } else if let Some(name) = field_name.as_ref() {
+        f.ctrl_data_name = Some(name.clone());
     }
     f
 }

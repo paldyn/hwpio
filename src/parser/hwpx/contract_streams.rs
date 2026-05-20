@@ -79,13 +79,32 @@ pub(super) fn extract_contract_streams(reader: &mut HwpxReader) -> ContractStrea
         .unwrap_or_else(|_| FALLBACK_PRV_IMAGE.to_vec());
     streams.push(("/PrvImage".to_string(), prv_image));
 
-    // Scripts/sourceScripts → /Scripts/DefaultJScript (zlib deflate).
-    // HWPX 컨테이너에 sourceScripts 가 없으면 (form-002.hwpx 등) fallback.
-    let scripts_default_jscript = match reader.read_file_bytes("Scripts/sourceScripts") {
-        Ok(bytes) => {
-            zlib_deflate(&bytes).unwrap_or_else(|| FALLBACK_SCRIPTS_DEFAULT_JSCRIPT.to_vec())
+    // [Task #852 Stage 2.5] HWPX Scripts/{headerScripts, sourceScripts} →
+    // /Scripts/DefaultJScript (HWP5 spec, raw deflate).
+    //
+    // 정답지 (samples/form-01.hwp) reverse engineering 결과 구조 (raw uncompressed):
+    //   0..4        u32 LE = headerScripts wchar count
+    //   4..L1+4     headerScripts (UTF-16 LE, L1 bytes) — HWPX 와 byte-identical
+    //   L1+4..L1+8  u32 LE = sourceScripts wchar count
+    //   L1+8..L1+L2+8  sourceScripts (UTF-16 LE, L2 bytes) — HWPX 와 byte-identical
+    //   tail        zero(8) + 0xffffffff(4) = 12 bytes
+    //
+    // 압축은 raw deflate (zlib 헤더 없음). Stage 2.1 의 단순 zlib_deflate(sourceScripts) 는
+    // 한컴이 받아들이지만 var 선언 부재로 Form 컨트롤 JS 핸들러 미동작.
+    let header_scripts = reader.read_file_bytes("Scripts/headerScripts").ok();
+    let source_scripts = reader.read_file_bytes("Scripts/sourceScripts").ok();
+    let scripts_default_jscript = match (header_scripts, source_scripts) {
+        (Some(hs), Some(ss)) if !hs.is_empty() || !ss.is_empty() => {
+            let mut combined = Vec::with_capacity(4 + hs.len() + 4 + ss.len() + 12);
+            combined.extend_from_slice(&((hs.len() / 2) as u32).to_le_bytes());
+            combined.extend_from_slice(&hs);
+            combined.extend_from_slice(&((ss.len() / 2) as u32).to_le_bytes());
+            combined.extend_from_slice(&ss);
+            combined.extend_from_slice(&[0u8; 8]);
+            combined.extend_from_slice(&[0xff, 0xff, 0xff, 0xff]);
+            raw_deflate(&combined).unwrap_or_else(|| FALLBACK_SCRIPTS_DEFAULT_JSCRIPT.to_vec())
         }
-        Err(_) => FALLBACK_SCRIPTS_DEFAULT_JSCRIPT.to_vec(),
+        _ => FALLBACK_SCRIPTS_DEFAULT_JSCRIPT.to_vec(),
     };
     streams.push((
         "/Scripts/DefaultJScript".to_string(),
@@ -116,12 +135,24 @@ pub(super) fn extract_contract_streams(reader: &mut HwpxReader) -> ContractStrea
 }
 
 /// 단순 zlib deflate 헬퍼. 실패 시 None.
+#[allow(dead_code)]
 fn zlib_deflate(input: &[u8]) -> Option<Vec<u8>> {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
     use std::io::Write;
 
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(input).ok()?;
+    encoder.finish().ok()
+}
+
+/// Raw deflate 헬퍼 (zlib 헤더 없음). HWP5 의 Scripts/DefaultJScript 압축에 사용.
+fn raw_deflate(input: &[u8]) -> Option<Vec<u8>> {
+    use flate2::write::DeflateEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(input).ok()?;
     encoder.finish().ok()
 }
