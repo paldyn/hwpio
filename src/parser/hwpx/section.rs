@@ -2574,6 +2574,9 @@ fn parse_shape_object(
     let mut has_pos = false;
     let mut x_coords = [0i32; 4];
     let mut y_coords = [0i32; 4];
+    // [Task #1067] polygon / curve 의 가변 꼭짓점 `<hc:pt x=... y=.../>` 누적.
+    // 기존 pt0/pt1/pt2/pt3 (rect 의 4 꼭짓점) 와 별개.
+    let mut polygon_points: Vec<crate::model::Point> = Vec::new();
 
     let object_ids = parse_object_element_attrs(e, &mut common, &mut shape_attr);
 
@@ -2642,6 +2645,20 @@ fn parse_shape_object(
                                 _ => {}
                             }
                         }
+                    }
+                    // [Task #1067] polygon / curve 의 가변 꼭짓점 (<hc:pt x="..." y="..."/>).
+                    // pt0/pt1/pt2/pt3 (rect 의 4 꼭짓점) 매칭 후 fall-through 로 본 분기 도달.
+                    b"pt" => {
+                        let mut px: i32 = 0;
+                        let mut py: i32 = 0;
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"x" => px = parse_i32(&attr),
+                                b"y" => py = parse_i32(&attr),
+                                _ => {}
+                            }
+                        }
+                        polygon_points.push(crate::model::Point { x: px, y: py });
                     }
                     b"renderingInfo" => {
                         parse_rendering_info(reader, &mut shape_attr)?;
@@ -2718,11 +2735,15 @@ fn parse_shape_object(
         b"polygon" => ShapeObject::Polygon(PolygonShape {
             common,
             drawing,
-            ..Default::default()
+            // [Task #1067] HWPX `<hc:pt>` 점들을 PolygonShape::points 로 매핑.
+            // 누락 시 polygon path 가 빈 상태로 렌더링되어 도형 미표시 (rhwp-studio + 한컴 둘 다).
+            points: polygon_points,
         }),
         b"curve" => ShapeObject::Curve(CurveShape {
             common,
             drawing,
+            // CurveShape 도 동일 패턴 — 누락 시 곡선 미표시. segment_types 는 별개로 추후 task.
+            points: polygon_points,
             ..Default::default()
         }),
         _ => ShapeObject::Rectangle(RectangleShape {

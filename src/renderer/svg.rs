@@ -693,16 +693,24 @@ impl SvgRenderer {
         let cx = bbox.x + bbox.width / 2.0;
         let cy = bbox.y + bbox.height / 2.0;
         let mut parts = Vec::new();
-        // 대칭을 먼저 적용 (중심 기준 스케일 반전)
+        // [Task #1067] SVG transform 은 left-to-right 적용 (첫 transform 이 마지막 영향).
+        // 한컴 정답지 시각 표준: 도형이 자체 좌표계 기준으로 먼저 회전 후 flip 적용.
+        // SVG 에서 동일 결과 = "translate(flip) scale(-1,1) rotate(-θ)"
+        // (flip 와 함께 회전 시 각도 부호 반전 필요).
+        let flip_negate_rotation = transform.horz_flip ^ transform.vert_flip;
         if transform.horz_flip {
             parts.push(format!("translate({},0) scale(-1,1)", cx * 2.0));
         }
         if transform.vert_flip {
             parts.push(format!("translate(0,{}) scale(1,-1)", cy * 2.0));
         }
-        // 회전 (중심 기준)
         if transform.rotation != 0.0 {
-            parts.push(format!("rotate({},{},{})", transform.rotation, cx, cy));
+            let effective_rotation = if flip_negate_rotation {
+                -transform.rotation
+            } else {
+                transform.rotation
+            };
+            parts.push(format!("rotate({},{},{})", effective_rotation, cx, cy));
         }
         self.output
             .push_str(&format!("<g transform=\"{}\">\n", parts.join(" ")));
@@ -2239,10 +2247,18 @@ impl Renderer for SvgRenderer {
     }
 
     fn draw_text(&mut self, text: &str, x: f64, y: f64, style: &TextStyle) {
+        // [Task #1067] inline 컨트롤 placeholder (U+FFFC OBJECT REPLACEMENT CHARACTER) 를
+        // 보이지 않게 처리. HWP/HWPX 의 inline 도형/표/그림 등 treat_as_char 컨트롤이
+        // paragraph text 자체에 U+FFFC 로 표현됨 — 도형 path 는 별도 emit 되므로 본
+        // placeholder character 는 시각적으로 invisible 해야 한다. 한컴 정답지 정합.
+        let text: String = text.chars().filter(|&c| c != '\u{FFFC}').collect();
+        if text.is_empty() {
+            return;
+        }
         // [Task #509] 한컴은 폰트 지정과 상관없이 PUA 를 자체 처리. 지정 폰트에 글리프
         // 부재 시 한컴 내부 매핑이 발행. rhwp 도 동일 동작 모방 — 일반 텍스트도 PUA
         // 변환 적용 (PR #251 정합). 매핑 표는 한컴 PDF 정답지 기준.
-        let text = &expand_pua_render_text(text);
+        let text = &expand_pua_render_text(&text);
         // [Task #528] Hanyang-PUA 옛한글 → KS X 1026-1:2007 자모 시퀀스.
         // 한/글 2010 이전 옛한글 PUA 인코딩을 표준 자모로 변환 (KTUG 매핑).
         let text = &expand_pua_old_hangul(text);
