@@ -174,12 +174,14 @@ variant 단일 단 partial-table split allowed_top_vpos=1500.
 - Stage 5 vpos normalize 의 paragraph local reset detection 정밀화 필요
 - 또는 paragraph_layout 의 추가 spacing path 정합
 
-### 6.2 k-water-rfp +2 over-split
+### 6.2 k-water-rfp +2 over-split → **별도 issue 등록 완료: #1086**
 
 cell content overflow 본질 path:
 - pi=52 표 (4x4) cell[14] 24 paragraphs overflow
 - pi=180 표 (32x4) row 측정
 - cell rendering 모델 본질 변경 필요
+
+추적: https://github.com/edwardkim/rhwp/issues/1086
 
 ### 6.3 paragraph 드래그 선택 정확도
 
