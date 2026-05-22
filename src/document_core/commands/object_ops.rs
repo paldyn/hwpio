@@ -4544,17 +4544,40 @@ impl DocumentCore {
             })
         };
 
+        // [Task #1058 reopen Round 5] 신규 각주 inner paragraph 한컴 contract 정합:
+        //   - style_id = 11 (각주 style, 한컴 DocInfo 기본 각주 style ID)
+        //   - para_shape_id = 0 (각주 default ParaShape)
+        //   - controls = [AutoNumber] (각주 번호 inline 컨트롤, char index 0 위치)
+        //   - text = "  " (placeholder space ×2, AutoNumber 가 두 space 사이 8 cu 차지)
+        //   - char_offsets = [0, 8] (첫 space pos 0, AutoNumber anchor 점유 pos 0~7, 두 번째 space pos 8)
+        //   - char_count = 10 (2 placeholder + 8 AutoNumber inline ctrl)
+        //   - has_para_text = true
+        // 한컴 정답지 samples/footnote-01.hwp 의 각주 inner_para 와 동일한 contract.
+        // 사용자 입력은 두 placeholder 뒤 (char_offset=2) 부터 시작 — insert_text_at 의
+        // 일반 분기가 char_offsets[i] = base + sum(widths) 시프트 (jump 8 보존).
+        let auto_num = crate::model::control::AutoNumber {
+            number_type: crate::model::control::AutoNumberType::Footnote,
+            format: 0, // Digit
+            superscript: false,
+            number: footnote_number,
+            assigned_number: footnote_number,
+            user_symbol: '\0',
+            prefix_char: '\0',
+            suffix_char: ')',
+        };
         let inner_para = Paragraph {
-            text: String::new(),
-            char_count: 1,
+            text: "  ".to_string(), // placeholder space ×2 (정답지 정합)
+            char_count: 10,         // 2 placeholder + 8 (AutoNumber inline ctrl)
             char_count_msb: true,
-            control_mask: 0,
-            para_shape_id: default_para_shape_id,
-            style_id: 0,
+            control_mask: 1u32 << 0x12, // bit 18 (AutoNumber)
+            char_offsets: vec![0, 8],   // AutoNumber 가 두 space 사이 8 cu 차지
+            para_shape_id: 0,
+            style_id: 11, // 각주 style
             char_shapes: vec![CharShapeRef {
                 start_pos: 0,
                 char_shape_id: default_char_shape_id,
             }],
+            controls: vec![crate::model::control::Control::AutoNumber(auto_num)],
             line_segs: vec![LineSeg {
                 text_start: 0,
                 line_height: 1000,
@@ -4565,13 +4588,19 @@ impl DocumentCore {
                 tag: 0x00060000,
                 ..Default::default()
             }],
-            has_para_text: false,
+            has_para_text: true,
             ..Default::default()
         };
+        // default_para_shape_id 변수가 위에서 unused 가 되지 않도록 (caller paragraph 의 ps 정보는
+        // 본 본문 paragraph 의 contract 보존 — 각주 본문은 ps_id=0 사용)
+        let _ = default_para_shape_id;
 
         let footnote = Footnote {
             number: footnote_number,
             paragraphs: vec![inner_para],
+            // [Task #1050] HWP5 CTRL_FOOTNOTE 한컴 default
+            after_decoration_letter: 0x0029, // ')'
+            ..Default::default()
         };
 
         // 문단에 각주 컨트롤 삽입

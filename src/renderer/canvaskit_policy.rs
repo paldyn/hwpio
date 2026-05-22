@@ -35,9 +35,28 @@ impl CanvasKitReplayMode {
         }
     }
 
-    pub fn allows_canvas2d_overlay(self) -> bool {
-        matches!(self, Self::Compat)
+    fn policy(self) -> CanvasKitReplayPolicy {
+        match self {
+            // P17 intentionally keeps both public modes on the same direct replay
+            // contract. `compat` is still accepted for API/URL compatibility and
+            // future conservative direct-replay tuning, but it must not mean a
+            // hidden Canvas2D paint overlay.
+            Self::Default | Self::Compat => CanvasKitReplayPolicy::DIRECT_ONLY,
+        }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CanvasKitReplayPolicy {
+    hidden_canvas2d_overlay_allowed: bool,
+    direct_replay_required: bool,
+}
+
+impl CanvasKitReplayPolicy {
+    const DIRECT_ONLY: Self = Self {
+        hidden_canvas2d_overlay_allowed: false,
+        direct_replay_required: true,
+    };
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -198,6 +217,7 @@ struct SelectedTextVariant {
 
 struct CanvasKitReplayPlanBuilder {
     mode: CanvasKitReplayMode,
+    policy: CanvasKitReplayPolicy,
     selected_variants: BTreeMap<String, SelectedTextVariant>,
     summary: CanvasKitReplaySummary,
     items: Vec<CanvasKitReplayItem>,
@@ -210,6 +230,7 @@ impl CanvasKitReplayPlanBuilder {
     ) -> Self {
         Self {
             mode,
+            policy: mode.policy(),
             selected_variants,
             summary: CanvasKitReplaySummary::default(),
             items: Vec::new(),
@@ -219,8 +240,8 @@ impl CanvasKitReplayPlanBuilder {
     fn finish(self, text_variants: Vec<CanvasKitTextVariantReport>) -> CanvasKitReplayPlan {
         CanvasKitReplayPlan {
             mode: self.mode,
-            hidden_canvas2d_overlay_allowed: self.mode.allows_canvas2d_overlay(),
-            direct_replay_required: matches!(self.mode, CanvasKitReplayMode::Default),
+            hidden_canvas2d_overlay_allowed: self.policy.hidden_canvas2d_overlay_allowed,
+            direct_replay_required: self.policy.direct_replay_required,
             summary: self.summary,
             items: self.items,
             text_variants,
@@ -264,19 +285,20 @@ impl CanvasKitReplayPlanBuilder {
     }
 
     fn push_cache_hint_item(&mut self, path: &str, cache_hint: CacheHint) {
-        let (status, reason, compat_overlay_allowed) = if self.mode.allows_canvas2d_overlay() {
-            (
-                CanvasKitReplayStatus::CompatOverlay,
-                CanvasKitReplayReason::CompatOverlayAllowed,
-                true,
-            )
-        } else {
-            (
-                CanvasKitReplayStatus::DirectRequired,
-                CanvasKitReplayReason::HiddenOverlayForbidden,
-                false,
-            )
-        };
+        let (status, reason, compat_overlay_allowed) =
+            if self.policy.hidden_canvas2d_overlay_allowed {
+                (
+                    CanvasKitReplayStatus::CompatOverlay,
+                    CanvasKitReplayReason::CompatOverlayAllowed,
+                    true,
+                )
+            } else {
+                (
+                    CanvasKitReplayStatus::DirectRequired,
+                    CanvasKitReplayReason::HiddenOverlayForbidden,
+                    false,
+                )
+            };
         self.push(CanvasKitReplayItem {
             path: format!("{path}/cacheHint"),
             op_type: "cacheHint",
@@ -433,7 +455,7 @@ impl CanvasKitReplayPlanBuilder {
         op_type: &'static str,
         feature: CanvasKitReplayFeature,
     ) -> CanvasKitReplayItem {
-        if self.mode.allows_canvas2d_overlay() {
+        if self.policy.hidden_canvas2d_overlay_allowed {
             CanvasKitReplayItem {
                 path,
                 op_type,
@@ -656,7 +678,7 @@ mod tests {
     }
 
     #[test]
-    fn compat_mode_reports_transition_overlay_for_image() {
+    fn compat_mode_keeps_image_on_direct_replay_contract() {
         let tree = tree_with_ops(vec![PaintOp::Image {
             bbox: bbox(),
             image: ImageNode::new(1, Some(vec![1, 2, 3])),
@@ -665,11 +687,17 @@ mod tests {
 
         let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Compat);
 
-        assert_eq!(plan.summary.direct_required_items, 0);
-        assert_eq!(plan.summary.compat_overlay_items, 1);
-        assert_eq!(plan.summary.hidden_overlay_violations, 0);
-        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::CompatOverlay);
-        assert!(plan.items[0].compat_overlay_allowed);
+        assert!(!plan.hidden_canvas2d_overlay_allowed);
+        assert!(plan.direct_replay_required);
+        assert_eq!(plan.summary.direct_required_items, 1);
+        assert_eq!(plan.summary.compat_overlay_items, 0);
+        assert_eq!(plan.summary.hidden_overlay_violations, 1);
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::DirectRequired);
+        assert_eq!(
+            plan.items[0].reason,
+            CanvasKitReplayReason::HiddenOverlayForbidden
+        );
+        assert!(!plan.items[0].compat_overlay_allowed);
     }
 
     #[test]
@@ -720,7 +748,10 @@ mod tests {
         );
 
         let compat_plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Compat);
-        assert_eq!(compat_plan.summary.compat_overlay_items, 2);
+        assert!(!compat_plan.hidden_canvas2d_overlay_allowed);
+        assert!(compat_plan.direct_replay_required);
+        assert_eq!(compat_plan.summary.direct_required_items, 2);
+        assert_eq!(compat_plan.summary.compat_overlay_items, 0);
     }
 
     #[test]
@@ -748,7 +779,8 @@ mod tests {
 
         let compat_plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Compat);
         assert_eq!(compat_plan.summary.direct_items, 1);
-        assert_eq!(compat_plan.summary.compat_overlay_items, 1);
+        assert_eq!(compat_plan.summary.direct_required_items, 1);
+        assert_eq!(compat_plan.summary.compat_overlay_items, 0);
         assert_eq!(compat_plan.items[1].detail.as_deref(), Some("verticalText"));
     }
 
@@ -797,7 +829,7 @@ mod tests {
         let compat_plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Compat);
         assert_eq!(
             compat_plan.items[0].status,
-            CanvasKitReplayStatus::CompatOverlay
+            CanvasKitReplayStatus::DirectRequired
         );
     }
 

@@ -78,6 +78,16 @@ fn parse_section_def_start(e: &quick_xml::events::BytesStart, sec_def: &mut Sect
             b"tabStop" => {
                 sec_def.default_tab_spacing = parse_u32(&attr);
             }
+            // [Task #1058] 한컴 HWP5 spec 표 129 정합:
+            //   - spaceColumns → column_spacing (HWPUNIT16, default 1134 for 다단)
+            //   - outlineShapeIDRef → outline_numbering_id (UINT16, 1=기본 번호 문단 모양)
+            b"spaceColumns" => {
+                let v = parse_u32(&attr);
+                sec_def.column_spacing = v as i16;
+            }
+            b"outlineShapeIDRef" => {
+                sec_def.outline_numbering_id = parse_u16(&attr);
+            }
             _ => {}
         }
     }
@@ -124,8 +134,17 @@ fn parse_paragraph(
     let mut sec_def: Option<SectionDef> = None;
 
     // 문단 어트리뷰트
+    // [Task #1058 후속] HWPX `<hp:p id>` → HWP PARA_HEADER instance_id (UINT32) 직접 매핑.
+    // HWPX 의 id 값 ("0" 또는 "2147483648"=0x80000000) 이 한컴 정답지의 instance_id 패턴과
+    // 정확 일치. 누락 시 한컴편집기가 각주 추가 시 본문 다단계 목록 부여 (Task #1058 본질).
+    let mut hp_p_id: u32 = 0;
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
+            b"id" => {
+                if let Ok(s) = std::str::from_utf8(&attr.value) {
+                    hp_p_id = s.parse::<u32>().unwrap_or(0);
+                }
+            }
             b"paraPrIDRef" => para.para_shape_id = parse_u16(&attr),
             b"styleIDRef" => para.style_id = parse_u8(&attr),
             b"columnBreak" => {
@@ -350,6 +369,13 @@ fn parse_paragraph(
             "\u{0002}" | "\u{0003}" | "\u{0004}" => {
                 utf16_pos += 8;
             }
+            "\u{0012}" => {
+                // [Task #1050] AUTO_NUMBER (0x12) — HWP PARA_TEXT 정합:
+                //   char_offsets.push(pos) + text.push(' ') (placeholder) + jump 8.
+                char_offsets.push(utf16_pos);
+                visual_text.push(' ');
+                utf16_pos += 8;
+            }
             _ => {
                 for c in part.chars() {
                     char_offsets.push(utf16_pos);
@@ -373,13 +399,39 @@ fn parse_paragraph(
     para.has_para_text = !para.text.is_empty() || !para.controls.is_empty();
 
     // char_shapes는 원본 문단 순서(text_parts)를 기준으로 계산한 위치를 그대로 사용한다.
-    para.char_shapes = char_shape_changes
-        .into_iter()
-        .map(|(pos, id)| CharShapeRef {
+    // [Task #1058 후속] 같은 char_shape_id 연속 dedup — HWPX 의 여러 run 이 같은
+    // charPrIDRef 일 때 HWP PARA_CHAR_SHAPE 는 첫 entry 1개만 유지하므로 정합.
+    let mut deduped_cs: Vec<CharShapeRef> = Vec::new();
+    for (pos, id) in char_shape_changes {
+        if let Some(last) = deduped_cs.last() {
+            if last.char_shape_id == id {
+                continue;
+            }
+        }
+        deduped_cs.push(CharShapeRef {
             start_pos: pos,
             char_shape_id: id,
-        })
-        .collect();
+        });
+    }
+    para.char_shapes = deduped_cs;
+
+    // [Task #1058 후속] column_type/raw_break_type — HWP 정합 (스펙 표 59):
+    //   bit 0 (0x01) = 구역 나누기, bit 1 (0x02) = 다단 나누기,
+    //   bit 2 (0x04) = 쪽 나누기,  bit 3 (0x08) = 단 나누기
+    // 본문 첫 paragraph (sec_def 보유 또는 colPr 보유) 의 break_type 정합:
+    //   - sec_def Some + ColumnDef → 0x03 (구역 + 다단)
+    //   - sec_def Some 만 → 0x01 (구역)
+    // ColumnDef 는 para.controls 에 push 되었음. sec_def 는 별도 변수.
+    let has_section = sec_def.is_some();
+    let has_column_def = para
+        .controls
+        .iter()
+        .any(|c| matches!(c, Control::ColumnDef(_)));
+    if has_section && has_column_def && para.raw_break_type == 0 {
+        para.raw_break_type = 0x03;
+    } else if has_section && para.raw_break_type == 0 {
+        para.raw_break_type = 0x01;
+    }
 
     // 기본 line_seg (빈 문단이라도 최소 1개)
     if para.line_segs.is_empty() {
@@ -389,6 +441,18 @@ fn parse_paragraph(
             ..Default::default()
         });
     }
+
+    // [Task #1058 후속] HWPX `<hp:p id>` → HWP PARA_HEADER instance_id 매핑.
+    // raw_header_extra 구조 (serializer 정합 — body_text.rs:241):
+    //   raw_header_extra[0..6] = numCharShapes(2) + numRangeTags(2) + numLineSegs(2)
+    //                              ← serializer 가 건너뜀 (실제 데이터 기반 재계산)
+    //   raw_header_extra[6..10] = instanceId (UINT32 LE) ← HWPX `id` 매핑
+    // raw_header_extra 가 비어 있으면 serializer 가 instance_id=0 으로 작성.
+    // 한컴편집기 호환을 위해 HWPX 의 id 값을 정확히 보존.
+    let mut header_extra = Vec::with_capacity(10);
+    header_extra.extend_from_slice(&[0u8; 6]); // numCharShapes/numRangeTags/numLineSegs 자리
+    header_extra.extend_from_slice(&hp_p_id.to_le_bytes()); // instanceId
+    para.raw_header_extra = header_extra;
 
     Ok((para, sec_def))
 }
@@ -418,6 +482,14 @@ fn parse_sec_pr_children(
                     b"pageBorderFill" => {
                         let pbf = parse_page_border_fill(e, reader)?;
                         push_page_border_fill(sec_def, pbf, &mut page_border_fill_count);
+                    }
+                    // [Task #1050] footNotePr / endNotePr 의 자식 (autoNumFormat, noteLine 등)
+                    // 파싱 — 한컴 정답 footnote 영역 렌더링을 위한 FootnoteShape contract.
+                    b"footNotePr" => {
+                        parse_note_pr_children(reader, &mut sec_def.footnote_shape, b"footNotePr")?;
+                    }
+                    b"endNotePr" => {
+                        parse_note_pr_children(reader, &mut sec_def.endnote_shape, b"endNotePr")?;
                     }
                     _ => {}
                 }
@@ -453,6 +525,177 @@ fn parse_sec_pr_children(
         buf.clear();
     }
     Ok(col_def)
+}
+
+/// [Task #1050] `<hp:footNotePr>` / `<hp:endNotePr>` 의 자식 요소 파싱:
+///   - `<hp:autoNumFormat type="DIGIT" suffixChar=")" prefixChar="" userChar="">` → FootnoteShape
+///   - `<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000">` → separator_*
+///   - `<hp:noteSpacing betweenNotes="" belowLine="" aboveLine="">` → spacing
+///   - `<hp:numbering type="CONTINUOUS" newNum="1">` → numbering
+///   - `<hp:placement place="EACH_COLUMN" beneathText="0">` → placement
+fn parse_note_pr_children(
+    reader: &mut Reader<&[u8]>,
+    shape: &mut crate::model::footnote::FootnoteShape,
+    end_tag: &[u8],
+) -> Result<(), HwpxError> {
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
+                let ename = e.name();
+                let local = local_name(ename.as_ref());
+                match local {
+                    b"autoNumFormat" => {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"suffixChar" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        if let Some(c) = s.chars().next() {
+                                            shape.suffix_char = c;
+                                        }
+                                    }
+                                }
+                                b"prefixChar" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        if let Some(c) = s.chars().next() {
+                                            shape.prefix_char = c;
+                                        }
+                                    }
+                                }
+                                b"userChar" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        if let Some(c) = s.chars().next() {
+                                            shape.user_char = c;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"noteLine" => {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"length" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        if let Ok(v) = s.parse::<i16>() {
+                                            shape.separator_length = v;
+                                        }
+                                    }
+                                }
+                                b"type" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        shape.separator_line_type = match s {
+                                            "SOLID" => 1,
+                                            "DASH" => 2,
+                                            "DOT" => 3,
+                                            "DASH_DOT" => 4,
+                                            "DASH_DOT_DOT" => 5,
+                                            "LONG_DASH" => 6,
+                                            "CIRCLE" => 7,
+                                            "DOUBLE_SLIM" => 8,
+                                            "SLIM_THICK" => 9,
+                                            "THICK_SLIM" => 10,
+                                            "SLIM_THICK_SLIM" => 11,
+                                            "NONE" => 0,
+                                            _ => 1, // default SOLID
+                                        };
+                                    }
+                                }
+                                b"width" => {
+                                    // "0.12 mm" 형식 — 0.1mm 단위로 변환 (정답지 0.12mm → 1)
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        let s = s.trim().trim_end_matches("mm").trim();
+                                        if let Ok(mm) = s.parse::<f32>() {
+                                            shape.separator_line_width = (mm * 10.0).round() as u8;
+                                        }
+                                    }
+                                }
+                                b"color" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        // "#RRGGBB" → ColorRef (0xBBGGRR LE = HWP 표준)
+                                        if let Some(hex) = s.strip_prefix('#') {
+                                            if let Ok(rgb) = u32::from_str_radix(hex, 16) {
+                                                let r = (rgb >> 16) & 0xFF;
+                                                let g = (rgb >> 8) & 0xFF;
+                                                let b = rgb & 0xFF;
+                                                shape.separator_color = b << 16 | g << 8 | r;
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"noteSpacing" => {
+                        for attr in e.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                // [Task #1050] HWP5 spec 의 정답지 매핑:
+                                // betweenNotes → raw_unknown (실제는 between-notes spacing)
+                                // belowLine → note_spacing
+                                // aboveLine → separator_margin_bottom
+                                b"betweenNotes" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        if let Ok(v) = s.parse::<u16>() {
+                                            shape.raw_unknown = v;
+                                        }
+                                    }
+                                }
+                                b"belowLine" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        if let Ok(v) = s.parse::<i16>() {
+                                            shape.note_spacing = v;
+                                        }
+                                    }
+                                }
+                                b"aboveLine" => {
+                                    if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                        if let Ok(v) = s.parse::<i16>() {
+                                            shape.separator_margin_bottom = v;
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        // [Task #1050] separator_margin_top: HWPX 미보유 → 한컴 default -1 (sentinel)
+                        if shape.separator_margin_top == 0 {
+                            shape.separator_margin_top = -1;
+                        }
+                    }
+                    b"numbering" => {
+                        for attr in e.attributes().flatten() {
+                            if attr.key.as_ref() == b"newNum" {
+                                if let Ok(s) = std::str::from_utf8(&attr.value) {
+                                    if let Ok(v) = s.parse::<u16>() {
+                                        shape.start_number = v;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                if local_name(e.name().as_ref()) == end_tag {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(HwpxError::XmlError(format!(
+                    "{}: {}",
+                    std::str::from_utf8(end_tag).unwrap_or("notePr"),
+                    e
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(())
 }
 
 fn push_page_border_fill(
@@ -2331,6 +2574,9 @@ fn parse_shape_object(
     let mut has_pos = false;
     let mut x_coords = [0i32; 4];
     let mut y_coords = [0i32; 4];
+    // [Task #1067] polygon / curve 의 가변 꼭짓점 `<hc:pt x=... y=.../>` 누적.
+    // 기존 pt0/pt1/pt2/pt3 (rect 의 4 꼭짓점) 와 별개.
+    let mut polygon_points: Vec<crate::model::Point> = Vec::new();
 
     let object_ids = parse_object_element_attrs(e, &mut common, &mut shape_attr);
 
@@ -2399,6 +2645,20 @@ fn parse_shape_object(
                                 _ => {}
                             }
                         }
+                    }
+                    // [Task #1067] polygon / curve 의 가변 꼭짓점 (<hc:pt x="..." y="..."/>).
+                    // pt0/pt1/pt2/pt3 (rect 의 4 꼭짓점) 매칭 후 fall-through 로 본 분기 도달.
+                    b"pt" => {
+                        let mut px: i32 = 0;
+                        let mut py: i32 = 0;
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"x" => px = parse_i32(&attr),
+                                b"y" => py = parse_i32(&attr),
+                                _ => {}
+                            }
+                        }
+                        polygon_points.push(crate::model::Point { x: px, y: py });
                     }
                     b"renderingInfo" => {
                         parse_rendering_info(reader, &mut shape_attr)?;
@@ -2475,11 +2735,15 @@ fn parse_shape_object(
         b"polygon" => ShapeObject::Polygon(PolygonShape {
             common,
             drawing,
-            ..Default::default()
+            // [Task #1067] HWPX `<hc:pt>` 점들을 PolygonShape::points 로 매핑.
+            // 누락 시 polygon path 가 빈 상태로 렌더링되어 도형 미표시 (rhwp-studio + 한컴 둘 다).
+            points: polygon_points,
         }),
         b"curve" => ShapeObject::Curve(CurveShape {
             common,
             drawing,
+            // CurveShape 도 동일 패턴 — 누락 시 곡선 미표시. segment_types 는 별개로 추후 task.
+            points: polygon_points,
             ..Default::default()
         }),
         _ => ShapeObject::Rectangle(RectangleShape {
@@ -2615,17 +2879,23 @@ fn parse_ctrl(
                     b"footNote" => {
                         let ctrl = parse_ctrl_footnote(ce, reader)?;
                         controls.push(ctrl);
+                        // [Task #1050] HWP 정합 — extended ctrl: 8 code unit (16 byte) 차지만
+                        // text/char_offsets 에는 placeholder 미 push.
+                        text_parts.push("\u{0002}".to_string());
                     }
                     b"endNote" => {
                         let ctrl = parse_ctrl_endnote(ce, reader)?;
                         controls.push(ctrl);
+                        text_parts.push("\u{0002}".to_string());
                     }
                     b"autoNum" => {
                         let ctrl = parse_ctrl_autonum(ce, reader)?;
                         controls.push(ctrl);
-                        // AutoNumber: 공백 placeholder 추가 (HWP 바이너리와 동일)
-                        // → apply_auto_numbers_to_composed에서 "  "(연속 2공백)으로 번호 삽입
-                        text_parts.push(" ".to_string());
+                        // [Task #1050] AUTO_NUMBER (0x12) 는 HWP PARA_TEXT 에서:
+                        //   char_offsets.push(pos) + text.push(' ') + pos += 8 (16 byte)
+                        // 본 컨트롤은 placeholder space 1 char 점하고 jump 8 처리.
+                        // \u{0012} 표시자 사용 — 후속 visual_text 조립 단계에서 처리.
+                        text_parts.push("\u{0012}".to_string());
                     }
                     b"hiddenComment" => {
                         let ctrl = parse_ctrl_hidden_comment(reader)?;
@@ -2701,7 +2971,8 @@ fn parse_ctrl(
                     b"autoNum" => {
                         let an = parse_autonum_attrs(ce);
                         controls.push(Control::AutoNumber(an));
-                        text_parts.push(" ".to_string());
+                        // [Task #1050] AUTO_NUMBER inline (Empty 분기): placeholder space.
+                        text_parts.push("\u{0012}".to_string());
                     }
                     b"fieldBegin" => {
                         let f = parse_field_begin_attrs(ce);
@@ -2978,9 +3249,30 @@ fn parse_ctrl_footnote(
     reader: &mut Reader<&[u8]>,
 ) -> Result<Control, HwpxError> {
     let mut note = Footnote::default();
+    // [Task #1050] HWP5 CTRL_FOOTNOTE 한컴 default 매핑:
+    // suffixChar → after_decoration_letter (default 0x29 ')')
+    // instId → instance_id (UInt4)
+    note.after_decoration_letter = 0x0029; // default ')'
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"number" {
-            note.number = parse_u16(&attr);
+        match attr.key.as_ref() {
+            b"number" => note.number = parse_u16(&attr),
+            b"suffixChar" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u16>()
+                {
+                    note.after_decoration_letter = v;
+                }
+            }
+            b"instId" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u32>()
+                {
+                    note.instance_id = v;
+                }
+            }
+            _ => {}
         }
     }
     note.paragraphs = parse_sublist_paragraphs(reader, b"footNote")?;
@@ -2993,9 +3285,28 @@ fn parse_ctrl_endnote(
     reader: &mut Reader<&[u8]>,
 ) -> Result<Control, HwpxError> {
     let mut note = Endnote::default();
+    // [Task #1050] Footnote 와 동일 매핑
+    note.after_decoration_letter = 0x0029;
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"number" {
-            note.number = parse_u16(&attr);
+        match attr.key.as_ref() {
+            b"number" => note.number = parse_u16(&attr),
+            b"suffixChar" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u16>()
+                {
+                    note.after_decoration_letter = v;
+                }
+            }
+            b"instId" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u32>()
+                {
+                    note.instance_id = v;
+                }
+            }
+            _ => {}
         }
     }
     note.paragraphs = parse_sublist_paragraphs(reader, b"endNote")?;
@@ -3488,6 +3799,7 @@ fn parse_equation(
         font_size,
         color,
         baseline,
+        unknown: 0,
         font_name,
         version_info,
         raw_ctrl_data: Vec::new(),
@@ -4036,8 +4348,10 @@ mod tests {
         let para = &section.paragraphs[0];
         assert_eq!(para.text, "AB");
         assert_eq!(para.char_offsets, vec![0, 9]);
+        // [Task #1058] 같은 char_shape_id 연속 dedup — HWP PARA_CHAR_SHAPE 는 첫 entry 1개만 유지.
+        // 두 run 모두 charPrIDRef="0" 이므로 dedup 후 char_shapes.len() = 1.
         assert_eq!(para.char_shapes[0].start_pos, 0);
-        assert_eq!(para.char_shapes[1].start_pos, 9);
+        assert_eq!(para.char_shapes.len(), 1);
         assert_eq!(para.controls.len(), 1);
     }
 

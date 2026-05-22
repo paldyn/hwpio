@@ -14,6 +14,7 @@ use crate::model::footnote::{Endnote, Footnote};
 use crate::model::header_footer::{Footer, Header, HeaderFooterApply};
 use crate::model::image::{ImageEffect, Picture};
 use crate::model::page::{ColumnDef, ColumnDirection, ColumnType, PageBorderFill, PageDef};
+use crate::model::paragraph::Paragraph;
 use crate::model::shape::{
     Caption, CaptionDirection, CaptionVertAlign, CommonObjAttr, DrawingObjAttr, ShapeComponentAttr,
     ShapeObject,
@@ -226,9 +227,16 @@ fn serialize_section_def(sd: &SectionDef, level: u16, records: &mut Vec<Record>)
     w.write_u16(sd.picture_num).unwrap();
     w.write_u16(sd.table_num).unwrap();
     w.write_u16(sd.equation_num).unwrap();
+    // [Task #1058] HWP5 spec 표 129 정합 — SectionDef payload 26 byte (위 24 + 2 Language):
+    //   UINT16 대표Language (5.0.1.5 이상)
+    // 한컴 정답지는 26 byte payload + 8 byte zero (확장 영역) = 34 byte payload + 4 byte ctrl_id = 38 byte CTRL_HEADER.
     // 원본 추가 바이트 복원 (라운드트립용)
     if !sd.raw_ctrl_extra.is_empty() {
         w.write_bytes(&sd.raw_ctrl_extra).unwrap();
+    } else {
+        // HWPX 출처: 한컴 default 10 byte (Language 0 + zero 8)
+        w.write_u16(0).unwrap(); // 대표Language = 0 (Application 지정)
+        w.write_bytes(&[0u8; 8]).unwrap(); // 추가 zero padding (관찰된 한컴 정답지 패턴)
     }
 
     records.push(make_ctrl_record(
@@ -611,19 +619,74 @@ fn serialize_footer_control(footer: &Footer, level: u16, records: &mut Vec<Recor
 // ============================================================
 
 fn serialize_footnote(fn_: &Footnote, level: u16, records: &mut Vec<Record>) {
+    // [Task #1050] hwplib::ForControlFootnote::ctrlHeader 정합 — size=20 형식
+    //   number(UInt4) + before(WChar) + after(WChar) + numberShape(UInt4) + instanceId(UInt4)
     let mut w = ByteWriter::new();
-    w.write_u16(fn_.number).unwrap();
+    w.write_u32(fn_.number as u32).unwrap();
+    w.write_u16(fn_.before_decoration_letter).unwrap();
+    let after = if fn_.after_decoration_letter == 0 {
+        0x0029 // ')' default
+    } else {
+        fn_.after_decoration_letter
+    };
+    w.write_u16(after).unwrap();
+    w.write_u32(fn_.number_shape).unwrap();
+    w.write_u32(fn_.instance_id).unwrap();
     records.push(make_ctrl_record(tags::CTRL_FOOTNOTE, level, w.as_bytes()));
 
-    serialize_list_header_with_paragraphs(&fn_.paragraphs, level + 1, records);
+    serialize_footnote_endnote_list_header(
+        &fn_.paragraphs,
+        fn_.list_header_property,
+        level + 1,
+        records,
+    );
 }
 
 fn serialize_endnote(en: &Endnote, level: u16, records: &mut Vec<Record>) {
+    // [Task #1050] Footnote 와 동일 구조
     let mut w = ByteWriter::new();
-    w.write_u16(en.number).unwrap();
+    w.write_u32(en.number as u32).unwrap();
+    w.write_u16(en.before_decoration_letter).unwrap();
+    let after = if en.after_decoration_letter == 0 {
+        0x0029
+    } else {
+        en.after_decoration_letter
+    };
+    w.write_u16(after).unwrap();
+    w.write_u32(en.number_shape).unwrap();
+    w.write_u32(en.instance_id).unwrap();
     records.push(make_ctrl_record(tags::CTRL_ENDNOTE, level, w.as_bytes()));
 
-    serialize_list_header_with_paragraphs(&en.paragraphs, level + 1, records);
+    serialize_footnote_endnote_list_header(
+        &en.paragraphs,
+        en.list_header_property,
+        level + 1,
+        records,
+    );
+}
+
+/// [Task #1050] CTRL_FOOTNOTE / CTRL_ENDNOTE 의 LIST_HEADER 직렬화 (size=16 형식).
+/// 형식: paraCount(SInt4) + property(UInt4) + 8 byte zero padding.
+/// 참조: `hwplib::ForListHeaderForFootnodeEndnote`.
+fn serialize_footnote_endnote_list_header(
+    paragraphs: &[Paragraph],
+    property: u32,
+    level: u16,
+    records: &mut Vec<Record>,
+) {
+    let mut w = ByteWriter::new();
+    w.write_i32(paragraphs.len() as i32).unwrap();
+    w.write_u32(property).unwrap();
+    w.write_bytes(&[0u8; 8]).unwrap(); // 8 byte zero padding
+    records.push(Record {
+        tag_id: tags::HWPTAG_LIST_HEADER,
+        level,
+        size: 0,
+        data: w.into_bytes(),
+    });
+
+    // 문단 목록 (LIST_HEADER 와 같은 레벨)
+    serialize_paragraph_list(paragraphs, level, records);
 }
 
 // ============================================================
@@ -1445,8 +1508,19 @@ fn serialize_text_box_if_present(drawing: &DrawingObjAttr, level: u16, records: 
         w.write_i16(text_box.margin_bottom).unwrap();
         w.write_u32(text_box.max_width).unwrap();
         // 원본 추가 바이트 복원 (라운드트립 보존)
+        // [Task #1058] hwplib::ForTextBox::listHeader 정합 — TextBox LIST_HEADER 의
+        // 마지막 13 byte 필드 contract:
+        //   sw.writeZero(8);                 // 8 byte zero padding
+        //   sw.writeSInt4(editableAtFormMode); // 4 byte (0 = false)
+        //   sw.writeUInt1(fieldNameFlag);     // 1 byte (0 = no fieldName)
+        // 한컴은 이 contract 가 누락되면 글상자 안 paragraph 를 본문 list 로 인식하여
+        // 신규 paragraph (각주) 추가 시 다단계 목록 번호 "1.1.1.1.1.1" 자동 부여.
+        // HWP 출처 IR 은 raw_list_header_extra 에 보존 → HWPX 출처 (raw 부재) 는 default 적용.
         if !text_box.raw_list_header_extra.is_empty() {
             w.write_bytes(&text_box.raw_list_header_extra).unwrap();
+        } else {
+            // HWPX 출처: 한컴 default 13 byte (zero 8 + editable 0 + fieldName flag 0)
+            w.write_bytes(&[0u8; 13]).unwrap();
         }
         records.push(Record {
             tag_id: tags::HWPTAG_LIST_HEADER,
@@ -1828,6 +1902,8 @@ fn serialize_equation_control(eq: &Equation, level: u16, records: &mut Vec<Recor
     w.write_u32(eq.color).unwrap();
     // baseline: i16
     w.write_i16(eq.baseline).unwrap();
+    // [Task #1061] unknown: u16 — HWP5 spec 표 105 누락 영역, hwplib 정합
+    w.write_u16(eq.unknown).unwrap();
     // version_info: HWP string
     w.write_hwp_string(&eq.version_info).unwrap();
     // font_name: HWP string

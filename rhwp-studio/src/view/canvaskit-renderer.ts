@@ -338,7 +338,33 @@ export class CanvasKitLayerRenderer {
       strokeWidth: op.lineStyle?.width ?? 1,
       fillColor: null,
     };
+
+    // [Task #1067] HWPX/HWP 도형의 회전 + flip 변환 적용.
+    // Rust paint pipeline (src/paint/json.rs::write_transform) 이 emit 하는
+    // {"rotation": <degrees>, "horzFlip": <bool>, "vertFlip": <bool>} 매핑.
+    // renderTextRun (line 410-416) 패턴 정합.
+    const tr = op.transform;
+    const rotation = tr?.rotation ?? 0;
+    const horzFlip = tr?.horzFlip ?? false;
+    const vertFlip = tr?.vertFlip ?? false;
+    const needsTransform = rotation !== 0 || horzFlip || vertFlip;
+    if (needsTransform) {
+      const cx = op.bbox.x + (op.bbox.width ?? 0) / 2;
+      const cy = op.bbox.y + (op.bbox.height ?? 0) / 2;
+      canvas.save();
+      if (horzFlip || vertFlip) {
+        canvas.translate(cx, cy);
+        canvas.scale(horzFlip ? -1 : 1, vertFlip ? -1 : 1);
+        canvas.translate(-cx, -cy);
+      }
+      if (rotation !== 0) {
+        canvas.rotate(rotation, cx, cy);
+      }
+    }
     this.drawStyledPath(canvas, path, style);
+    if (needsTransform) {
+      canvas.restore();
+    }
     path.delete?.();
   }
 

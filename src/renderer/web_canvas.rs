@@ -1112,15 +1112,22 @@ impl WebCanvasRenderer {
         let cx = bbox.x + bbox.width / 2.0;
         let cy = bbox.y + bbox.height / 2.0;
         self.ctx.save();
-        // 중심으로 이동 → 대칭 → 회전 → 원래 위치로
+        // [Task #1067] 한컴 정답지 시각 표준 정합 — flip 와 회전 동시 적용 시 회전 부호 반전.
+        // svg.rs::open_shape_transform 와 동일 패턴.
+        let flip_negate_rotation = transform.horz_flip ^ transform.vert_flip;
         let _ = self.ctx.translate(cx, cy);
         let sx = if transform.horz_flip { -1.0 } else { 1.0 };
         let sy = if transform.vert_flip { -1.0 } else { 1.0 };
         let _ = self.ctx.scale(sx, sy);
         if transform.rotation != 0.0 {
+            let effective_rotation = if flip_negate_rotation {
+                -transform.rotation
+            } else {
+                transform.rotation
+            };
             let _ = self
                 .ctx
-                .rotate(transform.rotation * std::f64::consts::PI / 180.0);
+                .rotate(effective_rotation * std::f64::consts::PI / 180.0);
         }
         let _ = self.ctx.translate(-cx, -cy);
     }
@@ -1886,9 +1893,15 @@ impl Renderer for WebCanvasRenderer {
     }
 
     fn draw_text(&mut self, text: &str, x: f64, y: f64, style: &TextStyle) {
+        // [Task #1067] inline 컨트롤 placeholder (U+FFFC OBJECT REPLACEMENT CHARACTER) skip.
+        // svg.rs::draw_text 와 동일 정합.
+        let text: String = text.chars().filter(|&c| c != '\u{FFFC}').collect();
+        if text.is_empty() {
+            return;
+        }
         // [Task #509] 한컴은 폰트 지정과 상관없이 PUA 를 자체 처리. 지정 폰트에 글리프
         // 부재 시 한컴 내부 매핑이 발행. rhwp 도 동일 동작 모방 (PR #251 정합).
-        let text = &expand_pua_render_text(text);
+        let text = &expand_pua_render_text(&text);
         // [Task #528] Hanyang-PUA 옛한글 → KS X 1026-1:2007 자모 시퀀스 (KTUG 매핑).
         let text = &expand_pua_old_hangul_canvas(text);
 
