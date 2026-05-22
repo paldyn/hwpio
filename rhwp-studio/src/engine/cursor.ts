@@ -1422,7 +1422,14 @@ export class CursorState {
   get fnFootnoteIndex(): number { return this._fnFootnoteIndex; }
   get fnPageNum(): number { return this._fnPageNum; }
 
-  /** 각주 편집 모드에 진입한다. */
+  /** 각주 편집 모드에 진입한다.
+   *
+   * [Task #1058 reopen Round 5] 신규/기존 각주 inner_para 의 한컴 contract 는
+   * 두 placeholder space + AutoNumber 8 cu 차지 (text="  ", char_offsets=[0, 8]).
+   * caret 초기 위치를 char_offset=2 로 설정하여 사용자 입력이 placeholder 뒤
+   * (실제 본문 작성 영역) 부터 시작하도록 한다. char_offset=0/1 위치는 placeholder
+   * 자리이므로 사용자 입력 시 AutoNumber jump 8 byte contract 깨짐 (한컴 거부).
+   */
   enterFootnoteMode(
     sectionIdx: number, paraIdx: number, controlIdx: number,
     footnoteIndex: number, pageNum: number,
@@ -1434,7 +1441,7 @@ export class CursorState {
     this._fnControlIdx = controlIdx;
     this._fnFootnoteIndex = footnoteIndex;
     this._fnInnerParaIdx = 0;
-    this._fnCharOffset = 0;
+    this._fnCharOffset = 2;
     this._fnPageNum = pageNum;
     this.clearSelection();
     this.updateRect();
