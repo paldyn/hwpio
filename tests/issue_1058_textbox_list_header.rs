@@ -326,3 +326,64 @@ fn issue_1058_serialized_bullet_count() {
          누락 시 한컴이 default 글머리표 부여"
     );
 }
+
+/// [Task #1058 reopen Round 5] 신규 각주 inner_para contract 정합 (정답지 비교).
+///
+/// 정답지 samples/footnote-01.hwp 의 각주 inner_para 패턴:
+///   - text = "  플라스틱 액체란" (2 placeholder spaces + 본문)
+///   - char_offsets = [0, 8, 9, 10, ...] (AutoNumber 8 cu 차지 jump)
+///   - char_count = 18 (10 chars + 8 AutoNumber)
+///   - style_id = 11, controls = [AutoNumber], control_mask bit 18 set
+///
+/// 신규 각주 (`insert_footnote_native` 직후 빈 본문) contract:
+///   - text = "  " (placeholder ×2)
+///   - char_offsets = [0, 8]
+///   - char_count = 10 (2 + 8)
+///   - style_id = 11, controls = [AutoNumber], control_mask bit 18 set
+///
+/// 누락 시 한컴이 각주 번호 "2)" 표시 안 함 (saved/222footnote-01.hwp 결함).
+#[test]
+fn issue_1058_new_footnote_inner_para_contract() {
+    use rhwp::model::control::Control;
+    let mut doc = load("samples/footnote-01.hwp");
+    // 본문 paragraph 0 의 char_offset=0 에 신규 각주 삽입 (native API).
+    doc.insert_footnote_native(0, 0, 0)
+        .expect("insert_footnote_native");
+
+    // 신규 footnote 찾기 — section 0 의 첫 paragraph (para_idx=0) 에 삽입된 footnote.
+    let document = doc.document();
+    let inner = {
+        let para = &document.sections[0].paragraphs[0];
+        let mut found: Option<&rhwp::model::paragraph::Paragraph> = None;
+        for ctrl in &para.controls {
+            if let Control::Footnote(fn_) = ctrl {
+                found = fn_.paragraphs.first();
+                break;
+            }
+        }
+        found.expect("paragraph 0 에 신규 footnote inner_para 존재해야 함")
+    };
+
+    // 정답지 패턴 단언
+    assert_eq!(inner.text, "  ", "inner_para text = 2 placeholder spaces");
+    assert_eq!(
+        inner.char_offsets,
+        vec![0u32, 8u32],
+        "char_offsets = [0, 8] (AutoNumber 8 cu 차지)"
+    );
+    assert_eq!(
+        inner.char_count, 10,
+        "char_count = 10 (2 placeholder + 8 AutoNumber)"
+    );
+    assert_eq!(inner.style_id, 11, "style_id = 11 (각주 style)");
+    assert_eq!(inner.controls.len(), 1, "controls = [AutoNumber] 1 개");
+    assert!(
+        matches!(inner.controls[0], Control::AutoNumber(_)),
+        "controls[0] = AutoNumber"
+    );
+    assert_ne!(
+        inner.control_mask & (1u32 << 0x12),
+        0,
+        "control_mask bit 18 (AutoNumber) set"
+    );
+}
