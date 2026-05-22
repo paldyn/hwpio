@@ -854,12 +854,28 @@ export type LayerPathCommand =
   | { type: 'arcTo'; rx: number; ry: number; rotation: number; largeArc: boolean; sweep: boolean; x: number; y: number }
   | { type: 'closePath' };
 
+/**
+ * [Task #1067] 도형(polygon, rectangle 등) path 의 회전/반전 변환.
+ *
+ * Rust paint pipeline (`src/paint/json.rs:write_transform`) 이 JSON 으로 다음 형식 emit:
+ * `{"rotation": <degrees>, "horzFlip": <bool>, "vertFlip": <bool>}`
+ *
+ * 누락 시 HWPX/HWP 도형의 회전/flip 정보가 캔버스 렌더링에 반영되지 않아
+ * 도형이 회전 없이 출력 (e.g. 두 도형이 거울 대칭이어야 하는데 같은 모양으로 보임).
+ */
+export interface LayerPathTransform {
+  rotation?: number;
+  horzFlip?: boolean;
+  vertFlip?: boolean;
+}
+
 export interface LayerPathOp {
   type: 'path';
   bbox: LayerBounds;
   commands?: LayerPathCommand[];
   style?: LayerShapeStyle;
   lineStyle?: LayerLineStyle;
+  transform?: LayerPathTransform;
 }
 
 export interface LayerImageOp {
