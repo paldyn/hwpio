@@ -122,17 +122,13 @@ fn dump_raw_records(label: &str, hwp_bytes: &[u8]) {
                 as usize;
             pos += 4;
         }
-        // HWPTAG_CTRL_HEADER = 71, HWPTAG_EQEDIT = 95 + 72 = 167
+        // HWPTAG_CTRL_HEADER = 71, HWPTAG_EQEDIT = HWPTAG_BEGIN (0x010=16) + 72 = 88
         if tag == 71 {
             ctrl_header_count += 1;
             // ctrl_id = first 4 byte UINT32 LE; ASCII 표시
             if size >= 4 {
-                let cid = u32::from_le_bytes([
-                    data[pos],
-                    data[pos + 1],
-                    data[pos + 2],
-                    data[pos + 3],
-                ]);
+                let cid =
+                    u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 let bytes = cid.to_le_bytes();
                 let ascii: String = bytes.iter().map(|&b| b as char).collect();
                 if ascii == "eqed" {
@@ -149,10 +145,11 @@ fn dump_raw_records(label: &str, hwp_bytes: &[u8]) {
                 }
             }
         }
-        if tag == 167 {
+        // HWPTAG_EQEDIT = HWPTAG_BEGIN (0x010=16) + 72 = 88
+        if tag == 88 {
             eqedit_count += 1;
             println!(
-                "  @ {} EQEDIT (tag=167) level={} size={} payload[0..48]={:02X?}",
+                "  @ {} EQEDIT (tag=88) level={} size={} payload[0..48]={:02X?}",
                 rec_pos,
                 level,
                 size,
