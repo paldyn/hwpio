@@ -18,7 +18,7 @@
 
 use crate::model::bin_data::{BinDataStatus, BinDataType};
 use crate::model::control::Control;
-use crate::model::document::{Document, Section};
+use crate::model::document::{Document, Section, SectionDef};
 use crate::model::image::Picture;
 use crate::model::paragraph::Paragraph;
 use crate::model::shape::{ShapeObject, TextBox};
@@ -71,10 +71,14 @@ pub struct AdapterReport {
     pub text_box_list_header_tail_materialized: u32,
     /// HWPX drawText 내부 paragraph PARA_HEADER tail materialize 횟수
     pub text_box_para_header_tail_materialized: u32,
+    /// HWPX 출처 일반 paragraph PARA_HEADER tail materialize 횟수
+    pub para_header_tail_materialized: u32,
     /// HWPX 수식(Equation) CTRL_HEADER attr 중 한컴 저장 관례 비트 보강 횟수 (Task #1061)
     pub equation_ctrl_header_attr_materialized: u32,
     /// HWPX 수식(Equation) EQEDIT 의 font_name/version_info 정답지 정합 정정 횟수 (Task #1061 Stage 2)
     pub equation_font_version_normalized: u32,
+    /// HWPX 바탕쪽 포함 SectionDef CTRL_HEADER 확장 tail materialize 횟수
+    pub section_def_master_page_tail_materialized: u32,
 }
 
 impl AdapterReport {
@@ -108,8 +112,10 @@ impl AdapterReport {
                 + self.picture_href_ctrl_data_materialized
                 + self.text_box_list_header_tail_materialized
                 + self.text_box_para_header_tail_materialized
+                + self.para_header_tail_materialized
                 + self.equation_ctrl_header_attr_materialized
-                + self.equation_font_version_normalized)
+                + self.equation_font_version_normalized
+                + self.section_def_master_page_tail_materialized)
                 > 0
     }
 }
@@ -142,6 +148,7 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
 
     // Stage 4: SectionDef 컨트롤 삽입 (HWPX 파서가 만들지 않으므로 직렬화기가 PAGE_DEF 출력 못 함)
     for section in &mut doc.sections {
+        adapt_section_def(&mut section.section_def, &mut report);
         insert_section_def_control(section, &mut report);
     }
 
@@ -259,7 +266,9 @@ fn normalize_doc_properties_for_hwp(doc: &mut Document, report: &mut AdapterRepo
 ///
 /// ## 동작
 ///
-/// 1. 섹션의 첫 문단에 `Control::SectionDef` 가 이미 있으면 no-op (idempotent)
+/// 1. 섹션의 첫 문단에 `Control::SectionDef` 가 이미 있으면 `section.section_def` 의 최신
+///    값을 반영한다. HWPX package-level masterpage 는 section XML 파싱 뒤에 붙기 때문에,
+///    기존 컨트롤 복사본이 오래된 상태일 수 있다.
 /// 2. 없으면 `Control::SectionDef(Box::new(section.section_def.clone()))` 를 첫 문단의
 ///    `controls[0]` 위치에 삽입
 ///
@@ -272,11 +281,12 @@ fn insert_section_def_control(section: &mut Section, report: &mut AdapterReport)
         return;
     }
     let first_para = &mut section.paragraphs[0];
-    let already_has_section_def = first_para
+    if let Some(Control::SectionDef(section_def)) = first_para
         .controls
-        .iter()
-        .any(|c| matches!(c, Control::SectionDef(_)));
-    if already_has_section_def {
+        .iter_mut()
+        .find(|c| matches!(c, Control::SectionDef(_)))
+    {
+        **section_def = section.section_def.clone();
         return;
     }
     first_para.controls.insert(
@@ -423,6 +433,8 @@ fn is_transparent_paragraph_no_fill_candidate(border_fill: &BorderFill) -> bool 
 }
 
 fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
+    materialize_para_header_tail(para, report);
+
     if para.ctrl_data_records.len() < para.controls.len() {
         para.ctrl_data_records
             .resize_with(para.controls.len(), || None);
@@ -441,6 +453,58 @@ fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
             _ => {}
         }
     }
+}
+
+fn materialize_para_header_tail(para: &mut Paragraph, report: &mut AdapterReport) {
+    if para.raw_header_extra.len() >= 12 {
+        return;
+    }
+
+    if para.raw_header_extra.len() >= 10 {
+        para.raw_header_extra.resize(12, 0);
+    } else {
+        let mut extra = vec![0; 12];
+        let char_shape_count = para.char_shapes.len().max(1).min(u16::MAX as usize) as u16;
+        let range_tag_count = para.range_tags.len().min(u16::MAX as usize) as u16;
+        let line_seg_count = para.line_segs.len().min(u16::MAX as usize) as u16;
+
+        extra[0..2].copy_from_slice(&char_shape_count.to_le_bytes());
+        extra[2..4].copy_from_slice(&range_tag_count.to_le_bytes());
+        extra[4..6].copy_from_slice(&line_seg_count.to_le_bytes());
+
+        para.raw_header_extra = extra;
+    }
+
+    report.para_header_tail_materialized += 1;
+}
+
+fn adapt_section_def(section_def: &mut SectionDef, report: &mut AdapterReport) {
+    materialize_section_def_master_page_tail(section_def, report);
+
+    for master_page in &mut section_def.master_pages {
+        for para in &mut master_page.paragraphs {
+            adapt_paragraph(para, report);
+        }
+    }
+}
+
+fn materialize_section_def_master_page_tail(
+    section_def: &mut SectionDef,
+    report: &mut AdapterReport,
+) {
+    if section_def.master_pages.is_empty() || !section_def.raw_ctrl_extra.is_empty() {
+        return;
+    }
+
+    // HWPX 출처 SectionDef는 HWP 원본 CTRL_HEADER tail이 없지만, 한컴이 HWPX를
+    // HWP5로 저장한 정답지는 바탕쪽이 있는 구역에서 대표Language(0) 뒤에
+    // 0x0001 marker + 15 byte zero 확장 영역을 붙여 총 43 byte ctrl_data
+    // (CTRL_HEADER 47 byte)를 만든다.
+    let mut extra = vec![0; 19];
+    extra[0..2].copy_from_slice(&0u16.to_le_bytes());
+    extra[2..4].copy_from_slice(&1u16.to_le_bytes());
+    section_def.raw_ctrl_extra = extra;
+    report.section_def_master_page_tail_materialized += 1;
 }
 
 /// [Task #1061] HWPX 수식 control 의 한컴 호환 contract 정정.

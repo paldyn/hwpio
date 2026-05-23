@@ -12,7 +12,7 @@ use crate::model::control::{
 };
 use crate::model::document::{Section, SectionDef};
 use crate::model::footnote::{Endnote, Footnote};
-use crate::model::header_footer::{Footer, Header, HeaderFooterApply};
+use crate::model::header_footer::{Footer, Header, HeaderFooterApply, MasterPage};
 use crate::model::image::{CropInfo, ImageAttr, ImageEffect};
 use crate::model::page::{ColumnDef, ColumnDirection, ColumnType, PageBorderFill, PageDef};
 use crate::model::paragraph::{CharShapeRef, FieldRange, LineSeg, Paragraph};
@@ -66,6 +66,116 @@ pub fn parse_hwpx_section(xml: &str) -> Result<Section, HwpxError> {
     Ok(section)
 }
 
+/// masterpage*.xml을 파싱하여 기존 HWP 바탕쪽 모델로 변환한다.
+pub fn parse_hwpx_master_page(xml: &str) -> Result<MasterPage, HwpxError> {
+    let mut master_page = MasterPage::default();
+    let mut reader = Reader::from_str(xml);
+    let mut buf = Vec::new();
+    let mut root_sub_list_seen = false;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let ename = e.name();
+                let local = local_name(ename.as_ref());
+                match local {
+                    b"masterPage" => parse_master_page_start(e, &mut master_page),
+                    b"subList" if !root_sub_list_seen => {
+                        parse_master_page_sub_list(e, &mut master_page);
+                        root_sub_list_seen = true;
+                    }
+                    b"p" => {
+                        let (para, _) = parse_paragraph(e, &mut reader)?;
+                        master_page.paragraphs.push(para);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let ename = e.name();
+                let local = local_name(ename.as_ref());
+                match local {
+                    b"masterPage" => parse_master_page_start(e, &mut master_page),
+                    b"subList" if !root_sub_list_seen => {
+                        parse_master_page_sub_list(e, &mut master_page);
+                        root_sub_list_seen = true;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(HwpxError::XmlError(format!("masterpage: {}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    if master_page.text_width > 0 || master_page.text_height > 0 {
+        master_page.raw_list_header = build_hwpx_master_page_list_header(&master_page);
+    }
+
+    Ok(master_page)
+}
+
+fn parse_master_page_start(e: &quick_xml::events::BytesStart, master_page: &mut MasterPage) {
+    let mut is_last_page = false;
+    let mut page_duplicate: Option<bool> = None;
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"type" => match attr_str(&attr).as_str() {
+                "EVEN" => master_page.apply_to = HeaderFooterApply::Even,
+                "ODD" => master_page.apply_to = HeaderFooterApply::Odd,
+                "LAST_PAGE" => {
+                    is_last_page = true;
+                    master_page.apply_to = HeaderFooterApply::Both;
+                    master_page.is_extension = true;
+                }
+                _ => master_page.apply_to = HeaderFooterApply::Both,
+            },
+            b"pageDuplicate" => {
+                let duplicate = attr_str(&attr) != "0";
+                page_duplicate = Some(duplicate);
+                master_page.overlap = duplicate;
+            }
+            _ => {}
+        }
+    }
+    // 한컴 HWPX -> HWP5 저장본은 LAST_PAGE 바탕쪽을 확장 바탕쪽으로 저장하면서
+    // pageDuplicate="0"인 경우에도 overlap bit를 함께 세운다.
+    if is_last_page {
+        master_page.replace_base = page_duplicate == Some(false);
+        master_page.overlap = true;
+    }
+    master_page.ext_flags =
+        u16::from(master_page.overlap) | if master_page.is_extension { 0x02 } else { 0 };
+}
+
+fn parse_master_page_sub_list(e: &quick_xml::events::BytesStart, master_page: &mut MasterPage) {
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"textWidth" => master_page.text_width = parse_u32(&attr),
+            b"textHeight" => master_page.text_height = parse_u32(&attr),
+            b"hasTextRef" => master_page.text_ref = parse_u8(&attr),
+            b"hasNumRef" => master_page.num_ref = parse_u8(&attr),
+            _ => {}
+        }
+    }
+}
+
+fn build_hwpx_master_page_list_header(master_page: &MasterPage) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(34);
+    bytes.extend_from_slice(&(master_page.paragraphs.len() as u16).to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&master_page.text_width.to_le_bytes());
+    bytes.extend_from_slice(&master_page.text_height.to_le_bytes());
+    bytes.push(master_page.text_ref);
+    bytes.push(master_page.num_ref);
+    bytes.extend_from_slice(&master_page.ext_flags.to_le_bytes());
+    bytes.extend_from_slice(&[0u8; 14]);
+    bytes
+}
+
 // ─── SectionDef / PageDef ───
 
 fn parse_section_def_start(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef) {
@@ -77,6 +187,10 @@ fn parse_section_def_start(e: &quick_xml::events::BytesStart, sec_def: &mut Sect
             }
             b"tabStop" => {
                 sec_def.default_tab_spacing = parse_u32(&attr);
+            }
+            b"masterPageCnt" => {
+                let count = parse_u32(&attr).min(3);
+                sec_def.flags = (sec_def.flags & !(0x03 << 30)) | (count << 30);
             }
             // [Task #1058] 한컴 HWP5 spec 표 129 정합:
             //   - spaceColumns → column_spacing (HWPUNIT16, default 1134 for 다단)
@@ -699,8 +813,9 @@ fn parse_note_pr_children(
                                 _ => {}
                             }
                         }
-                        // [Task #1050] separator_margin_top: HWPX 미보유 → 한컴 default -1 (sentinel)
-                        if shape.separator_margin_top == 0 {
+                        // [Task #1050] separator_margin_top: HWPX 미보유 → 한컴 default -1 (sentinel).
+                        // 단, 미주 noteLine type="NONE" 에서는 한컴 저장본이 0을 유지한다.
+                        if shape.separator_margin_top == 0 && shape.separator_line_type != 0 {
                             shape.separator_margin_top = -1;
                         }
                     }
@@ -852,10 +967,6 @@ fn page_border_fill_attr(
         _ => 0,
     };
 
-    if apply_type.eq_ignore_ascii_case("BOTH") || apply_type.eq_ignore_ascii_case("EVEN") {
-        attr |= 0x0000_0040;
-    }
-
     attr
 }
 
@@ -878,7 +989,14 @@ fn parse_visibility(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef)
         match attr.key.as_ref() {
             b"hideFirstHeader" => sec_def.hide_header = attr_str(&attr) == "1",
             b"hideFirstFooter" => sec_def.hide_footer = attr_str(&attr) == "1",
-            b"hideFirstMasterPage" => sec_def.hide_master_page = attr_str(&attr) == "1",
+            b"hideFirstMasterPage" => {
+                sec_def.hide_master_page = attr_str(&attr) == "1";
+                if sec_def.hide_master_page {
+                    sec_def.flags |= 0x0004;
+                } else {
+                    sec_def.flags &= !0x0004;
+                }
+            }
             b"border" => sec_def.hide_border = attr_str(&attr) == "HIDE_ALL",
             b"fill" => sec_def.hide_fill = attr_str(&attr) == "HIDE_ALL",
             b"hideFirstEmptyLine" => sec_def.hide_empty_line = attr_str(&attr) == "1",
@@ -1837,6 +1955,7 @@ enum ShapeStorageKind {
 #[derive(Default)]
 struct ObjectElementIds {
     instid: u32,
+    round_rate: u8,
 }
 
 /// HWPX 일부 샘플은 `<hp:curSz width="0" height="0">`를 기록하면서 실제 크기는
@@ -1930,6 +2049,7 @@ fn parse_object_element_attrs(
             }
             b"instid" => ids.instid = parse_u32(&attr),
             b"groupLevel" => shape_attr.group_level = attr_str(&attr).parse().unwrap_or(0),
+            b"ratio" => ids.round_rate = parse_u8(&attr).min(100),
             _ => {}
         }
     }
@@ -2758,7 +2878,7 @@ fn parse_shape_object(
         b"rect" => ShapeObject::Rectangle(RectangleShape {
             common,
             drawing,
-            round_rate: 0,
+            round_rate: object_ids.round_rate,
             x_coords,
             y_coords,
         }),
@@ -2783,6 +2903,7 @@ fn parse_shape_object(
             // [Task #1067] HWPX `<hc:pt>` 점들을 PolygonShape::points 로 매핑.
             // 누락 시 polygon path 가 빈 상태로 렌더링되어 도형 미표시 (rhwp-studio + 한컴 둘 다).
             points: polygon_points,
+            raw_trailing: Vec::new(),
         }),
         b"curve" => ShapeObject::Curve(CurveShape {
             common,
@@ -2794,7 +2915,7 @@ fn parse_shape_object(
         _ => ShapeObject::Rectangle(RectangleShape {
             common,
             drawing,
-            round_rate: 0,
+            round_rate: object_ids.round_rate,
             x_coords,
             y_coords,
         }),
@@ -3272,11 +3393,25 @@ fn parse_ctrl_header(
 ) -> Result<Control, HwpxError> {
     let mut header = Header::default();
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"applyPageType" {
-            header.apply_to = parse_apply_page_type(&attr_str(&attr));
+        match attr.key.as_ref() {
+            b"applyPageType" => {
+                header.apply_to = parse_apply_page_type(&attr_str(&attr));
+            }
+            b"id" => {
+                header
+                    .raw_ctrl_extra
+                    .extend_from_slice(&parse_u32(&attr).to_le_bytes());
+            }
+            _ => {}
         }
     }
-    header.paragraphs = parse_sublist_paragraphs(reader, b"header")?;
+    let sublist = parse_sublist_paragraphs_with_layout(reader, b"header")?;
+    header.paragraphs = sublist.paragraphs;
+    header.list_attr = sublist.list_attr;
+    header.text_width = sublist.text_width;
+    header.text_height = sublist.text_height;
+    header.text_ref = sublist.text_ref;
+    header.num_ref = sublist.num_ref;
     Ok(Control::Header(Box::new(header)))
 }
 
@@ -3287,11 +3422,25 @@ fn parse_ctrl_footer(
 ) -> Result<Control, HwpxError> {
     let mut footer = Footer::default();
     for attr in e.attributes().flatten() {
-        if attr.key.as_ref() == b"applyPageType" {
-            footer.apply_to = parse_apply_page_type(&attr_str(&attr));
+        match attr.key.as_ref() {
+            b"applyPageType" => {
+                footer.apply_to = parse_apply_page_type(&attr_str(&attr));
+            }
+            b"id" => {
+                footer
+                    .raw_ctrl_extra
+                    .extend_from_slice(&parse_u32(&attr).to_le_bytes());
+            }
+            _ => {}
         }
     }
-    footer.paragraphs = parse_sublist_paragraphs(reader, b"footer")?;
+    let sublist = parse_sublist_paragraphs_with_layout(reader, b"footer")?;
+    footer.paragraphs = sublist.paragraphs;
+    footer.list_attr = sublist.list_attr;
+    footer.text_width = sublist.text_width;
+    footer.text_height = sublist.text_height;
+    footer.text_ref = sublist.text_ref;
+    footer.num_ref = sublist.num_ref;
     Ok(Control::Footer(Box::new(footer)))
 }
 
@@ -3566,6 +3715,94 @@ fn parse_sublist_paragraphs(
         buf.clear();
     }
     Ok(paragraphs)
+}
+
+#[derive(Default)]
+struct HwpxSubListLayout {
+    paragraphs: Vec<Paragraph>,
+    list_attr: u32,
+    text_width: u32,
+    text_height: u32,
+    text_ref: u8,
+    num_ref: u8,
+}
+
+/// HWPX header/footer subList는 HWP5 LIST_HEADER의 layout 필드로 materialize해야 한다.
+fn parse_sublist_paragraphs_with_layout(
+    reader: &mut Reader<&[u8]>,
+    end_tag: &[u8],
+) -> Result<HwpxSubListLayout, HwpxError> {
+    let mut layout = HwpxSubListLayout::default();
+    let mut root_sub_list_seen = false;
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref ce)) => {
+                let cname = ce.name();
+                let local = local_name(cname.as_ref());
+                match local {
+                    b"subList" if !root_sub_list_seen => {
+                        parse_hwpx_sublist_layout_attrs(ce, &mut layout);
+                        root_sub_list_seen = true;
+                    }
+                    b"p" => {
+                        let (para, _) = parse_paragraph(ce, reader)?;
+                        layout.paragraphs.push(para);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(ref ce)) => {
+                let cname = ce.name();
+                let local = local_name(cname.as_ref());
+                if local == b"subList" && !root_sub_list_seen {
+                    parse_hwpx_sublist_layout_attrs(ce, &mut layout);
+                    root_sub_list_seen = true;
+                }
+            }
+            Ok(Event::End(ref ee)) => {
+                let eename = ee.name();
+                if local_name(eename.as_ref()) == end_tag {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => {
+                return Err(HwpxError::XmlError(format!(
+                    "{}: {}",
+                    String::from_utf8_lossy(end_tag),
+                    e
+                )))
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(layout)
+}
+
+fn parse_hwpx_sublist_layout_attrs(
+    e: &quick_xml::events::BytesStart,
+    layout: &mut HwpxSubListLayout,
+) {
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"vertAlign" => {
+                layout.list_attr |= match attr_str(&attr).as_str() {
+                    "CENTER" => 1 << 21,
+                    "BOTTOM" => 2 << 21,
+                    _ => 0,
+                };
+            }
+            b"textWidth" => layout.text_width = parse_u32(&attr),
+            b"textHeight" => layout.text_height = parse_u32(&attr),
+            b"hasTextRef" => layout.text_ref = parse_u8(&attr),
+            b"hasNumRef" => layout.num_ref = parse_u8(&attr),
+            _ => {}
+        }
+    }
 }
 
 // ─── 문단 레벨 컨트롤 파싱 (compose, dutmal, equation) ───
@@ -4666,6 +4903,60 @@ mod tests {
             }
             buf.clear();
         }
+    }
+
+    #[test]
+    fn test_parse_master_page_last_page_extension() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<masterPage xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+            type="LAST_PAGE" pageDuplicate="0">
+  <hp:subList textWidth="1000" textHeight="2000" hasTextRef="1" hasNumRef="0">
+    <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+      <hp:run charPrIDRef="0">
+        <hp:t>last page</hp:t>
+      </hp:run>
+    </hp:p>
+  </hp:subList>
+</masterPage>"#;
+
+        let master_page = parse_hwpx_master_page(xml).unwrap();
+        assert_eq!(master_page.apply_to, HeaderFooterApply::Both);
+        assert!(master_page.is_extension);
+        assert!(master_page.overlap);
+        assert!(master_page.replace_base);
+        assert_eq!(master_page.ext_flags, 0x0003);
+        assert_eq!(master_page.text_width, 1000);
+        assert_eq!(master_page.text_height, 2000);
+        assert_eq!(master_page.text_ref, 1);
+        assert_eq!(master_page.paragraphs.len(), 1);
+        assert_eq!(master_page.paragraphs[0].text, "last page");
+        assert_eq!(master_page.raw_list_header.len(), 34);
+    }
+
+    #[test]
+    fn test_parse_rect_ratio_as_round_rate() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:rect id="1" zOrder="0" ratio="50">
+        <hp:sz width="100" height="50"/>
+        <hp:pos treatAsChar="0" vertRelTo="PARA" horzRelTo="PARA"/>
+      </hp:rect>
+      <hp:t/>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let Control::Shape(shape) = &section.paragraphs[0].controls[0] else {
+            panic!("expected shape control");
+        };
+        let ShapeObject::Rectangle(rect) = shape.as_ref() else {
+            panic!("expected rectangle shape");
+        };
+        assert_eq!(rect.round_rate, 50);
     }
 
     #[test]
