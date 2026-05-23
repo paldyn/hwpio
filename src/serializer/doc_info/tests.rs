@@ -1,7 +1,8 @@
 use super::*;
 use crate::model::bin_data::{BinDataCompression, BinDataStatus};
 use crate::model::style::{
-    Alignment, BorderLine, DiagonalLine, Fill, LineSpacingType, NumberingHead, SolidFill,
+    Alignment, BorderLine, DiagonalLine, Fill, ImageFill, ImageFillMode, LineSpacingType,
+    NumberingHead, SolidFill,
 };
 use crate::parser::doc_info::parse_doc_info;
 use crate::parser::record::Record;
@@ -298,6 +299,59 @@ fn test_serialize_border_fill_solid() {
     assert_eq!(r.read_u8().unwrap(), 2);
     assert_eq!(r.read_u8().unwrap(), 2);
     assert_eq!(r.read_color_ref().unwrap(), 0x0000FF00);
+}
+
+#[test]
+fn test_serialize_border_fill_image_fill_mode_uses_hwp5_values() {
+    let cases = [
+        (ImageFillMode::TileAll, 0),
+        (ImageFillMode::TileHorzTop, 1),
+        (ImageFillMode::TileHorzBottom, 2),
+        (ImageFillMode::TileVertLeft, 3),
+        (ImageFillMode::TileVertRight, 4),
+        (ImageFillMode::FitToSize, 5),
+        (ImageFillMode::Center, 6),
+        (ImageFillMode::CenterTop, 7),
+        (ImageFillMode::CenterBottom, 8),
+        (ImageFillMode::LeftCenter, 9),
+        (ImageFillMode::LeftTop, 10),
+        (ImageFillMode::LeftBottom, 11),
+        (ImageFillMode::RightCenter, 12),
+        (ImageFillMode::RightTop, 13),
+        (ImageFillMode::RightBottom, 14),
+        (ImageFillMode::None, 15),
+    ];
+
+    for (mode, expected) in cases {
+        let bf = BorderFill {
+            raw_data: None,
+            attr: 0,
+            borders: [BorderLine::default(); 4],
+            diagonal: DiagonalLine::default(),
+            fill: Fill {
+                fill_type: FillType::Image,
+                solid: None,
+                gradient: None,
+                image: Some(ImageFill {
+                    fill_mode: mode,
+                    brightness: 0,
+                    contrast: 0,
+                    effect: 0,
+                    bin_data_id: 7,
+                }),
+                alpha: 0,
+            },
+        };
+
+        let data = serialize_border_fill(&bf);
+        let mut r = crate::parser::byte_reader::ByteReader::new(&data[32..]);
+        assert_eq!(r.read_u32().unwrap(), 2);
+        assert_eq!(
+            r.read_u8().unwrap(),
+            expected,
+            "{mode:?} must use HWP5 image fill mode {expected}"
+        );
+    }
 }
 
 #[test]
