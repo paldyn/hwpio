@@ -11,7 +11,7 @@ use crate::model::control::*;
 use crate::model::document::SectionDef;
 use crate::model::footnote::FootnoteShape;
 use crate::model::footnote::{Endnote, Footnote};
-use crate::model::header_footer::{Footer, Header, HeaderFooterApply};
+use crate::model::header_footer::{Footer, Header, HeaderFooterApply, MasterPage};
 use crate::model::image::{ImageEffect, Picture};
 use crate::model::page::{ColumnDef, ColumnDirection, ColumnType, PageBorderFill, PageDef};
 use crate::model::paragraph::Paragraph;
@@ -306,6 +306,44 @@ fn serialize_section_def(sd: &SectionDef, level: u16, records: &mut Vec<Record>)
             data: raw.data.clone(),
         });
     }
+
+    // HWPX 출처 바탕쪽은 raw child record가 없으므로 MasterPage 모델에서 HWP5 LIST_HEADER
+    // + 문단 목록을 materialize한다. HWP 출처는 raw 바탕쪽 LIST_HEADER가 있으면 중복 출력하지 않는다.
+    let has_raw_master_page_records = sd
+        .extra_child_records
+        .iter()
+        .any(|raw| raw.tag_id == tags::HWPTAG_LIST_HEADER && raw.level == level + 1);
+    if !has_raw_master_page_records {
+        for master_page in &sd.master_pages {
+            serialize_master_page(master_page, level + 1, records);
+        }
+    }
+}
+
+fn serialize_master_page(master_page: &MasterPage, level: u16, records: &mut Vec<Record>) {
+    let data = if !master_page.raw_list_header.is_empty() {
+        master_page.raw_list_header.clone()
+    } else {
+        let ext_flags =
+            u16::from(master_page.overlap) | if master_page.is_extension { 0x02 } else { 0 };
+        build_header_footer_list_header(
+            master_page.paragraphs.len() as u16,
+            0,
+            master_page.text_width,
+            master_page.text_height,
+            master_page.text_ref,
+            master_page.num_ref,
+            ext_flags,
+        )
+    };
+
+    records.push(Record {
+        tag_id: tags::HWPTAG_LIST_HEADER,
+        level,
+        size: data.len() as u32,
+        data,
+    });
+    serialize_paragraph_list(&master_page.paragraphs, level, records);
 }
 
 fn serialize_page_def(pd: &PageDef) -> Vec<u8> {
@@ -601,7 +639,18 @@ fn serialize_header_control(header: &Header, level: u16, records: &mut Vec<Recor
     records.push(make_ctrl_record(tags::CTRL_HEADER, level, w.as_bytes()));
 
     // LIST_HEADER + 문단
-    serialize_list_header_with_paragraphs(&header.paragraphs, level + 1, records);
+    serialize_header_footer_list_header_with_paragraphs(
+        &header.paragraphs,
+        HeaderFooterListLayout {
+            list_attr: header.list_attr,
+            text_width: header.text_width,
+            text_height: header.text_height,
+            text_ref: header.text_ref,
+            num_ref: header.num_ref,
+        },
+        level + 1,
+        records,
+    );
 }
 
 fn serialize_footer_control(footer: &Footer, level: u16, records: &mut Vec<Record>) {
@@ -621,7 +670,18 @@ fn serialize_footer_control(footer: &Footer, level: u16, records: &mut Vec<Recor
     }
     records.push(make_ctrl_record(tags::CTRL_FOOTER, level, w.as_bytes()));
 
-    serialize_list_header_with_paragraphs(&footer.paragraphs, level + 1, records);
+    serialize_header_footer_list_header_with_paragraphs(
+        &footer.paragraphs,
+        HeaderFooterListLayout {
+            list_attr: footer.list_attr,
+            text_width: footer.text_width,
+            text_height: footer.text_height,
+            text_ref: footer.text_ref,
+            num_ref: footer.num_ref,
+        },
+        level + 1,
+        records,
+    );
 }
 
 // ============================================================
@@ -1083,6 +1143,11 @@ fn serialize_shape_control(
                 w.write_i32(p.x).unwrap();
                 w.write_i32(p.y).unwrap();
             }
+            if poly.raw_trailing.is_empty() {
+                w.write_u32(0).unwrap();
+            } else {
+                w.write_bytes(&poly.raw_trailing).unwrap();
+            }
             records.push(Record {
                 tag_id: tags::HWPTAG_SHAPE_COMPONENT_POLYGON,
                 level: level + 2,
@@ -1397,6 +1462,11 @@ fn serialize_group_child(
             for p in &poly.points {
                 w.write_i32(p.x).unwrap();
                 w.write_i32(p.y).unwrap();
+            }
+            if poly.raw_trailing.is_empty() {
+                w.write_u32(0).unwrap();
+            } else {
+                w.write_bytes(&poly.raw_trailing).unwrap();
             }
             records.push(Record {
                 tag_id: tags::HWPTAG_SHAPE_COMPONENT_POLYGON,
@@ -1882,6 +1952,60 @@ fn serialize_list_header_with_paragraphs(
     });
 
     serialize_paragraph_list(paragraphs, level + 1, records);
+}
+
+struct HeaderFooterListLayout {
+    list_attr: u32,
+    text_width: u32,
+    text_height: u32,
+    text_ref: u8,
+    num_ref: u8,
+}
+
+fn serialize_header_footer_list_header_with_paragraphs(
+    paragraphs: &[crate::model::paragraph::Paragraph],
+    layout: HeaderFooterListLayout,
+    level: u16,
+    records: &mut Vec<Record>,
+) {
+    records.push(Record {
+        tag_id: tags::HWPTAG_LIST_HEADER,
+        level,
+        size: 0,
+        data: build_header_footer_list_header(
+            paragraphs.len() as u16,
+            layout.list_attr,
+            layout.text_width,
+            layout.text_height,
+            layout.text_ref,
+            layout.num_ref,
+            0,
+        ),
+    });
+
+    serialize_paragraph_list(paragraphs, level + 1, records);
+}
+
+fn build_header_footer_list_header(
+    para_count: u16,
+    list_attr: u32,
+    text_width: u32,
+    text_height: u32,
+    text_ref: u8,
+    num_ref: u8,
+    ext_flags: u16,
+) -> Vec<u8> {
+    let mut w = ByteWriter::new();
+    w.write_u16(para_count).unwrap();
+    w.write_u32(list_attr).unwrap();
+    w.write_u16(0).unwrap();
+    w.write_u32(text_width).unwrap();
+    w.write_u32(text_height).unwrap();
+    w.write_u8(text_ref).unwrap();
+    w.write_u8(num_ref).unwrap();
+    w.write_u16(ext_flags).unwrap();
+    w.write_bytes(&[0u8; 14]).unwrap();
+    w.into_bytes()
 }
 
 // ============================================================
