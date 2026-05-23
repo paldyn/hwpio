@@ -119,6 +119,7 @@ pub fn parse_hwpx_master_page(xml: &str) -> Result<MasterPage, HwpxError> {
 
 fn parse_master_page_start(e: &quick_xml::events::BytesStart, master_page: &mut MasterPage) {
     let mut is_last_page = false;
+    let mut is_optional_page = false;
     let mut page_duplicate: Option<bool> = None;
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
@@ -127,6 +128,11 @@ fn parse_master_page_start(e: &quick_xml::events::BytesStart, master_page: &mut 
                 "ODD" => master_page.apply_to = HeaderFooterApply::Odd,
                 "LAST_PAGE" => {
                     is_last_page = true;
+                    master_page.apply_to = HeaderFooterApply::Both;
+                    master_page.is_extension = true;
+                }
+                "OPTIONAL_PAGE" => {
+                    is_optional_page = true;
                     master_page.apply_to = HeaderFooterApply::Both;
                     master_page.is_extension = true;
                 }
@@ -146,8 +152,12 @@ fn parse_master_page_start(e: &quick_xml::events::BytesStart, master_page: &mut 
         master_page.replace_base = page_duplicate == Some(false);
         master_page.overlap = true;
     }
-    master_page.ext_flags =
-        u16::from(master_page.overlap) | if master_page.is_extension { 0x02 } else { 0 };
+    if is_optional_page {
+        master_page.overlap = true;
+    }
+    master_page.ext_flags = u16::from(master_page.overlap)
+        | if master_page.is_extension { 0x02 } else { 0 }
+        | if is_optional_page { 0x04 } else { 0 };
 }
 
 fn parse_master_page_sub_list(e: &quick_xml::events::BytesStart, master_page: &mut MasterPage) {
@@ -4930,6 +4940,29 @@ mod tests {
         assert_eq!(master_page.text_ref, 1);
         assert_eq!(master_page.paragraphs.len(), 1);
         assert_eq!(master_page.paragraphs[0].text, "last page");
+        assert_eq!(master_page.raw_list_header.len(), 34);
+    }
+
+    #[test]
+    fn test_parse_master_page_optional_page_extension() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<masterPage xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+            type="OPTIONAL_PAGE" pageNumber="4" pageDuplicate="0">
+  <hp:subList textWidth="1000" textHeight="2000" hasTextRef="0" hasNumRef="0">
+    <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+      <hp:run charPrIDRef="0">
+        <hp:t>optional page</hp:t>
+      </hp:run>
+    </hp:p>
+  </hp:subList>
+</masterPage>"#;
+
+        let master_page = parse_hwpx_master_page(xml).unwrap();
+        assert_eq!(master_page.apply_to, HeaderFooterApply::Both);
+        assert!(master_page.is_extension);
+        assert!(master_page.overlap);
+        assert!(!master_page.replace_base);
+        assert_eq!(master_page.ext_flags, 0x0007);
         assert_eq!(master_page.raw_list_header.len(), 34);
     }
 

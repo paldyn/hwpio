@@ -314,13 +314,17 @@ fn serialize_section_def(sd: &SectionDef, level: u16, records: &mut Vec<Record>)
         .iter()
         .any(|raw| raw.tag_id == tags::HWPTAG_LIST_HEADER && raw.level == level + 1);
     if !has_raw_master_page_records {
-        for master_page in &sd.master_pages {
+        for master_page in sd.master_pages.iter().filter(|mp| !mp.is_extension) {
             serialize_master_page(master_page, level + 1, records);
         }
     }
 }
 
-fn serialize_master_page(master_page: &MasterPage, level: u16, records: &mut Vec<Record>) {
+pub(crate) fn serialize_master_page(
+    master_page: &MasterPage,
+    level: u16,
+    records: &mut Vec<Record>,
+) {
     let data = if !master_page.raw_list_header.is_empty() {
         master_page.raw_list_header.clone()
     } else {

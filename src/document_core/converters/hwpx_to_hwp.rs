@@ -67,6 +67,8 @@ pub struct AdapterReport {
     pub section_def_controls_inserted: u32,
     /// HWPX `hp:pic@href` 를 HWP CTRL_DATA ParameterSet 으로 materialize한 횟수
     pub picture_href_ctrl_data_materialized: u32,
+    /// HWPX 3x2 row-break table의 HWP5 layout CTRL_DATA ParameterSet materialize 횟수
+    pub table_layout_ctrl_data_materialized: u32,
     /// HWPX drawText TextBox LIST_HEADER tail materialize 횟수
     pub text_box_list_header_tail_materialized: u32,
     /// HWPX drawText 내부 paragraph PARA_HEADER tail materialize 횟수
@@ -79,6 +81,8 @@ pub struct AdapterReport {
     pub equation_font_version_normalized: u32,
     /// HWPX 바탕쪽 포함 SectionDef CTRL_HEADER 확장 tail materialize 횟수
     pub section_def_master_page_tail_materialized: u32,
+    /// HWPX 후속 구역 첫 문단 break_type 을 한컴 HWP 저장 관례로 보정한 횟수
+    pub following_section_break_type_materialized: u32,
 }
 
 impl AdapterReport {
@@ -110,12 +114,14 @@ impl AdapterReport {
                 + self.bin_data_metadata_normalized
                 + self.section_def_controls_inserted
                 + self.picture_href_ctrl_data_materialized
+                + self.table_layout_ctrl_data_materialized
                 + self.text_box_list_header_tail_materialized
                 + self.text_box_para_header_tail_materialized
                 + self.para_header_tail_materialized
                 + self.equation_ctrl_header_attr_materialized
                 + self.equation_font_version_normalized
-                + self.section_def_master_page_tail_materialized)
+                + self.section_def_master_page_tail_materialized
+                + self.following_section_break_type_materialized)
                 > 0
     }
 }
@@ -147,9 +153,10 @@ pub fn convert_hwpx_to_hwp_ir(doc: &mut Document) -> AdapterReport {
     normalize_bin_data_for_hwp(doc, &mut report);
 
     // Stage 4: SectionDef 컨트롤 삽입 (HWPX 파서가 만들지 않으므로 직렬화기가 PAGE_DEF 출력 못 함)
-    for section in &mut doc.sections {
+    for (section_idx, section) in doc.sections.iter_mut().enumerate() {
         adapt_section_def(&mut section.section_def, &mut report);
         insert_section_def_control(section, &mut report);
+        materialize_following_section_break_type(section_idx, section, &mut report);
     }
 
     normalize_paragraph_char_border_fills(doc, &mut report);
@@ -294,6 +301,34 @@ fn insert_section_def_control(section: &mut Section, report: &mut AdapterReport)
         Control::SectionDef(Box::new(section.section_def.clone())),
     );
     report.section_def_controls_inserted += 1;
+}
+
+fn materialize_following_section_break_type(
+    section_idx: usize,
+    section: &mut Section,
+    report: &mut AdapterReport,
+) {
+    if section_idx == 0 {
+        return;
+    }
+
+    let Some(first_para) = section.paragraphs.first_mut() else {
+        return;
+    };
+
+    let has_section_def = first_para
+        .controls
+        .iter()
+        .any(|control| matches!(control, Control::SectionDef(_)));
+    if !has_section_def || first_para.raw_break_type == 0x04 {
+        return;
+    }
+
+    // 한컴 HWPX->HWP 정답지는 후속 구역 첫 문단에 SectionDef control을 유지하면서도
+    // PARA_HEADER break_type은 구역나누기(0x01/0x03)가 아니라 쪽나누기(0x04)로 저장한다.
+    // full exam_kor처럼 선택 과목이 섹션으로 분리된 문서에서 한컴 로더는 이 조합에 민감하다.
+    first_para.raw_break_type = 0x04;
+    report.following_section_break_type_materialized += 1;
 }
 
 fn normalize_paragraph_char_border_fills(doc: &mut Document, report: &mut AdapterReport) {
@@ -444,7 +479,10 @@ fn adapt_paragraph(para: &mut Paragraph, report: &mut AdapterReport) {
     let ctrl_data_records = &mut para.ctrl_data_records;
     for (idx, ctrl) in controls.iter_mut().enumerate() {
         match ctrl {
-            Control::Table(table) => adapt_table(table, report),
+            Control::Table(table) => {
+                adapt_table(table, report);
+                adapt_table_layout_ctrl_data(table, &mut ctrl_data_records[idx], report);
+            }
             Control::Header(header) => adapt_paragraphs(&mut header.paragraphs, report),
             Control::Footer(footer) => adapt_paragraphs(&mut footer.paragraphs, report),
             Control::Picture(pic) => {
@@ -639,6 +677,49 @@ fn normalize_picture_href_for_hwp_ctrl_data(href: &str) -> String {
     } else {
         href.replace("://", "\\://")
     }
+}
+
+fn adapt_table_layout_ctrl_data(
+    table: &Table,
+    ctrl_data_slot: &mut Option<Vec<u8>>,
+    report: &mut AdapterReport,
+) {
+    if ctrl_data_slot.is_some() || !table_requires_layout_ctrl_data(table) {
+        return;
+    }
+
+    *ctrl_data_slot = Some(build_table_layout_ctrl_data());
+    report.table_layout_ctrl_data_materialized += 1;
+}
+
+fn table_requires_layout_ctrl_data(table: &Table) -> bool {
+    table.row_count == 3
+        && table.col_count == 2
+        && table.repeat_header
+        && matches!(table.page_break, TablePageBreak::RowBreak)
+}
+
+fn build_table_layout_ctrl_data() -> Vec<u8> {
+    // 한컴 HWPX→HWP 변환본에서 3x2 선택지 표 뒤에 붙는 Table CTRL_DATA.
+    // 공식 5.0 문서에는 의미가 정리되어 있지 않지만, #1064/#1099 정답지 모두
+    // 같은 104바이트 ParameterSet(0x021b → 0x0242)을 사용한다.
+    const VALUES: [u32; 11] = [3826, 1048, 28346, 8475, 708, 0, 2, 9, 0, 59528, 84188];
+
+    let mut data = Vec::with_capacity(104);
+    data.extend_from_slice(&0x021b_u16.to_le_bytes());
+    data.extend_from_slice(&1_u16.to_le_bytes());
+    data.extend_from_slice(&0_u16.to_le_bytes());
+    data.extend_from_slice(&0x0242_u16.to_le_bytes());
+    data.extend_from_slice(&0x8000_u16.to_le_bytes());
+    data.extend_from_slice(&0x0242_u16.to_le_bytes());
+    data.extend_from_slice(&(VALUES.len() as u16).to_le_bytes());
+    data.extend_from_slice(&0_u16.to_le_bytes());
+    for (idx, value) in VALUES.iter().enumerate() {
+        data.extend_from_slice(&(0x4000_u16 + idx as u16).to_le_bytes());
+        data.extend_from_slice(&0x0004_u16.to_le_bytes());
+        data.extend_from_slice(&value.to_le_bytes());
+    }
+    data
 }
 
 fn adapt_table(table: &mut Table, report: &mut AdapterReport) {
@@ -1075,6 +1156,48 @@ mod tests {
     }
 
     #[test]
+    fn following_section_first_paragraph_break_type_materializes_as_page_break() {
+        let mut first_para = Paragraph {
+            raw_break_type: 0x01,
+            ..Default::default()
+        };
+        first_para
+            .controls
+            .push(Control::SectionDef(Box::<SectionDef>::default()));
+
+        let mut following_para = Paragraph {
+            raw_break_type: 0x03,
+            ..Default::default()
+        };
+        following_para
+            .controls
+            .push(Control::SectionDef(Box::<SectionDef>::default()));
+
+        let mut doc = Document {
+            sections: vec![
+                Section {
+                    paragraphs: vec![first_para],
+                    ..Default::default()
+                },
+                Section {
+                    paragraphs: vec![following_para],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let report = convert_hwpx_to_hwp_ir(&mut doc);
+
+        assert_eq!(doc.sections[0].paragraphs[0].raw_break_type, 0x01);
+        assert_eq!(doc.sections[1].paragraphs[0].raw_break_type, 0x04);
+        assert_eq!(report.following_section_break_type_materialized, 1);
+
+        let second = convert_hwpx_to_hwp_ir(&mut doc);
+        assert_eq!(second.following_section_break_type_materialized, 0);
+    }
+
+    #[test]
     fn picture_href_ctrl_data_matches_hancom_parameter_set_shape() {
         let data = build_picture_href_ctrl_data("http://www.korea.kr;1;0;0;");
         assert_eq!(data.len(), 76);
@@ -1115,6 +1238,52 @@ mod tests {
         let mut second = AdapterReport::new();
         adapt_paragraph(&mut para, &mut second);
         assert_eq!(second.picture_href_ctrl_data_materialized, 0);
+    }
+
+    #[test]
+    fn table_layout_ctrl_data_materializes_for_three_by_two_row_break_table() {
+        let mut para = Paragraph::default();
+        para.controls.push(Control::Table(Box::new(Table {
+            row_count: 3,
+            col_count: 2,
+            page_break: TablePageBreak::RowBreak,
+            repeat_header: true,
+            ..Default::default()
+        })));
+
+        let mut report = AdapterReport::new();
+        adapt_paragraph(&mut para, &mut report);
+
+        assert_eq!(report.table_layout_ctrl_data_materialized, 1);
+        assert_eq!(para.ctrl_data_records.len(), 1);
+        let data = para.ctrl_data_records[0].as_ref().unwrap();
+        assert_eq!(data.len(), 104);
+        assert_eq!(&data[0..2], &0x021b_u16.to_le_bytes());
+        assert_eq!(&data[6..8], &0x0242_u16.to_le_bytes());
+        assert_eq!(&data[10..12], &0x0242_u16.to_le_bytes());
+        assert_eq!(&data[12..14], &11_u16.to_le_bytes());
+
+        let mut second = AdapterReport::new();
+        adapt_paragraph(&mut para, &mut second);
+        assert_eq!(second.table_layout_ctrl_data_materialized, 0);
+    }
+
+    #[test]
+    fn table_layout_ctrl_data_does_not_materialize_for_other_table_shapes() {
+        let mut para = Paragraph::default();
+        para.controls.push(Control::Table(Box::new(Table {
+            row_count: 3,
+            col_count: 3,
+            page_break: TablePageBreak::RowBreak,
+            repeat_header: true,
+            ..Default::default()
+        })));
+
+        let mut report = AdapterReport::new();
+        adapt_paragraph(&mut para, &mut report);
+
+        assert_eq!(report.table_layout_ctrl_data_materialized, 0);
+        assert!(para.ctrl_data_records[0].is_none());
     }
 
     #[test]
