@@ -1032,19 +1032,19 @@ fn read_text_content_with_tabs(
 
 fn parse_tab_extension(e: &quick_xml::events::BytesStart) -> [u16; 7] {
     let mut ext = [0u16; 7];
-    ext[3] = 0x0020;
-    ext[4] = 0x0020;
-    ext[5] = 0x0020;
     ext[6] = 0x0009;
+    let mut leader = 0u16;
+    let mut tab_type = 0u16;
 
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"width" => ext[0] = parse_u16(&attr),
-            b"leader" => ext[1] = parse_u16(&attr),
-            b"type" => ext[2] = (parse_u16(&attr) & 0x00ff) << 8,
+            b"leader" => leader = parse_u16(&attr) & 0x00ff,
+            b"type" => tab_type = parse_u16(&attr) & 0x00ff,
             _ => {}
         }
     }
+    ext[2] = (tab_type << 8) | leader;
 
     ext
 }
@@ -4385,6 +4385,24 @@ mod tests {
         let para = &section.paragraphs[0];
         assert_eq!(para.text, "줄바꿈A\n줄바꿈B");
         assert_eq!(para.char_offsets, vec![0, 1, 2, 3, 4, 5, 6, 7, 8]);
+    }
+
+    #[test]
+    fn test_parse_hwpx_tab_extension_uses_hwp5_inline_format() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:t>A<hp:tab width="17283" leader="3" type="2"/>(페이지 표기)</hp:t>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let para = &section.paragraphs[0];
+        assert_eq!(para.text, "A\t(페이지 표기)");
+        assert_eq!(para.tab_extended, vec![[17283, 0, 0x0203, 0, 0, 0, 9]]);
     }
 
     #[test]
