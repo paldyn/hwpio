@@ -44,7 +44,31 @@ pub fn serialize_section(section: &Section) -> Vec<u8> {
     if has_memo_tail {
         serialize_memo_tail(section, &memo_lists, &mut records);
     }
+    serialize_master_page_tail(section, &mut records);
     write_records(&records)
+}
+
+fn serialize_master_page_tail(section: &Section, records: &mut Vec<Record>) {
+    // HWPX LAST_PAGE master page is an extension master page. Hancom HWP5 files store
+    // extension master pages after the body paragraph stream as level-1 LIST_HEADER
+    // records, not inside the SectionDef child record group.
+    if section
+        .section_def
+        .extra_child_records
+        .iter()
+        .any(|raw| raw.tag_id == tags::HWPTAG_LIST_HEADER && raw.level == 1)
+    {
+        return;
+    }
+
+    for master_page in section
+        .section_def
+        .master_pages
+        .iter()
+        .filter(|master_page| master_page.is_extension)
+    {
+        super::control::serialize_master_page(master_page, 1, records);
+    }
 }
 
 fn collect_memo_lists(section: &Section) -> Vec<(u32, Vec<Paragraph>)> {

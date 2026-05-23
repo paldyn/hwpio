@@ -689,6 +689,20 @@ fn parse_para_shape_child(
                     b"offsetRight" => ps.border_spacing[1] = parse_i16(&attr),
                     b"offsetTop" => ps.border_spacing[2] = parse_i16(&attr),
                     b"offsetBottom" => ps.border_spacing[3] = parse_i16(&attr),
+                    b"connect" => {
+                        if parse_bool(&attr) {
+                            ps.attr1 |= 1 << 28;
+                        } else {
+                            ps.attr1 &= !(1 << 28);
+                        }
+                    }
+                    b"ignoreMargin" => {
+                        if parse_bool(&attr) {
+                            ps.attr1 |= 1 << 29;
+                        } else {
+                            ps.attr1 &= !(1 << 29);
+                        }
+                    }
                     _ => {}
                 }
             }
