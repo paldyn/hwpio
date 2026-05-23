@@ -1,7 +1,9 @@
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-use crate::model::style::UnderlineType;
+use crate::model::image::ImageEffect;
+use crate::model::shape::TextWrap;
+use crate::model::style::{ImageFillMode, UnderlineType};
 use crate::paint::{
     CacheHint, ClipKind, LayerNode, LayerNodeKind, PageLayerTree, PaintOp, TextDecorationKind,
     TextVariantKind,
@@ -10,7 +12,7 @@ use crate::renderer::layer_renderer::{
     analyze_text_variant_selection, TextVariantSelectionOptions, VariantSelectedReason,
     VariantSelectionBackend,
 };
-use crate::renderer::render_tree::{FieldMarkerType, PageBackgroundNode, TextRunNode};
+use crate::renderer::render_tree::{FieldMarkerType, ImageNode, PageBackgroundNode, TextRunNode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -330,9 +332,7 @@ impl CanvasKitReplayPlanBuilder {
                 item.detail = Some("footnoteMarker".to_string());
                 item
             }
-            PaintOp::Image { .. } => {
-                self.transition_overlay_item(path, "image", CanvasKitReplayFeature::RasterImage)
-            }
+            PaintOp::Image { image, .. } => self.image_item(path, image),
             PaintOp::Equation { .. } => {
                 self.transition_overlay_item(path, "equation", CanvasKitReplayFeature::Equation)
             }
@@ -411,6 +411,20 @@ impl CanvasKitReplayPlanBuilder {
             item
         } else {
             direct_item(path, "textRun", CanvasKitReplayFeature::TextRun)
+        }
+    }
+
+    fn image_item(&self, path: String, image: &ImageNode) -> CanvasKitReplayItem {
+        let detail = image_transition_detail(image);
+        if image_can_replay_directly(image) {
+            let mut item = direct_item(path, "image", CanvasKitReplayFeature::RasterImage);
+            item.detail = detail;
+            item
+        } else {
+            let mut item =
+                self.transition_overlay_item(path, "image", CanvasKitReplayFeature::RasterImage);
+            item.detail = detail;
+            item
         }
     }
 
@@ -595,6 +609,95 @@ fn text_run_transition_detail(run: &TextRunNode) -> Option<&'static str> {
     None
 }
 
+fn image_transition_detail(image: &ImageNode) -> Option<String> {
+    let mut detail = Vec::new();
+    if image.data.is_none() {
+        if image.external_path.is_some() {
+            detail.push("externalImage".to_string());
+        } else {
+            detail.push("missingImageData".to_string());
+        }
+    }
+    if let Some(fill_mode) = image.fill_mode {
+        detail.push(format!("fillMode={}", image_fill_mode_detail(fill_mode)));
+    }
+    if image.crop.is_some() {
+        detail.push("crop".to_string());
+    }
+    if !matches!(image.effect, ImageEffect::RealPic) {
+        detail.push(format!("effect={}", image_effect_detail(image.effect)));
+    }
+    if image.brightness != 0 || image.contrast != 0 {
+        detail.push(format!(
+            "adjustment=brightness:{},contrast:{}",
+            image.brightness, image.contrast
+        ));
+    }
+    if let Some(wrap) = image.text_wrap {
+        detail.push(format!("wrap={}", text_wrap_detail(wrap)));
+    }
+    if image.transform.has_transform() {
+        detail.push("transform".to_string());
+    }
+    if image.header_footer_ref.is_some() {
+        detail.push("headerFooterImage".to_string());
+    }
+    if detail.is_empty() {
+        None
+    } else {
+        Some(detail.join(";"))
+    }
+}
+
+fn image_can_replay_directly(image: &ImageNode) -> bool {
+    image.data.is_some()
+        && image.external_path.is_none()
+        && matches!(image.effect, ImageEffect::RealPic)
+        && image.brightness == 0
+        && image.contrast == 0
+}
+
+fn image_effect_detail(value: ImageEffect) -> &'static str {
+    match value {
+        ImageEffect::RealPic => "realPic",
+        ImageEffect::GrayScale => "grayScale",
+        ImageEffect::BlackWhite => "blackWhite",
+        ImageEffect::Pattern8x8 => "pattern8x8",
+    }
+}
+
+fn image_fill_mode_detail(value: ImageFillMode) -> &'static str {
+    match value {
+        ImageFillMode::TileAll => "tileAll",
+        ImageFillMode::TileHorzTop => "tileHorzTop",
+        ImageFillMode::TileHorzBottom => "tileHorzBottom",
+        ImageFillMode::TileVertLeft => "tileVertLeft",
+        ImageFillMode::TileVertRight => "tileVertRight",
+        ImageFillMode::FitToSize => "fitToSize",
+        ImageFillMode::Center => "center",
+        ImageFillMode::CenterTop => "centerTop",
+        ImageFillMode::CenterBottom => "centerBottom",
+        ImageFillMode::LeftCenter => "leftCenter",
+        ImageFillMode::LeftTop => "leftTop",
+        ImageFillMode::LeftBottom => "leftBottom",
+        ImageFillMode::RightCenter => "rightCenter",
+        ImageFillMode::RightTop => "rightTop",
+        ImageFillMode::RightBottom => "rightBottom",
+        ImageFillMode::None => "none",
+    }
+}
+
+fn text_wrap_detail(value: TextWrap) -> &'static str {
+    match value {
+        TextWrap::Square => "square",
+        TextWrap::Tight => "tight",
+        TextWrap::Through => "through",
+        TextWrap::TopAndBottom => "topAndBottom",
+        TextWrap::BehindText => "behindText",
+        TextWrap::InFrontOfText => "inFrontOfText",
+    }
+}
+
 fn selected_reason_as_str(reason: VariantSelectedReason) -> &'static str {
     reason.as_str()
 }
@@ -657,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn default_mode_forbids_hidden_image_overlay() {
+    fn default_mode_reports_simple_image_as_direct() {
         let tree = tree_with_ops(vec![PaintOp::Image {
             bbox: bbox(),
             image: ImageNode::new(1, Some(vec![1, 2, 3])),
@@ -666,19 +769,20 @@ mod tests {
 
         let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
 
-        assert_eq!(plan.summary.direct_required_items, 1);
+        assert_eq!(plan.summary.direct_items, 1);
+        assert_eq!(plan.summary.direct_required_items, 0);
         assert_eq!(plan.summary.compat_overlay_items, 0);
-        assert_eq!(plan.summary.hidden_overlay_violations, 1);
-        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::DirectRequired);
+        assert_eq!(plan.summary.hidden_overlay_violations, 0);
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::Direct);
         assert_eq!(
             plan.items[0].reason,
-            CanvasKitReplayReason::HiddenOverlayForbidden
+            CanvasKitReplayReason::DirectReplaySupported
         );
         assert!(!plan.items[0].compat_overlay_allowed);
     }
 
     #[test]
-    fn compat_mode_keeps_image_on_direct_replay_contract() {
+    fn compat_mode_reports_simple_image_as_direct() {
         let tree = tree_with_ops(vec![PaintOp::Image {
             bbox: bbox(),
             image: ImageNode::new(1, Some(vec![1, 2, 3])),
@@ -689,15 +793,60 @@ mod tests {
 
         assert!(!plan.hidden_canvas2d_overlay_allowed);
         assert!(plan.direct_replay_required);
-        assert_eq!(plan.summary.direct_required_items, 1);
+        assert_eq!(plan.summary.direct_items, 1);
+        assert_eq!(plan.summary.direct_required_items, 0);
         assert_eq!(plan.summary.compat_overlay_items, 0);
-        assert_eq!(plan.summary.hidden_overlay_violations, 1);
-        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::DirectRequired);
+        assert_eq!(plan.summary.hidden_overlay_violations, 0);
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::Direct);
         assert_eq!(
             plan.items[0].reason,
-            CanvasKitReplayReason::HiddenOverlayForbidden
+            CanvasKitReplayReason::DirectReplaySupported
         );
         assert!(!plan.items[0].compat_overlay_allowed);
+    }
+
+    #[test]
+    fn image_replay_plan_reports_direct_geometry_payload() {
+        let mut image = ImageNode::new(1, Some(vec![1, 2, 3]));
+        image.fill_mode = Some(ImageFillMode::Center);
+        image.crop = Some((10, 20, 90, 80));
+        image.transform.rotation = 15.0;
+
+        let tree = tree_with_ops(vec![PaintOp::Image {
+            bbox: bbox(),
+            image,
+            resolved: None,
+        }]);
+
+        let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
+
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::Direct);
+        assert_eq!(
+            plan.items[0].detail.as_deref(),
+            Some("fillMode=center;crop;transform")
+        );
+    }
+
+    #[test]
+    fn image_replay_plan_reports_unimplemented_image_effects() {
+        let mut image = ImageNode::new(1, Some(vec![1, 2, 3]));
+        image.effect = ImageEffect::GrayScale;
+        image.brightness = 10;
+        image.contrast = -20;
+
+        let tree = tree_with_ops(vec![PaintOp::Image {
+            bbox: bbox(),
+            image,
+            resolved: None,
+        }]);
+
+        let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
+
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::DirectRequired);
+        assert_eq!(
+            plan.items[0].detail.as_deref(),
+            Some("effect=grayScale;adjustment=brightness:10,contrast:-20")
+        );
     }
 
     #[test]

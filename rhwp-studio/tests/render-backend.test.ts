@@ -9,6 +9,11 @@ import {
   resolveRenderBackendRequest,
   resolveRenderProfile,
 } from '../src/view/render-backend.ts';
+import {
+  canvasKitImageCacheKey,
+  canvasKitImagePlacement,
+  canvasKitImageSourceRect,
+} from '../src/view/canvaskit/image-replay.ts';
 
 test('render backend resolver keeps Canvas2D as the default and accepts skia aliases', () => {
   assert.equal(resolveRenderBackend(''), 'canvas2d');
@@ -82,4 +87,28 @@ test('CanvasKit replay bridge fallback keeps compat on direct replay contract', 
   assert.match(fallback, /directReplayRequired:\s*true/);
   assert.equal(fallback.includes("mode === 'compat'"), false);
   assert.equal(fallback.includes("mode === 'default'"), false);
+});
+
+test('CanvasKit image replay cache key includes payload fingerprint with repeated image refs', () => {
+  const first = canvasKitImageCacheKey({ imageRef: 7, mime: 'image/png', base64: 'AAAA' });
+  const second = canvasKitImageCacheKey({ imageRef: 7, mime: 'image/png', base64: 'BBBB' });
+  assert.notEqual(first, second);
+  assert.ok((first ?? '').startsWith('ref:7|image/png:4:'));
+});
+
+test('CanvasKit image crop source follows the same HWPUNIT crop scale as SVG replay', () => {
+  const crop = canvasKitImageSourceRect(2320, 354, { left: 0, top: 0, right: 102366, bottom: 26580 });
+  assert.ok(crop);
+  assert.equal(crop.x, 0);
+  assert.equal(crop.y, 0);
+  assert.ok(Math.abs(crop.width - 1364.88) < 0.01);
+  assert.equal(crop.height, 354);
+  assert.equal(canvasKitImageSourceRect(2320, 354, { left: 0, top: 0, right: 174000, bottom: 26580 }), null);
+});
+
+test('CanvasKit image placement follows layer fill-mode anchors', () => {
+  const bbox = { x: 10, y: 20, width: 100, height: 80 };
+  assert.deepEqual(canvasKitImagePlacement('center', bbox, 40, 20), { x: 40, y: 50 });
+  assert.deepEqual(canvasKitImagePlacement('rightBottom', bbox, 40, 20), { x: 70, y: 80 });
+  assert.deepEqual(canvasKitImagePlacement('leftTop', bbox, 40, 20), { x: 10, y: 20 });
 });
