@@ -64,6 +64,9 @@ export interface CanvasKitRenderDiagnostics {
 }
 
 export class CanvasKitLayerRenderer {
+  // Prevent pathological tiled fills from monopolizing the render loop.
+  private static readonly MAX_IMAGE_TILE_DRAWS = 4096;
+
   private readonly imageCache = new Map<string, SkImage>();
   private readonly unsupportedOps = new Set<string>();
   private surfaceFallbackReason: string | null = null;
@@ -409,16 +412,39 @@ export class CanvasKitLayerRenderer {
   }
 
   private drawImageOp(canvas: SkCanvas, image: SkImage, op: LayerImageOp): void {
-    const imageWidth = typeof image.width === 'function' ? image.width() : 0;
-    const imageHeight = typeof image.height === 'function' ? image.height() : 0;
+    const imageWithDimensions = image as SkImage & { width?: unknown; height?: unknown };
+    const widthMember = imageWithDimensions.width;
+    const heightMember = imageWithDimensions.height;
+    const imageWidth = typeof widthMember === 'function'
+      ? (widthMember as () => number).call(image)
+      : typeof widthMember === 'number'
+        ? widthMember
+        : null;
+    const imageHeight = typeof heightMember === 'function'
+      ? (heightMember as () => number).call(image)
+      : typeof heightMember === 'number'
+        ? heightMember
+        : null;
+    if (!this.boundsAreDrawable(op.bbox)) {
+      this.unsupportedOps.add('image:invalidBounds');
+      return;
+    }
     if (
-      !Number.isFinite(imageWidth)
+      imageWidth === null
+      || imageHeight === null
+      || !Number.isFinite(imageWidth)
       || !Number.isFinite(imageHeight)
       || imageWidth <= 0
       || imageHeight <= 0
-      || !this.boundsAreDrawable(op.bbox)
     ) {
-      this.unsupportedOps.add('image:invalidBounds');
+      const paint = new this.canvasKit.Paint();
+      paint.setAntiAlias?.(true);
+      try {
+        canvas.drawImage(image, op.bbox.x, op.bbox.y, paint);
+        this.unsupportedOps.add('image:dimensionUnavailable');
+      } finally {
+        paint.delete?.();
+      }
       return;
     }
 
@@ -470,7 +496,7 @@ export class CanvasKitLayerRenderer {
     tileHeight: number,
     drawImage: (dstX: number, dstY: number, dstW: number, dstH: number) => void,
   ): void {
-    const maxTileDraws = 4096;
+    const maxTileDraws = CanvasKitLayerRenderer.MAX_IMAGE_TILE_DRAWS;
     let tileDraws = 0;
     const drawTile = (x: number, y: number) => {
       if (tileDraws >= maxTileDraws) return;

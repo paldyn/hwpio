@@ -611,12 +611,10 @@ fn text_run_transition_detail(run: &TextRunNode) -> Option<&'static str> {
 
 fn image_transition_detail(image: &ImageNode) -> Option<String> {
     let mut detail = Vec::new();
-    if image.data.is_none() {
-        if image.external_path.is_some() {
-            detail.push("externalImage".to_string());
-        } else {
-            detail.push("missingImageData".to_string());
-        }
+    if image.external_path.is_some() {
+        detail.push("externalImage".to_string());
+    } else if image.data.is_none() {
+        detail.push("missingImageData".to_string());
     }
     if let Some(fill_mode) = image.fill_mode {
         detail.push(format!("fillMode={}", image_fill_mode_detail(fill_mode)));
@@ -847,6 +845,23 @@ mod tests {
             plan.items[0].detail.as_deref(),
             Some("effect=grayScale;adjustment=brightness:10,contrast:-20")
         );
+    }
+
+    #[test]
+    fn image_replay_plan_reports_external_path_with_embedded_data() {
+        let mut image = ImageNode::new(1, Some(vec![1, 2, 3]));
+        image.external_path = Some("linked-image.png".to_string());
+
+        let tree = tree_with_ops(vec![PaintOp::Image {
+            bbox: bbox(),
+            image,
+            resolved: None,
+        }]);
+
+        let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
+
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::DirectRequired);
+        assert_eq!(plan.items[0].detail.as_deref(), Some("externalImage"));
     }
 
     #[test]

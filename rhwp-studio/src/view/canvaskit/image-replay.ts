@@ -19,6 +19,12 @@ export interface CanvasKitImageSourceRect {
   height: number;
 }
 
+/**
+ * HWPUNIT image crop coordinates use the same 96 DPI scale as SVG replay:
+ * 7200 HWPUNIT = 96 px, so 75 HWPUNIT = 1 px.
+ */
+export const HWPUNIT_PER_PIXEL = 75;
+
 export interface CanvasKitImageCacheKeyInput {
   imageRef?: number | string;
   mime?: string;
@@ -55,11 +61,10 @@ export function canvasKitImageSourceRect(
     return null;
   }
 
-  const huPerPixel = 75;
-  const x = crop.left / huPerPixel;
-  const y = crop.top / huPerPixel;
-  const width = (crop.right - crop.left) / huPerPixel;
-  const height = (crop.bottom - crop.top) / huPerPixel;
+  const x = crop.left / HWPUNIT_PER_PIXEL;
+  const y = crop.top / HWPUNIT_PER_PIXEL;
+  const width = (crop.right - crop.left) / HWPUNIT_PER_PIXEL;
+  const height = (crop.bottom - crop.top) / HWPUNIT_PER_PIXEL;
   if (width <= 0 || height <= 0) return null;
 
   const clampedX = clamp(x, 0, imageWidth);

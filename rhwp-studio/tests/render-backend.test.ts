@@ -11,8 +11,10 @@ import {
 } from '../src/view/render-backend.ts';
 import {
   canvasKitImageCacheKey,
+  canvasKitImageFillModeTiles,
   canvasKitImagePlacement,
   canvasKitImageSourceRect,
+  HWPUNIT_PER_PIXEL,
 } from '../src/view/canvaskit/image-replay.ts';
 
 test('render backend resolver keeps Canvas2D as the default and accepts skia aliases', () => {
@@ -101,7 +103,7 @@ test('CanvasKit image crop source follows the same HWPUNIT crop scale as SVG rep
   assert.ok(crop);
   assert.equal(crop.x, 0);
   assert.equal(crop.y, 0);
-  assert.ok(Math.abs(crop.width - 1364.88) < 0.01);
+  assert.ok(Math.abs(crop.width - (102366 / HWPUNIT_PER_PIXEL)) < 0.01);
   assert.equal(crop.height, 354);
   assert.equal(canvasKitImageSourceRect(2320, 354, { left: 0, top: 0, right: 174000, bottom: 26580 }), null);
 });
@@ -111,4 +113,13 @@ test('CanvasKit image placement follows layer fill-mode anchors', () => {
   assert.deepEqual(canvasKitImagePlacement('center', bbox, 40, 20), { x: 40, y: 50 });
   assert.deepEqual(canvasKitImagePlacement('rightBottom', bbox, 40, 20), { x: 70, y: 80 });
   assert.deepEqual(canvasKitImagePlacement('leftTop', bbox, 40, 20), { x: 10, y: 20 });
+});
+
+test('CanvasKit image fill-mode tiling detection stays explicit', () => {
+  for (const mode of ['tileAll', 'tileHorzTop', 'tileHorzBottom', 'tileVertLeft', 'tileVertRight']) {
+    assert.equal(canvasKitImageFillModeTiles(mode), true);
+  }
+  for (const mode of [undefined, 'fitToSize', 'none', 'center', 'leftTop', 'rightBottom']) {
+    assert.equal(canvasKitImageFillModeTiles(mode), false);
+  }
 });
