@@ -638,7 +638,17 @@ fn parse_para_shape(
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"tabPrIDRef" => ps.tab_def_id = parse_u16(&attr),
-            b"condense" => {}
+            b"condense" => {
+                let condense = parse_u32(&attr).min(75);
+                ps.attr1 = (ps.attr1 & !(0x7f << 9)) | (condense << 9);
+            }
+            b"fontLineHeight" => {
+                if parse_bool(&attr) {
+                    ps.attr1 |= 1 << 22;
+                } else {
+                    ps.attr1 &= !(1 << 22);
+                }
+            }
             _ => {}
         }
     }
@@ -1505,32 +1515,22 @@ fn parse_numbering(
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(Event::Empty(ref ce)) | Ok(Event::Start(ref ce)) => {
+                Ok(Event::Empty(ref ce)) => {
                     let cname = ce.name();
                     let local = local_name(cname.as_ref());
                     if local == b"paraHead" {
-                        let mut level: usize = 0;
-                        let mut head = NumberingHead::default();
-                        let mut format_str = String::new();
-                        for attr in ce.attributes().flatten() {
-                            match attr.key.as_ref() {
-                                b"level" => level = parse_u32(&attr) as usize,
-                                b"start" => {
-                                    let s = parse_u32(&attr);
-                                    if level > 0 && level <= 7 {
-                                        num.level_start_numbers[level - 1] = s;
-                                    }
-                                }
-                                b"text" => format_str = attr_str(&attr),
-                                b"numFormat" => head.number_format = parse_u8(&attr),
-                                b"charPrIDRef" => head.char_shape_id = parse_u32(&attr),
-                                _ => {}
-                            }
-                        }
-                        if level > 0 && level <= 7 {
-                            num.heads[level - 1] = head;
-                            num.level_formats[level - 1] = format_str;
-                        }
+                        let (level, head, start, format_str) = parse_numbering_para_head_attrs(ce);
+                        apply_numbering_para_head(&mut num, level, head, start, format_str);
+                    }
+                }
+                Ok(Event::Start(ref ce)) => {
+                    let cname = ce.name();
+                    let local = local_name(cname.as_ref());
+                    if local == b"paraHead" {
+                        let (level, head, start, mut format_str) =
+                            parse_numbering_para_head_attrs(ce);
+                        format_str.push_str(&read_numbering_para_head_text(reader)?);
+                        apply_numbering_para_head(&mut num, level, head, start, format_str);
                     }
                 }
                 Ok(Event::End(ref ee)) => {
@@ -1549,6 +1549,94 @@ fn parse_numbering(
 
     doc_info.numberings.push(num);
     Ok(())
+}
+
+fn parse_numbering_para_head_attrs(
+    e: &quick_xml::events::BytesStart,
+) -> (usize, NumberingHead, Option<u32>, String) {
+    let mut level: usize = 0;
+    let mut start: Option<u32> = None;
+    let mut head = NumberingHead::default();
+    let mut format_str = String::new();
+
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"level" => level = parse_u32(&attr) as usize,
+            b"start" => start = Some(parse_u32(&attr)),
+            b"text" => format_str = attr_str(&attr),
+            b"numFormat" => {
+                head.number_format = parse_numbering_format_code(&attr_str(&attr));
+                head.attr = (head.attr & !(0x0f << 5)) | ((head.number_format as u32) << 5);
+            }
+            b"charPrIDRef" => head.char_shape_id = parse_u32(&attr),
+            b"widthAdjust" => head.width_adjust = parse_i16(&attr),
+            b"textOffset" => head.text_distance = parse_i16(&attr),
+            _ => {}
+        }
+    }
+
+    (level, head, start, format_str)
+}
+
+fn read_numbering_para_head_text(reader: &mut Reader<&[u8]>) -> Result<String, HwpxError> {
+    let mut buf = Vec::new();
+    let mut text = String::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Text(ref t)) => {
+                text.push_str(&t.decode().unwrap_or_default());
+            }
+            Ok(Event::CData(ref t)) => {
+                text.push_str(&String::from_utf8_lossy(t.as_ref()));
+            }
+            Ok(Event::End(ref ee)) => {
+                if local_name(ee.name().as_ref()) == b"paraHead" {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(HwpxError::XmlError(format!("numbering paraHead: {}", e))),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(text)
+}
+
+fn apply_numbering_para_head(
+    num: &mut Numbering,
+    level: usize,
+    head: NumberingHead,
+    start: Option<u32>,
+    format_str: String,
+) {
+    if !(1..=7).contains(&level) {
+        return;
+    }
+
+    let idx = level - 1;
+    num.heads[idx] = head;
+    if let Some(start) = start {
+        num.level_start_numbers[idx] = start;
+    }
+    num.level_formats[idx] = format_str;
+}
+
+fn parse_numbering_format_code(value: &str) -> u8 {
+    match value {
+        "DIGIT" | "ARABIC" => 0,
+        "CIRCLED_DIGIT" => 1,
+        "ROMAN_CAPITAL" | "ROMAN_UPPER" | "ROMAN" => 2,
+        "ROMAN_SMALL" | "ROMAN_LOWER" => 3,
+        "LATIN_CAPITAL" | "LATIN_UPPER" | "ALPHA_CAPITAL" => 4,
+        "LATIN_SMALL" | "LATIN_LOWER" | "ALPHA_SMALL" => 5,
+        "HANGUL_SYLLABLE" | "HANGUL_JAMO" => 8,
+        "HANGUL_NUMBER" => 12,
+        "HANJA_NUMBER" | "IDEOGRAPH" => 13,
+        _ => value.parse().unwrap_or(0),
+    }
 }
 
 // ─── 유틸리티 함수 (header 전용) ───
@@ -1684,6 +1772,91 @@ fn parse_border_width(attr: &quick_xml::events::attributes::Attribute) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_hwpx_numbering_para_head_text_body() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:numberings itemCnt="1">
+      <hh:numbering id="1" start="0">
+        <hh:paraHead start="1" level="1" numFormat="DIGIT"
+          widthAdjust="800" textOffset="50" charPrIDRef="7">^1.</hh:paraHead>
+        <hh:paraHead start="3" level="2" numFormat="HANGUL_SYLLABLE">(^2)</hh:paraHead>
+      </hh:numbering>
+    </hh:numberings>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+        let numbering = &doc_info.numberings[0];
+
+        assert_eq!(numbering.start_number, 0);
+        assert_eq!(numbering.level_formats[0], "^1.");
+        assert_eq!(numbering.level_formats[1], "(^2)");
+        assert_eq!(numbering.level_start_numbers[0], 1);
+        assert_eq!(numbering.level_start_numbers[1], 3);
+        assert_eq!(numbering.heads[0].number_format, 0);
+        assert_eq!(numbering.heads[1].number_format, 8);
+        assert_eq!(numbering.heads[0].width_adjust, 800);
+        assert_eq!(numbering.heads[0].text_distance, 50);
+        assert_eq!(numbering.heads[0].char_shape_id, 7);
+        assert_eq!((numbering.heads[1].attr >> 5) & 0x0f, 8);
+    }
+
+    #[test]
+    fn test_parse_hwpx_numbering_para_head_empty_text_attr() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:numberings itemCnt="1">
+      <hh:numbering id="1" start="1">
+        <hh:paraHead start="1" level="1" numFormat="CIRCLED_DIGIT" text="^1"/>
+      </hh:numbering>
+    </hh:numberings>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+        let numbering = &doc_info.numberings[0];
+
+        assert_eq!(numbering.level_formats[0], "^1");
+        assert_eq!(numbering.heads[0].number_format, 1);
+        assert_eq!((numbering.heads[0].attr >> 5) & 0x0f, 1);
+    }
+
+    #[test]
+    fn test_parse_hwpx_para_shape_condense_attr_bits() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head"
+  xmlns:hc="http://www.hancom.co.kr/hwpml/2011/core">
+  <hh:refList>
+    <hh:paraProperties itemCnt="1">
+      <hh:paraPr id="1" tabPrIDRef="0" condense="30" fontLineHeight="1">
+        <hh:align horizontal="JUSTIFY" vertical="BASELINE"/>
+        <hh:heading type="NUMBER" idRef="3" level="0"/>
+        <hh:margin>
+          <hc:intent value="-2260" unit="HWPUNIT"/>
+          <hc:left value="0" unit="HWPUNIT"/>
+          <hc:right value="0" unit="HWPUNIT"/>
+          <hc:prev value="0" unit="HWPUNIT"/>
+          <hc:next value="340" unit="HWPUNIT"/>
+        </hh:margin>
+        <hh:lineSpacing type="PERCENT" value="140" unit="HWPUNIT"/>
+      </hh:paraPr>
+    </hh:paraProperties>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+        let ps = &doc_info.para_shapes[0];
+
+        assert_eq!((ps.attr1 >> 9) & 0x7f, 30);
+        assert_eq!(ps.attr1 & (1 << 22), 1 << 22);
+        assert_eq!(ps.head_type, HeadType::Number);
+        assert_eq!(ps.numbering_id, 3);
+        assert_eq!(ps.para_level, 0);
+    }
 
     #[test]
     fn test_parse_color_rgb() {
