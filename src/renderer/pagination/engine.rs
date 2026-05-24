@@ -171,54 +171,32 @@ impl Paginator {
             let para_style = para_styles.get(para.para_shape_id as usize);
             let para_style_break = para_style.map(|s| s.page_break_before).unwrap_or(false);
 
-            // [Task #1007 + Task #1035] Cross-paragraph vpos reset 감지 — HWP3
-            // 변환본의 한컴 인코딩 page break 시그널. 조건 (한컴 정합):
-            //   1. variant document (is_hwp3_variant 가드)
-            //   2. prev/curr line_seg synth (tag top bit) 가 아님
-            //   3. prev_last_vpos > body_height_hu × 0.95 (페이지 거의 끝 — 매우 보수적)
-            //   4. curr_first_vpos < 1500 HU (encoder 의 page-reset 시 작은 값)
-            //
-            // [Task #1035] PR #1009 의 휴리스틱 (threshold 0.85 + aux_trigger) 은
-            // sample16-hwp5 over-split (64→65) 회귀 야기 — narrow 가드 적용:
-            //   - high_threshold 0.85 → 0.95 (자연 paginator break 영역 외 제외)
-            //   - aux_trigger 제거 (empty bridge 휴리스틱은 false positive 많음)
-            // 결과: sample16-hwp5 페이지 수 64 유지 + alignment 24/64 → 60/64.
+            // [Task #1007/#1035 → #1042 narrow v2] Cross-paragraph vpos reset 감지 —
+            // heading paragraph (text 있음 + spacing_before ≥ 500 HU + vpos reset) 만 인정.
             let mut variant_vpos_reset_break = false;
-            if is_hwp3_variant && body_height_hu_for_variant > 0 {
-                let is_synth = |ls: &crate::model::paragraph::LineSeg| ls.tag & 0x80000000 != 0;
-                let prev_real_idx_and_ls = prev_pagination_para.and_then(|prev_pi| {
-                    (0..=prev_pi).rev().find_map(|i| {
-                        paragraphs
-                            .get(i)
-                            .and_then(|p| p.line_segs.last())
-                            .filter(|ls| !is_synth(ls))
-                            .map(|ls| (i, ls))
-                    })
-                });
-                let prev_real = prev_real_idx_and_ls.map(|(_, ls)| ls);
-                let curr_real = para
-                    .line_segs
-                    .first()
-                    .filter(|ls| !is_synth(ls))
-                    .or_else(|| {
-                        (para_idx + 1..paragraphs.len()).find_map(|i| {
+            if is_hwp3_variant && body_height_hu_for_variant > 0 && !para.text.is_empty() {
+                let para_sb_hu = para_styles
+                    .get(para.para_shape_id as usize)
+                    .map(|ps| (ps.spacing_before * 7200.0 / 96.0) as i32)
+                    .unwrap_or(0);
+                if para_sb_hu >= 500 {
+                    let is_synth = |ls: &crate::model::paragraph::LineSeg| ls.tag & 0x80000000 != 0;
+                    let prev_real = prev_pagination_para.and_then(|prev_pi| {
+                        (0..=prev_pi).rev().find_map(|i| {
                             paragraphs
                                 .get(i)
-                                .and_then(|p| p.line_segs.first())
+                                .and_then(|p| p.line_segs.last())
                                 .filter(|ls| !is_synth(ls))
                         })
                     });
-                if let (Some(prev_last), Some(curr_first)) = (prev_real, curr_real) {
-                    let prev_end_vpos = prev_last.vertical_pos + prev_last.line_height;
-                    let curr_first_vpos = curr_first.vertical_pos;
-                    let high_threshold = body_height_hu_for_variant * 95 / 100;
-                    let low_threshold = if para.line_segs.is_empty() && !para.text.is_empty() {
-                        4000i32
-                    } else {
-                        1500i32
-                    };
-                    if prev_end_vpos > high_threshold && curr_first_vpos < low_threshold {
-                        variant_vpos_reset_break = true;
+                    let curr_real = para.line_segs.first().filter(|ls| !is_synth(ls));
+                    if let (Some(prev_last), Some(curr_first)) = (prev_real, curr_real) {
+                        let prev_end_vpos = prev_last.vertical_pos + prev_last.line_height;
+                        let curr_first_vpos = curr_first.vertical_pos;
+                        let high_threshold = body_height_hu_for_variant * 95 / 100;
+                        if prev_end_vpos > high_threshold && curr_first_vpos < 1500 {
+                            variant_vpos_reset_break = true;
+                        }
                     }
                 }
             }

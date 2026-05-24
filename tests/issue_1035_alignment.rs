@@ -17,3 +17,14 @@ fn hwp3_sample16_hwp5_page_count_64() {
         "sample16-hwp5 페이지 수 64 유지 (PR #1009 over-split 회귀 재발 방지)"
     );
 }
+
+#[test]
+fn hwp3_sample16_hwp5_2022_page_count_64() {
+    let bytes = std::fs::read("samples/hwp3-sample16-hwp5-2022.hwp").expect("read");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let pages = doc.page_count();
+    assert_eq!(
+        pages, 64,
+        "sample16-hwp5-2022 페이지 수 64 유지 (2022 variant baseline regression fix)"
+    );
+}

@@ -561,55 +561,39 @@ impl TypesetEngine {
             let para_style = styles.para_styles.get(para.para_shape_id as usize);
             let para_style_break = para_style.map(|s| s.page_break_before).unwrap_or(false);
 
-            // [Task #1007 + Task #1035] Cross-paragraph vpos reset 감지 — variant
-            // 한컴 인코딩 page break 시그널. 한컴 변환본은 page break 위치에서 다음
-            // paragraph 의 line_segs.vertical_pos 를 0 근처로 reset 한다. 이를 직접 감지.
-            //   1. variant document (is_hwp3_variant 가드)
-            //   2. prev/curr line_seg 가 synth (tag top bit set) 가 아님
-            //   3. prev_last_vpos > body_height_hu × 0.95 (페이지 거의 끝, 보수적)
-            //   4. curr_first_vpos < 1500 HU (encoder page-reset 시 작은 값)
-            //
-            // [Task #1035] PR #1009 의 휴리스틱 (threshold 0.85 + aux_trigger) 은
-            // sample16-hwp5 over-split (64→65) 회귀 야기 — narrow 가드:
-            //   - high_threshold 0.85 → 0.95 (자연 paginator break 영역 외 제외)
-            //   - aux_trigger 제거 (empty bridge 휴리스틱은 false positive)
-            // 결과: sample16-hwp5 페이지 수 64 유지 + alignment 24/64 → 60/64.
+            // [Task #1007/#1035 → #1042 narrow v2] Cross-paragraph vpos reset 감지 —
+            // heading paragraph (text 있음 + spacing_before ≥ 500 HU + paragraph local
+            // vpos reset) 만 인정. content paragraph (spacing_before < 500) 는 skip.
+            // sample16-2024 pi=162 (heading, sb=852, vpos=852) trigger ✓
+            // sample16-2022 pi=87 (빈 문단, text_len=0) skip ✓
+            // sample16-2022 pi=118 (content, sb=284) skip ✓
+            // sample16-2022 pi=316 (content, sb=0) skip ✓
             let mut variant_vpos_reset_break = false;
-            if is_hwp3_variant && body_height_hu_for_variant > 0 {
-                let is_synth = |ls: &crate::model::paragraph::LineSeg| ls.tag & 0x80000000 != 0;
-                let prev_real_idx_and_ls = variant_prev_para_idx.and_then(|prev_pi| {
-                    (0..=prev_pi).rev().find_map(|i| {
-                        paragraphs
-                            .get(i)
-                            .and_then(|p| p.line_segs.last())
-                            .filter(|ls| !is_synth(ls))
-                            .map(|ls| (i, ls))
-                    })
-                });
-                let prev_real = prev_real_idx_and_ls.map(|(_, ls)| ls);
-                let curr_real = para
-                    .line_segs
-                    .first()
-                    .filter(|ls| !is_synth(ls))
-                    .or_else(|| {
-                        (para_idx + 1..paragraphs.len()).find_map(|i| {
+            if is_hwp3_variant && body_height_hu_for_variant > 0 && !para.text.is_empty() {
+                let para_sb = styles
+                    .para_styles
+                    .get(para.para_shape_id as usize)
+                    .map(|ps| ps.spacing_before)
+                    .unwrap_or(0.0);
+                let para_sb_hu = (para_sb * 7200.0 / 96.0) as i32;
+                if para_sb_hu >= 500 {
+                    let is_synth = |ls: &crate::model::paragraph::LineSeg| ls.tag & 0x80000000 != 0;
+                    let prev_real = variant_prev_para_idx.and_then(|prev_pi| {
+                        (0..=prev_pi).rev().find_map(|i| {
                             paragraphs
                                 .get(i)
-                                .and_then(|p| p.line_segs.first())
+                                .and_then(|p| p.line_segs.last())
                                 .filter(|ls| !is_synth(ls))
                         })
                     });
-                if let (Some(prev_last), Some(curr_first)) = (prev_real, curr_real) {
-                    let prev_end_vpos = prev_last.vertical_pos + prev_last.line_height;
-                    let curr_first_vpos = curr_first.vertical_pos;
-                    let high_threshold = body_height_hu_for_variant * 95 / 100;
-                    let low_threshold = if para.line_segs.is_empty() && !para.text.is_empty() {
-                        4000i32
-                    } else {
-                        1500i32
-                    };
-                    if prev_end_vpos > high_threshold && curr_first_vpos < low_threshold {
-                        variant_vpos_reset_break = true;
+                    let curr_real = para.line_segs.first().filter(|ls| !is_synth(ls));
+                    if let (Some(prev_last), Some(curr_first)) = (prev_real, curr_real) {
+                        let prev_end_vpos = prev_last.vertical_pos + prev_last.line_height;
+                        let curr_first_vpos = curr_first.vertical_pos;
+                        let high_threshold = body_height_hu_for_variant * 95 / 100;
+                        if prev_end_vpos > high_threshold && curr_first_vpos < 1500 {
+                            variant_vpos_reset_break = true;
+                        }
                     }
                 }
             }
@@ -716,8 +700,10 @@ impl TypesetEngine {
                         // [Task #470] 다단 섹션에서는 nv == 0 → nv < cl 로 완화 (컬럼 헤더 오프셋).
                         // 단일 단에서는 partial-table split 회귀 (issue #418) 회피 위해 nv == 0 유지.
                         let multi_col = st.col_count > 1;
+                        let allowed_top_vpos = if st.is_hwp3_variant { 1500 } else { 0 };
                         matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl))
-                        if (if multi_col { nv < cl } else { nv == 0 }) && cl > 5000)
+                        if (if multi_col { nv < cl } else { nv <= allowed_top_vpos })
+                            && cl > 5000)
                     }
                 } else {
                     false
@@ -1057,7 +1043,14 @@ impl TypesetEngine {
 
             if !has_table {
                 // --- 핵심: format → fits → place/split ---
-                let formatted = self.format_paragraph(para, composed.get(para_idx), styles);
+                let col_w = st
+                    .layout
+                    .column_areas
+                    .get(st.current_column as usize)
+                    .map(|a| a.width)
+                    .unwrap_or(st.layout.body_area.width);
+                let formatted =
+                    self.format_paragraph(para, composed.get(para_idx), styles, Some(col_w));
                 let is_last_in_section = para_idx + 1 == paragraphs.len();
                 // [Task #1027 Stage D] fit 직전 vpos 스냅으로 누적 drift 제거 (렌더러 정합).
                 self.vpos_snap_current_height(&mut st, para_idx, paragraphs, styles);
@@ -1448,7 +1441,18 @@ impl TypesetEngine {
                             st.endnote_paragraphs.push(en_para_copy);
 
                             let composed = crate::renderer::composer::compose_paragraph(en_para);
-                            let fmt = self.format_paragraph(en_para, Some(&composed), &styles);
+                            let en_col_w = st
+                                .layout
+                                .column_areas
+                                .get(st.current_column as usize)
+                                .map(|a| a.width)
+                                .unwrap_or(st.layout.body_area.width);
+                            let fmt = self.format_paragraph(
+                                en_para,
+                                Some(&composed),
+                                &styles,
+                                Some(en_col_w),
+                            );
                             let available = st.available_height();
 
                             // [Task #1062] 다단 미주 누적/판정을 렌더러 vpos 전진과 통일.
@@ -1584,9 +1588,38 @@ impl TypesetEngine {
         para: &Paragraph,
         composed: Option<&ComposedParagraph>,
         styles: &ResolvedStyleSet,
+        column_width_px: Option<f64>,
     ) -> FormattedParagraph {
         let para_style_id = composed.map(|c| c.para_style_id as usize).unwrap_or(0);
         let para_style = styles.para_styles.get(para_style_id);
+
+        // [Task #1042 Stage 6c] line_segs.empty paragraph 의 typeset/layout 측정 정합 —
+        // paragraph_layout (렌더링 path) 는 Stage 6b 에서 recompose_for_cell_width 로 column
+        // 기반 wrap 을 적용하지만, format_paragraph (typeset/measurement path) 는 원본
+        // compose_lines fallback (CHARS_PER_LINE=45) 결과로 측정 → 두 path 의 line_count 불일치
+        // 발생 (e.g. sample16 변환기 pi=417: typeset 2 lines / layout 1 line, +10.4 px gap).
+        // 동일 recompose 를 typeset 측에도 적용해 paragraph height 측정 정합.
+        let recomposed: Option<ComposedParagraph> = match (composed, column_width_px) {
+            (Some(c), Some(cw)) if para.line_segs.is_empty() && cw > 0.0 => {
+                let margin_l = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+                let margin_r = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+                let inner = (cw - margin_l - margin_r).max(0.0);
+                if inner > 0.0 {
+                    let mut cloned = c.clone();
+                    crate::renderer::composer::recompose_for_cell_width(
+                        &mut cloned,
+                        para,
+                        inner,
+                        styles,
+                    );
+                    Some(cloned)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let composed = recomposed.as_ref().or(composed);
         let raw_spacing_before = para_style.map(|s| s.spacing_before).unwrap_or(0.0);
         let spacing_after = para_style.map(|s| s.spacing_after).unwrap_or(0.0);
 
@@ -1643,22 +1676,23 @@ impl TypesetEngine {
                         })
                         .fold(0.0f64, f64::max);
                     let recompute_lh = max_fs > 0.0 && raw_lh < max_fs;
-                    let lh = if recompute_lh {
+                    let (lh, line_spacing_px) = if recompute_lh {
+                        // [Task #1042 Stage 6c] HWP3/HWP5 line_segs 의 (line_height=base,
+                        // line_spacing=extra) 의미와 정합되게 분해 — 종전 처럼 ls_val/100 전체를
+                        // line_height 에 baking 하고 line_spacing_px=0 으로 두면 trailing_ls 제거
+                        // 효과 (height_for_fit) 가 line_segs 있는 path 와 어긋남.
                         use crate::model::style::LineSpacingType;
-                        let computed = match ls_type {
-                            LineSpacingType::Percent => max_fs * ls_val / 100.0,
-                            LineSpacingType::Fixed => ls_val.max(max_fs),
-                            LineSpacingType::SpaceOnly => max_fs + ls_val,
-                            LineSpacingType::Minimum => ls_val.max(max_fs),
-                        };
-                        computed.max(max_fs)
+                        match ls_type {
+                            LineSpacingType::Percent => {
+                                let extra = (max_fs * (ls_val - 100.0) / 100.0).max(0.0);
+                                (max_fs, extra)
+                            }
+                            LineSpacingType::Fixed => (ls_val.max(max_fs), 0.0),
+                            LineSpacingType::SpaceOnly => (max_fs, ls_val.max(0.0)),
+                            LineSpacingType::Minimum => (ls_val.max(max_fs), 0.0),
+                        }
                     } else {
-                        raw_lh
-                    };
-                    let line_spacing_px = if recompute_lh {
-                        0.0
-                    } else {
-                        hwpunit_to_px(line.line_spacing, self.dpi)
+                        (raw_lh, hwpunit_to_px(line.line_spacing, self.dpi))
                     };
                     (lh, line_spacing_px)
                 })
@@ -2311,7 +2345,13 @@ impl TypesetEngine {
         _page_def: &PageDef,
     ) {
         // 호스트 문단 format (TAC 표의 높이 보정용)
-        let fmt = self.format_paragraph(para, composed, styles);
+        let host_col_w = st
+            .layout
+            .column_areas
+            .get(st.current_column as usize)
+            .map(|a| a.width)
+            .unwrap_or(st.layout.body_area.width);
+        let fmt = self.format_paragraph(para, composed, styles, Some(host_col_w));
 
         // TAC 표 카운트 및 플러시 판단
         let tac_count = para

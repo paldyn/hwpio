@@ -858,15 +858,41 @@ impl LayoutEngine {
         wrap_anchor: Option<&crate::renderer::pagination::WrapAnchorRef>,
     ) -> f64 {
         if let Some(comp) = composed {
+            // [Task #1042 Stage 6b] 본문 paragraph 의 line_segs.empty case 의 wrap 정합 —
+            // compose_lines fallback (CHARS_PER_LINE=45 heuristic) 결과를 column inner width
+            // 기반으로 re-split. cell paragraph (Stage 6a 의 height_measurer 호출) 와 동일
+            // recompose path 사용.
+            let recomposed: Option<ComposedParagraph> = if para.line_segs.is_empty() {
+                let para_style = styles.para_styles.get(comp.para_style_id as usize);
+                let margin_l = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+                let margin_r = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+                let column_inner_width = (col_area.width - margin_l - margin_r).max(0.0);
+                if column_inner_width > 0.0 {
+                    let mut cloned = comp.clone();
+                    crate::renderer::composer::recompose_for_cell_width(
+                        &mut cloned,
+                        para,
+                        column_inner_width,
+                        styles,
+                    );
+                    Some(cloned)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let comp_ref = recomposed.as_ref().unwrap_or(comp);
+            let end_line_adjusted = end_line.min(comp_ref.lines.len()).max(start_line);
             return self.layout_composed_paragraph(
                 tree,
                 col_node,
-                comp,
+                comp_ref,
                 styles,
                 col_area,
                 y_start,
                 start_line,
-                end_line,
+                end_line_adjusted,
                 section_index,
                 para_index,
                 None,
