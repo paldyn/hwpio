@@ -468,14 +468,17 @@ export class CanvasKitLayerRenderer {
     if (!Number.isFinite(tileHeight) || tileHeight <= 0) tileHeight = imageHeight;
 
     canvas.save();
-    canvas.clipRect(this.rect(op.bbox), this.canvasKit.ClipOp?.Intersect ?? 0, true);
-    if (canvasKitImageFillModeTiles(fillMode)) {
-      this.drawTiledImage(canvas, op.bbox, fillMode, tileWidth, tileHeight, drawImage);
-    } else {
-      const placed = canvasKitImagePlacement(fillMode, op.bbox, tileWidth, tileHeight);
-      drawImage(placed.x, placed.y, tileWidth, tileHeight);
+    try {
+      canvas.clipRect(this.rect(op.bbox), this.canvasKit.ClipOp?.Intersect ?? 0, true);
+      if (canvasKitImageFillModeTiles(fillMode)) {
+        this.drawTiledImage(canvas, op.bbox, fillMode, tileWidth, tileHeight, drawImage);
+      } else {
+        const placed = canvasKitImagePlacement(fillMode, op.bbox, tileWidth, tileHeight);
+        drawImage(placed.x, placed.y, tileWidth, tileHeight);
+      }
+    } finally {
+      canvas.restore();
     }
-    canvas.restore();
   }
 
   private drawImageRect(canvas: SkCanvas, image: SkImage, source: Rect, dest: Rect): void {
@@ -560,6 +563,7 @@ export class CanvasKitLayerRenderer {
   }
 
   private recordImageCoverageGaps(op: LayerImageOp): void {
+    if (op.bakedWatermark) return;
     if (op.effect && op.effect !== 'realPic') {
       this.unsupportedOps.add(`imageEffect:${op.effect}`);
     }

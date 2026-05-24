@@ -5,8 +5,8 @@ use crate::model::image::ImageEffect;
 use crate::model::shape::TextWrap;
 use crate::model::style::{ImageFillMode, UnderlineType};
 use crate::paint::{
-    CacheHint, ClipKind, LayerNode, LayerNodeKind, PageLayerTree, PaintOp, TextDecorationKind,
-    TextVariantKind,
+    CacheHint, ClipKind, LayerNode, LayerNodeKind, PageLayerTree, PaintOp, ResolvedImageKind,
+    ResolvedImagePayload, TextDecorationKind, TextVariantKind,
 };
 use crate::renderer::layer_renderer::{
     analyze_text_variant_selection, TextVariantSelectionOptions, VariantSelectedReason,
@@ -332,7 +332,9 @@ impl CanvasKitReplayPlanBuilder {
                 item.detail = Some("footnoteMarker".to_string());
                 item
             }
-            PaintOp::Image { image, .. } => self.image_item(path, image),
+            PaintOp::Image {
+                image, resolved, ..
+            } => self.image_item(path, image, resolved.as_deref()),
             PaintOp::Equation { .. } => {
                 self.transition_overlay_item(path, "equation", CanvasKitReplayFeature::Equation)
             }
@@ -414,9 +416,14 @@ impl CanvasKitReplayPlanBuilder {
         }
     }
 
-    fn image_item(&self, path: String, image: &ImageNode) -> CanvasKitReplayItem {
-        let detail = image_transition_detail(image);
-        if image_can_replay_directly(image) {
+    fn image_item(
+        &self,
+        path: String,
+        image: &ImageNode,
+        resolved: Option<&ResolvedImagePayload>,
+    ) -> CanvasKitReplayItem {
+        let detail = image_transition_detail(image, resolved);
+        if image_can_replay_directly(image, resolved) {
             let mut item = direct_item(path, "image", CanvasKitReplayFeature::RasterImage);
             item.detail = detail;
             item
@@ -609,11 +616,20 @@ fn text_run_transition_detail(run: &TextRunNode) -> Option<&'static str> {
     None
 }
 
-fn image_transition_detail(image: &ImageNode) -> Option<String> {
+fn image_transition_detail(
+    image: &ImageNode,
+    resolved: Option<&ResolvedImagePayload>,
+) -> Option<String> {
     let mut detail = Vec::new();
+    if let Some(payload) = resolved {
+        detail.push(format!(
+            "resolved={}",
+            resolved_image_kind_detail(payload.kind)
+        ));
+    }
     if image.external_path.is_some() {
         detail.push("externalImage".to_string());
-    } else if image.data.is_none() {
+    } else if image.data.is_none() && resolved.is_none() {
         detail.push("missingImageData".to_string());
     }
     if let Some(fill_mode) = image.fill_mode {
@@ -622,10 +638,11 @@ fn image_transition_detail(image: &ImageNode) -> Option<String> {
     if image.crop.is_some() {
         detail.push("crop".to_string());
     }
-    if !matches!(image.effect, ImageEffect::RealPic) {
+    let effects_are_baked = resolved.is_some_and(|payload| payload.suppress_effects);
+    if !effects_are_baked && !matches!(image.effect, ImageEffect::RealPic) {
         detail.push(format!("effect={}", image_effect_detail(image.effect)));
     }
-    if image.brightness != 0 || image.contrast != 0 {
+    if !effects_are_baked && (image.brightness != 0 || image.contrast != 0) {
         detail.push(format!(
             "adjustment=brightness:{},contrast:{}",
             image.brightness, image.contrast
@@ -647,12 +664,20 @@ fn image_transition_detail(image: &ImageNode) -> Option<String> {
     }
 }
 
-fn image_can_replay_directly(image: &ImageNode) -> bool {
-    image.data.is_some()
-        && image.external_path.is_none()
-        && matches!(image.effect, ImageEffect::RealPic)
-        && image.brightness == 0
-        && image.contrast == 0
+fn image_can_replay_directly(image: &ImageNode, resolved: Option<&ResolvedImagePayload>) -> bool {
+    let has_replayable_payload = image.data.is_some() || resolved.is_some();
+    let effects_are_supported = resolved.is_some_and(|payload| payload.suppress_effects)
+        || (matches!(image.effect, ImageEffect::RealPic)
+            && image.brightness == 0
+            && image.contrast == 0);
+    has_replayable_payload && image.external_path.is_none() && effects_are_supported
+}
+
+fn resolved_image_kind_detail(value: ResolvedImageKind) -> &'static str {
+    match value {
+        ResolvedImageKind::FormatConverted => "formatConverted",
+        ResolvedImageKind::BakedWatermark => "bakedWatermark",
+    }
 }
 
 fn image_effect_detail(value: ImageEffect) -> &'static str {
@@ -704,7 +729,7 @@ fn selected_reason_as_str(reason: VariantSelectedReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::model::style::ImageFillMode;
-    use crate::paint::LayerNode;
+    use crate::paint::{LayerNode, ResolvedImageKind, ResolvedImagePayload};
     use crate::renderer::render_tree::{
         BoundingBox, FootnoteMarkerNode, ImageNode, PageBackgroundImage,
     };
@@ -844,6 +869,33 @@ mod tests {
         assert_eq!(
             plan.items[0].detail.as_deref(),
             Some("effect=grayScale;adjustment=brightness:10,contrast:-20")
+        );
+    }
+
+    #[test]
+    fn image_replay_plan_treats_baked_watermark_payload_as_direct() {
+        let mut image = ImageNode::new(1, Some(vec![1, 2, 3]));
+        image.effect = ImageEffect::GrayScale;
+        image.brightness = 70;
+        image.contrast = -50;
+
+        let tree = tree_with_ops(vec![PaintOp::Image {
+            bbox: bbox(),
+            image,
+            resolved: Some(Box::new(ResolvedImagePayload {
+                data: vec![4, 5, 6],
+                mime: "image/png",
+                kind: ResolvedImageKind::BakedWatermark,
+                suppress_effects: true,
+            })),
+        }]);
+
+        let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
+
+        assert_eq!(plan.items[0].status, CanvasKitReplayStatus::Direct);
+        assert_eq!(
+            plan.items[0].detail.as_deref(),
+            Some("resolved=bakedWatermark")
         );
     }
 
