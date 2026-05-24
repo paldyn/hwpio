@@ -3487,6 +3487,22 @@ impl LayoutEngine {
             } else {
                 false
             };
+            let line_reset_before = |li: usize| -> bool {
+                if li == 0 {
+                    return reset_before;
+                }
+                if cell_first_vpos != 0 {
+                    return false;
+                }
+                let Some(prev) = p.line_segs.get(li - 1) else {
+                    return false;
+                };
+                let Some(cur) = p.line_segs.get(li) else {
+                    return false;
+                };
+                let prev_end = prev.vertical_pos + prev.line_height;
+                cur.vertical_pos >= 0 && prev_end > 0 && cur.vertical_pos < prev_end
+            };
             // [Task #993] 줄 높이는 렌더러(layout_composed_paragraph)와 동일하게
             // corrected_line_height 를 적용한다 — raw line_height 가 폰트보다
             // 작은 폴백 케이스에서 렌더러가 키운 높이를 컷 측정이 따라가지
@@ -3607,7 +3623,7 @@ impl LayoutEngine {
                     }
                     units.push(CellUnit {
                         height: lh,
-                        hard_break_before: reset_before && li == 0,
+                        hard_break_before: line_reset_before(li),
                         para_idx: pi,
                         vis_start: li,
                         vis_end: li + 1,

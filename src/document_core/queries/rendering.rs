@@ -814,11 +814,11 @@ impl DocumentCore {
                 *flags &= !mask;
             }
         }
-        set_bit(flags, 0x0100, sd.hide_header); // bit 8
-        set_bit(flags, 0x0200, sd.hide_footer); // bit 9
+        set_bit(flags, 0x0001, sd.hide_header); // bit 0
+        set_bit(flags, 0x0002, sd.hide_footer); // bit 1
         set_bit(flags, 0x0004, sd.hide_master_page); // bit 2 (HWP5 스펙, 첫쪽 바탕쪽 감춤)
-        set_bit(flags, 0x0800, sd.hide_border); // bit 11
-        set_bit(flags, 0x1000, sd.hide_fill); // bit 12
+        set_bit(flags, 0x0008, sd.hide_border); // bit 3
+        set_bit(flags, 0x0010, sd.hide_fill); // bit 4
         set_bit(flags, 0x00080000, sd.hide_empty_line); // bit 19
                                                         // bit 20-21: 쪽 번호 종류
         *flags &= !0x00300000; // clear bits 20-21
@@ -2169,6 +2169,15 @@ impl DocumentCore {
                             }
                         }
                     }
+                }
+            }
+            // 같은 구역 머리말/꼬리말 보정이 첫쪽 감춤을 되돌리지 않도록 마지막에 재적용한다.
+            if let Some(first_page) = result.pages.first_mut() {
+                if section.section_def.hide_header {
+                    first_page.active_header = None;
+                }
+                if section.section_def.hide_footer {
+                    first_page.active_footer = None;
                 }
             }
             self.pagination[idx] = result;

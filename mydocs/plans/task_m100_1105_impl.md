@@ -103,6 +103,58 @@ page 22 contains pi=440, pi=441, pi=449
 
 PR #1106은 문서화 전에 생성되어 회수했다. 문서화와 검증 커밋을 추가한 뒤 새 PR 또는 재오픈은 작업지시자 승인 후 진행한다.
 
+## Stage 5 — K-water 2024 후속 정합
+
+### 5.1 회귀 테스트 추가
+
+`tests/issue_1105.rs`에 K-water 2024 정답지 가드를 추가한다.
+
+검증 내용:
+
+```text
+samples/k-water-rfp-2024.hwp page_count == 27
+page 5 의 s1/pi52 RowBreak 표가 rows=0..4 + end_cut 으로 내부 컷을 가져야 함
+page 1 SVG 에 꼬리말 표 하단선(#787878, y=1034.866...)이 없어야 함
+```
+
+### 5.2 첫쪽 머리말/꼬리말 감춤
+
+`hwpspec-2024.pdf` 표 119 기준으로 HWP5 `SectionDef.flags`의 첫쪽 감춤 비트를 해석한다.
+
+```text
+bit 0 = 머리말 감춤
+bit 1 = 꼬리말 감춤
+bit 2 = 바탕쪽 감춤
+bit 3 = 테두리 감춤
+bit 4 = 배경 감춤
+bit 5 = 쪽 번호 위치 감춤
+```
+
+적용 위치:
+
+- `src/parser/body_text.rs`
+- `src/document_core/queries/rendering.rs`
+
+동일 구역 머리말/꼬리말 보정 단계가 첫쪽 감춤을 다시 되돌리지 않도록, 보정 이후에도 첫쪽 감춤을 유지한다.
+
+### 5.3 K-water 2024 표 분할 정합
+
+`samples/k-water-rfp-2024.hwp`의 28쪽 발생 첫 차이는 `s1/pi52` 표 분할이다. 기존
+`samples/k-water-rfp.hwp`는 같은 표에서 `rows=0..4 + end_cut`을 만들어 다음 페이지에 더 많은
+본문을 싣지만, 2024 샘플은 `rows=0..3` 뒤에 `rows=3..4`를 통째로 보내 전체 흐름이 한 페이지
+밀린다.
+
+원인은 셀 내부 페이지 브레이크 신호의 위치 차이다. 기존 샘플은 `cell[14]`의 `LINE_SEG.vpos`
+리셋이 문단 첫 줄에 나타나지만, 2024 샘플은 같은 리셋이 같은 문단의 두 번째 줄에서 발생한다.
+기존 `cell_units()`는 문단 첫 줄 리셋만 `hard_break_before`로 표시해 `row_block_has_internal_hard_break`
+판정이 실패했다.
+
+후속 구현은 다음 순서로 좁힌다.
+
+1. `pi52`의 분할 높이와 HWP 원본 `k-water-rfp.hwp`의 같은 표 분할을 비교한다.
+2. `cell_units()`에서 같은 문단 내부 후속 줄의 `LINE_SEG.vpos` 리셋도 하드 브레이크로 표시한다.
+3. 파일명 특수 처리 없이 일반 표 분할 규칙으로 27쪽을 회복한다.
+
 PR 본문 초안:
 
 ```markdown

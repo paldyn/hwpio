@@ -37,3 +37,39 @@ fn task1105_sample16_hwp5_page_break_before_section_4_matches_hancom() {
     assert!(page22.contains("Table          pi=441"));
     assert!(page22.contains("FullParagraph  pi=449"));
 }
+
+#[test]
+fn task1105_k_water_rfp_2024_page_count_matches_hancom_pdf() {
+    let doc = load_doc("samples/k-water-rfp-2024.hwp");
+    assert_eq!(doc.page_count(), 27);
+}
+
+#[test]
+fn task1105_k_water_rfp_2024_first_rowspan_table_keeps_line_reset_split() {
+    let doc = load_doc("samples/k-water-rfp-2024.hwp");
+
+    let page5 = doc.dump_page_items(Some(4));
+    assert!(
+        page5.contains("PartialTable   pi=52 ci=0  rows=0..4"),
+        "the first large rowspan table must split inside its last row:\n{page5}"
+    );
+    assert!(
+        page5.contains("end_cut=["),
+        "the first large rowspan table must carry row-block line cuts:\n{page5}"
+    );
+}
+
+#[test]
+fn task1105_k_water_rfp_2024_cover_hides_first_page_footer() {
+    let doc = load_doc("samples/k-water-rfp-2024.hwp");
+    let svg = doc
+        .render_page_svg_native(0)
+        .expect("render k-water-rfp-2024 page 1");
+
+    assert!(
+        !svg.contains(
+            r##"<line x1="80" y1="1034.8666666666668" x2="713.96" y2="1034.8666666666668" stroke="#787878" stroke-width="1.5"/>"##
+        ),
+        "first page footer table line must be hidden by SectionDef first-page footer hide"
+    );
+}
