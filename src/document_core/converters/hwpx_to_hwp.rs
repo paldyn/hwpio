@@ -657,7 +657,7 @@ fn materialize_fixed_width_space_control(
 ) {
     const HWP5_FIXED_WIDTH_SPACE_MASK: u32 = 1u32 << 0x001f;
 
-    if context == ParagraphContext::MasterPage || !para.text.contains('\u{2007}') {
+    if context != ParagraphContext::Body || !para.text.contains('\u{2007}') {
         return;
     }
 
@@ -665,10 +665,10 @@ fn materialize_fixed_width_space_control(
         return;
     }
 
-    // Hancom's HWPX->HWP path stores HWPX fixed-width blanks as HWP5
-    // control char 0x001f in body/header/footer text, not as literal U+2007.
-    // MasterPage AutoNumber-only paragraphs are handled by the dedicated
-    // placeholder contract.
+    // Hancom's HWPX->HWP path stores body fixed-width blanks as HWP5
+    // control char 0x001f in the affected exam_social body paragraphs.
+    // Header/footer and master page paragraphs keep literal U+2007 because
+    // page-number placeholder replacement depends on that visible spacer.
     para.control_mask |= HWP5_FIXED_WIDTH_SPACE_MASK;
     report.header_footer_fwspace_control_materialized += 1;
 }
@@ -2157,8 +2157,8 @@ mod tests {
             ParagraphContext::HeaderFooter,
         );
 
-        assert_eq!(report.header_footer_fwspace_control_materialized, 1);
-        assert_ne!(header_para.control_mask & HWP5_FIXED_WIDTH_SPACE_MASK, 0);
+        assert_eq!(report.header_footer_fwspace_control_materialized, 0);
+        assert_eq!(header_para.control_mask & HWP5_FIXED_WIDTH_SPACE_MASK, 0);
 
         let mut body_para = Paragraph {
             text: "사회탐구\u{2007}영역".to_string(),
