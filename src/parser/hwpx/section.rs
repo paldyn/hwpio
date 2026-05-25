@@ -1051,8 +1051,22 @@ fn parse_start_num(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef) 
 fn parse_visibility(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef) {
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
-            b"hideFirstHeader" => sec_def.hide_header = attr_str(&attr) == "1",
-            b"hideFirstFooter" => sec_def.hide_footer = attr_str(&attr) == "1",
+            b"hideFirstHeader" => {
+                sec_def.hide_header = attr_str(&attr) == "1";
+                if sec_def.hide_header {
+                    sec_def.flags |= 0x0001;
+                } else {
+                    sec_def.flags &= !0x0001;
+                }
+            }
+            b"hideFirstFooter" => {
+                sec_def.hide_footer = attr_str(&attr) == "1";
+                if sec_def.hide_footer {
+                    sec_def.flags |= 0x0002;
+                } else {
+                    sec_def.flags &= !0x0002;
+                }
+            }
             b"hideFirstMasterPage" => {
                 sec_def.hide_master_page = attr_str(&attr) == "1";
                 if sec_def.hide_master_page {
@@ -1061,8 +1075,22 @@ fn parse_visibility(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef)
                     sec_def.flags &= !0x0004;
                 }
             }
-            b"border" => sec_def.hide_border = attr_str(&attr) == "HIDE_ALL",
-            b"fill" => sec_def.hide_fill = attr_str(&attr) == "HIDE_ALL",
+            b"border" => {
+                sec_def.hide_border = attr_str(&attr) == "HIDE_ALL";
+                if sec_def.hide_border {
+                    sec_def.flags |= 0x0008;
+                } else {
+                    sec_def.flags &= !0x0008;
+                }
+            }
+            b"fill" => {
+                sec_def.hide_fill = attr_str(&attr) == "HIDE_ALL";
+                if sec_def.hide_fill {
+                    sec_def.flags |= 0x0010;
+                } else {
+                    sec_def.flags &= !0x0010;
+                }
+            }
             b"hideFirstEmptyLine" => sec_def.hide_empty_line = attr_str(&attr) == "1",
             _ => {}
         }

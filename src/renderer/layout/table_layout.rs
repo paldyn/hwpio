@@ -1046,6 +1046,7 @@ impl LayoutEngine {
                 );
                 self.calc_para_lines_height(
                     &comp.lines,
+                    self.is_hwp3_variant.get() && p.line_segs.is_empty() && !p.text.is_empty(),
                     pidx,
                     cell_para_count,
                     styles.para_styles.get(p.para_shape_id as usize),
@@ -1070,6 +1071,9 @@ impl LayoutEngine {
             .map(|(pidx, (comp, para))| {
                 self.calc_para_lines_height(
                     &comp.lines,
+                    self.is_hwp3_variant.get()
+                        && para.line_segs.is_empty()
+                        && !para.text.is_empty(),
                     pidx,
                     cell_para_count,
                     styles.para_styles.get(para.para_shape_id as usize),
@@ -1088,6 +1092,7 @@ impl LayoutEngine {
     fn calc_para_lines_height(
         &self,
         lines: &[crate::renderer::composer::ComposedLine],
+        hwp3_variant_synthetic: bool,
         pidx: usize,
         total_para_count: usize,
         para_style: Option<&crate::renderer::style_resolver::ResolvedParaStyle>,
@@ -1128,11 +1133,12 @@ impl LayoutEngine {
                                 .unwrap_or(0.0)
                         })
                         .fold(0.0f64, f64::max);
-                    let h = crate::renderer::corrected_line_height(
+                    let h = crate::renderer::corrected_line_height_for_variant_synthetic(
                         raw_lh,
                         max_fs,
                         cell_ls_type,
                         cell_ls_val,
+                        hwp3_variant_synthetic,
                     );
                     let is_cell_last_line = is_last_para && i + 1 == line_count;
                     if !is_cell_last_line {
@@ -3006,7 +3012,8 @@ impl LayoutEngine {
         cell: &crate::model::table::Cell,
         styles: &ResolvedStyleSet,
     ) -> f64 {
-        let measurer = super::super::height_measurer::HeightMeasurer::new(self.dpi);
+        let measurer = super::super::height_measurer::HeightMeasurer::new(self.dpi)
+            .with_hwp3_variant(self.is_hwp3_variant.get());
         measurer.cell_controls_height(&cell.paragraphs, styles, 0)
     }
 
@@ -3480,6 +3487,22 @@ impl LayoutEngine {
             } else {
                 false
             };
+            let line_reset_before = |li: usize| -> bool {
+                if li == 0 {
+                    return reset_before;
+                }
+                if cell_first_vpos != 0 {
+                    return false;
+                }
+                let Some(prev) = p.line_segs.get(li - 1) else {
+                    return false;
+                };
+                let Some(cur) = p.line_segs.get(li) else {
+                    return false;
+                };
+                let prev_end = prev.vertical_pos + prev.line_height;
+                cur.vertical_pos >= 0 && prev_end > 0 && cur.vertical_pos < prev_end
+            };
             // [Task #993] 줄 높이는 렌더러(layout_composed_paragraph)와 동일하게
             // corrected_line_height 를 적용한다 — raw line_height 가 폰트보다
             // 작은 폴백 케이스에서 렌더러가 키운 높이를 컷 측정이 따라가지
@@ -3504,11 +3527,14 @@ impl LayoutEngine {
                                 }
                             })
                             .fold(0.0f64, f64::max);
-                        crate::renderer::corrected_line_height(
+                        crate::renderer::corrected_line_height_for_variant_synthetic(
                             raw_lh,
                             max_fs,
                             ps.line_spacing_type,
                             ps.line_spacing,
+                            self.is_hwp3_variant.get()
+                                && p.line_segs.is_empty()
+                                && !p.text.is_empty(),
                         )
                     }
                     None => raw_lh,
@@ -3545,9 +3571,17 @@ impl LayoutEngine {
                             let h = corrected_h(line);
                             let ls = hwpunit_to_px(line.line_spacing, self.dpi);
                             let is_cell_last_line = is_last_para && li + 1 == line_count;
-                            // [Task #1022] trailing ls 규칙 — HeightMeasurer 와 정합:
-                            // 셀 마지막 줄은 단일 문단 단일 줄 셀에서만 제외.
+                            // [Task #1022/#1086] trailing ls 규칙 — HeightMeasurer 와
+                            // 정합. CellBreak/TAC 표는 기존 trailing geometry 를 보존하고,
+                            // block RowBreak 표는 렌더 가시 높이처럼 셀 마지막 줄
+                            // trailing 을 제외해 행 fit 을 맞춘다.
+                            let is_block_rowbreak = matches!(
+                                table.page_break,
+                                crate::model::table::TablePageBreak::RowBreak
+                            ) && !table.common.treat_as_char;
                             let include_trailing_ls = !is_cell_last_line || para_count > 1;
+                            let include_trailing_ls =
+                                include_trailing_ls && (!is_cell_last_line || !is_block_rowbreak);
                             let mut lh = if include_trailing_ls { h + ls } else { h };
                             if li == 0 {
                                 lh += spacing_before;
@@ -3573,7 +3607,13 @@ impl LayoutEngine {
                     let h = corrected_h(line);
                     let ls = hwpunit_to_px(line.line_spacing, self.dpi);
                     let is_cell_last_line = is_last_para && li + 1 == line_count;
+                    let is_block_rowbreak = matches!(
+                        table.page_break,
+                        crate::model::table::TablePageBreak::RowBreak
+                    ) && !table.common.treat_as_char;
                     let include_trailing_ls = !is_cell_last_line || para_count > 1;
+                    let include_trailing_ls =
+                        include_trailing_ls && (!is_cell_last_line || !is_block_rowbreak);
                     let mut lh = if include_trailing_ls { h + ls } else { h };
                     if li == 0 {
                         lh += spacing_before;
@@ -3583,7 +3623,7 @@ impl LayoutEngine {
                     }
                     units.push(CellUnit {
                         height: lh,
-                        hard_break_before: reset_before && li == 0,
+                        hard_break_before: line_reset_before(li),
                         para_idx: pi,
                         vis_start: li,
                         vis_end: li + 1,
@@ -3759,6 +3799,26 @@ impl LayoutEngine {
             fully_consumed,
             consumed_height,
         }
+    }
+
+    /// RowBreak 표의 rowspan 블록 중 셀 내부 HWP page reset 이 있는 블록만
+    /// 블록 컷 대상으로 삼기 위한 가드. 단순 rowspan 라벨 표는 기존 행 경계
+    /// 분할을 유지한다.
+    pub(crate) fn row_block_has_internal_hard_break(
+        &self,
+        table: &crate::model::table::Table,
+        b_start: usize,
+        b_end: usize,
+        styles: &ResolvedStyleSet,
+    ) -> bool {
+        Self::row_block_cells(table, b_start, b_end)
+            .iter()
+            .any(|cell| {
+                self.cell_units(cell, table, styles)
+                    .iter()
+                    .enumerate()
+                    .any(|(i, unit)| i > 0 && unit.hard_break_before)
+            })
     }
 
     /// [Task #1025] 행블록 `[b_start, b_end)` 와 교차하는 셀(rs>1 포함)을 모은다.

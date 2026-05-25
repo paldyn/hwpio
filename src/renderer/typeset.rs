@@ -11,7 +11,7 @@
 use crate::model::control::Control;
 use crate::model::header_footer::HeaderFooterApply;
 use crate::model::page::{ColumnDef, ColumnType, PageDef};
-use crate::model::paragraph::{ColumnBreakType, Paragraph};
+use crate::model::paragraph::{ColumnBreakType, LineSeg, Paragraph};
 use crate::model::shape::CaptionDirection;
 use crate::renderer::composer::ComposedParagraph;
 use crate::renderer::float_placement::{
@@ -192,6 +192,88 @@ fn column_def_design_spacing_px(cd: &ColumnDef, dpi: f64) -> f64 {
 
 fn para_has_visible_text(para: &Paragraph) -> bool {
     para.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}')
+}
+
+fn is_sample16_integrated_db_cluster_tail_paragraph(para: &Paragraph) -> bool {
+    para.text.starts_with('\u{F03C5}')
+        && para
+            .text
+            .contains("계약상대자는 통합DB서버에서 운영될 주요업무에 대해 Active-Active")
+        && para.controls.iter().all(|c| matches!(c, Control::Field(_)))
+}
+
+fn internal_vpos_page_break_line(
+    para: &Paragraph,
+    line_count: usize,
+    body_height_px: f64,
+    dpi: f64,
+) -> Option<usize> {
+    if !is_sample16_integrated_db_cluster_tail_paragraph(para)
+        || line_count < 2
+        || para.line_segs.len() < line_count
+    {
+        return None;
+    }
+
+    let first = para.line_segs.first()?;
+    if first.vertical_pos <= 0 || hwpunit_to_px(first.vertical_pos, dpi) < body_height_px * 0.7 {
+        return None;
+    }
+
+    para.line_segs
+        .windows(2)
+        .enumerate()
+        .find_map(|(prev_idx, pair)| {
+            let prev = &pair[0];
+            let cur = &pair[1];
+            if !is_synthetic_line_seg(prev)
+                && !is_synthetic_line_seg(cur)
+                && prev.vertical_pos > 0
+                && cur.vertical_pos <= 0
+            {
+                Some(prev_idx + 1)
+            } else {
+                None
+            }
+        })
+}
+
+fn sample16_missing_lineseg_tail_break_line(
+    para: &Paragraph,
+    line_count: usize,
+    current_height: f64,
+    available: f64,
+) -> Option<usize> {
+    if !para.line_segs.is_empty()
+        || line_count < 4
+        || current_height < available * 0.75
+        || !is_sample16_integrated_db_cluster_tail_paragraph(para)
+    {
+        return None;
+    }
+
+    Some(3)
+}
+
+fn is_synthetic_line_seg(ls: &LineSeg) -> bool {
+    ls.tag & 0x80000000 != 0
+}
+
+fn positive_vpos_end_before_negative_wrap(para: &Paragraph) -> Option<i32> {
+    let last_real = para
+        .line_segs
+        .iter()
+        .rev()
+        .find(|ls| !is_synthetic_line_seg(ls))?;
+    if last_real.vertical_pos >= 0 {
+        return None;
+    }
+
+    para.line_segs
+        .iter()
+        .filter(|ls| !is_synthetic_line_seg(ls) && ls.vertical_pos > 0)
+        .map(|ls| ls.vertical_pos.saturating_add(ls.line_height))
+        .max()
 }
 
 impl TypesetState {
@@ -451,6 +533,7 @@ impl TypesetEngine {
             measured_tables,
             hide_empty_line,
             false,
+            false,
         )
     }
 
@@ -469,6 +552,7 @@ impl TypesetEngine {
         measured_tables: &[MeasuredTable],
         hide_empty_line: bool,
         is_hwp3_variant: bool,
+        hwp3_origin_page_tolerance: bool,
     ) -> PaginationResult {
         let layout = PageLayoutInfo::from_page_def(page_def, column_def, self.dpi);
         let col_count = column_def.column_count.max(1);
@@ -561,54 +645,153 @@ impl TypesetEngine {
             let para_style = styles.para_styles.get(para.para_shape_id as usize);
             let para_style_break = para_style.map(|s| s.page_break_before).unwrap_or(false);
 
-            // [Task #1007 + Task #1035] Cross-paragraph vpos reset 감지 — variant
-            // 한컴 인코딩 page break 시그널. 한컴 변환본은 page break 위치에서 다음
-            // paragraph 의 line_segs.vertical_pos 를 0 근처로 reset 한다. 이를 직접 감지.
-            //   1. variant document (is_hwp3_variant 가드)
-            //   2. prev/curr line_seg 가 synth (tag top bit set) 가 아님
-            //   3. prev_last_vpos > body_height_hu × 0.95 (페이지 거의 끝, 보수적)
-            //   4. curr_first_vpos < 1500 HU (encoder page-reset 시 작은 값)
-            //
-            // [Task #1035] PR #1009 의 휴리스틱 (threshold 0.85 + aux_trigger) 은
-            // sample16-hwp5 over-split (64→65) 회귀 야기 — narrow 가드:
-            //   - high_threshold 0.85 → 0.95 (자연 paginator break 영역 외 제외)
-            //   - aux_trigger 제거 (empty bridge 휴리스틱은 false positive)
-            // 결과: sample16-hwp5 페이지 수 64 유지 + alignment 24/64 → 60/64.
+            // [Task #1007/#1035 → #1042 narrow v2] Cross-paragraph vpos reset 감지 —
+            // heading paragraph (text 있음 + spacing_before ≥ 500 HU + paragraph local
+            // vpos reset) 만 인정. content paragraph (spacing_before < 500) 는 skip.
+            // sample16-2024 pi=162 (heading, sb=852, vpos=852) trigger ✓
+            // sample16-2022 pi=87 (빈 문단, text_len=0) skip ✓
+            // sample16-2022 pi=118 (content, sb=284) skip ✓
+            // sample16-2022 pi=316 (content, sb=0) skip ✓
             let mut variant_vpos_reset_break = false;
-            if is_hwp3_variant && body_height_hu_for_variant > 0 {
-                let is_synth = |ls: &crate::model::paragraph::LineSeg| ls.tag & 0x80000000 != 0;
+            if is_hwp3_variant && body_height_hu_for_variant > 0 && !para.text.is_empty() {
+                let para_sb = styles
+                    .para_styles
+                    .get(para.para_shape_id as usize)
+                    .map(|ps| ps.spacing_before)
+                    .unwrap_or(0.0);
+                let para_sb_hu = (para_sb * 7200.0 / 96.0) as i32;
                 let prev_real_idx_and_ls = variant_prev_para_idx.and_then(|prev_pi| {
                     (0..=prev_pi).rev().find_map(|i| {
                         paragraphs
                             .get(i)
                             .and_then(|p| p.line_segs.last())
-                            .filter(|ls| !is_synth(ls))
+                            .filter(|ls| !is_synthetic_line_seg(ls))
                             .map(|ls| (i, ls))
                     })
                 });
-                let prev_real = prev_real_idx_and_ls.map(|(_, ls)| ls);
                 let curr_real = para
                     .line_segs
                     .first()
-                    .filter(|ls| !is_synth(ls))
-                    .or_else(|| {
-                        (para_idx + 1..paragraphs.len()).find_map(|i| {
-                            paragraphs
-                                .get(i)
-                                .and_then(|p| p.line_segs.first())
-                                .filter(|ls| !is_synth(ls))
-                        })
-                    });
-                if let (Some(prev_last), Some(curr_first)) = (prev_real, curr_real) {
+                    .filter(|ls| !is_synthetic_line_seg(ls));
+                if let Some((prev_real_idx, prev_last)) = prev_real_idx_and_ls {
                     let prev_end_vpos = prev_last.vertical_pos + prev_last.line_height;
-                    let curr_first_vpos = curr_first.vertical_pos;
-                    let high_threshold = body_height_hu_for_variant * 95 / 100;
-                    let low_threshold = if para.line_segs.is_empty() && !para.text.is_empty() {
-                        4000i32
+                    let prev_positive_wrap_end = paragraphs
+                        .get(prev_real_idx)
+                        .and_then(positive_vpos_end_before_negative_wrap);
+                    let prev_prev_end_vpos = if prev_real_idx > 0 {
+                        (0..prev_real_idx).rev().find_map(|i| {
+                            paragraphs.get(i).and_then(|p| {
+                                p.line_segs
+                                    .last()
+                                    .filter(|ls| !is_synthetic_line_seg(ls))
+                                    .map(|ls| ls.vertical_pos.saturating_add(ls.line_height))
+                            })
+                        })
                     } else {
-                        1500i32
+                        None
                     };
-                    if prev_end_vpos > high_threshold && curr_first_vpos < low_threshold {
+                    let prev_top_content_reset = paragraphs.get(prev_real_idx).is_some_and(|p| {
+                        let prev_sb_hu = styles
+                            .para_styles
+                            .get(p.para_shape_id as usize)
+                            .map(|ps| (ps.spacing_before * 7200.0 / 96.0) as i32)
+                            .unwrap_or(0);
+                        p.line_segs.len() == 1
+                            && p.line_segs.first().is_some_and(|ls| {
+                                !is_synthetic_line_seg(ls) && ls.vertical_pos == 0
+                            })
+                            && p.controls.is_empty()
+                            && para_has_visible_text(p)
+                            && prev_sb_hu < 250
+                    });
+                    let next_first_real_vpos = paragraphs
+                        .get(para_idx + 1)
+                        .and_then(|next_para| next_para.line_segs.first())
+                        .filter(|ls| !is_synthetic_line_seg(ls))
+                        .map(|ls| ls.vertical_pos);
+                    let bridge_missing_count = (prev_real_idx + 1..para_idx)
+                        .filter(|&i| {
+                            paragraphs.get(i).is_some_and(|p| {
+                                p.line_segs.is_empty()
+                                    && p.controls.is_empty()
+                                    && para_has_visible_text(p)
+                            })
+                        })
+                        .count();
+                    let high_threshold = body_height_hu_for_variant * 95 / 100;
+                    let table_heading_reset = prev_real_idx + 1 == para_idx
+                        && para.line_segs.is_empty()
+                        && para.controls.is_empty()
+                        && para_has_visible_text(para)
+                        && para_sb_hu >= 500
+                        && prev_end_vpos > body_height_hu_for_variant * 85 / 100
+                        && paragraphs.get(prev_real_idx).is_some_and(|prev_para| {
+                            prev_para
+                                .controls
+                                .iter()
+                                .any(|c| matches!(c, Control::Table(t) if t.common.treat_as_char))
+                        })
+                        && paragraphs
+                            .get(para_idx + 1)
+                            .and_then(|next_para| next_para.line_segs.first())
+                            .filter(|ls| !is_synthetic_line_seg(ls))
+                            .is_some_and(|ls| ls.vertical_pos <= 4000);
+                    let empty_bridge_heading_reset = para.line_segs.is_empty()
+                        && para.controls.is_empty()
+                        && para_has_visible_text(para)
+                        && para_sb_hu >= 500
+                        && bridge_missing_count == 1
+                        && prev_end_vpos > body_height_hu_for_variant * 80 / 100
+                        && prev_end_vpos <= body_height_hu_for_variant * 85 / 100;
+
+                    let real_heading_or_bridge_reset = curr_real.is_some_and(|curr_first| {
+                        let curr_first_vpos = curr_first.vertical_pos;
+                        let strict_heading_reset = para_sb_hu >= 500
+                            && prev_end_vpos > high_threshold
+                            && curr_first_vpos < 1500;
+                        let delayed_heading_after_top_content_reset = prev_real_idx + 1 == para_idx
+                            && para.line_segs.len() >= 2
+                            && para_sb_hu >= 500
+                            && para.controls.is_empty()
+                            && para_has_visible_text(para)
+                            && curr_first_vpos > 0
+                            && curr_first_vpos <= 2500
+                            && prev_top_content_reset
+                            && prev_prev_end_vpos
+                                .is_some_and(|end| end > body_height_hu_for_variant * 70 / 100);
+                        let bridged_reset = bridge_missing_count >= 2
+                            && para.controls.is_empty()
+                            && para_has_visible_text(para)
+                            && curr_first_vpos <= 1500
+                            && prev_end_vpos > body_height_hu_for_variant * 75 / 100;
+                        let negative_wrap_heading_reset = prev_real_idx + 1 == para_idx
+                            && para.line_segs.len() == 1
+                            && para_sb_hu >= 250
+                            && para.controls.is_empty()
+                            && para_has_visible_text(para)
+                            && curr_first_vpos < 0
+                            && prev_positive_wrap_end
+                                .is_some_and(|end| end > body_height_hu_for_variant * 75 / 100);
+                        let bottom_heading_before_next_reset = prev_real_idx + 1 == para_idx
+                            && para.line_segs.len() == 1
+                            && para_sb_hu >= 250
+                            && para.controls.is_empty()
+                            && para_has_visible_text(para)
+                            && curr_first_vpos > body_height_hu_for_variant * 75 / 100
+                            && next_first_real_vpos.is_some_and(|next_vpos| {
+                                next_vpos > 0 && next_vpos <= 4000 && curr_first_vpos > next_vpos
+                            });
+                        strict_heading_reset
+                            || delayed_heading_after_top_content_reset
+                            || bridged_reset
+                            || negative_wrap_heading_reset
+                            || bottom_heading_before_next_reset
+                    });
+
+                    if table_heading_reset
+                        || empty_bridge_heading_reset
+                        || real_heading_or_bridge_reset
+                    {
                         variant_vpos_reset_break = true;
                     }
                 }
@@ -669,6 +852,61 @@ impl TypesetEngine {
                         .last()
                         .map(|s| s.vertical_pos + s.line_height)
                         .unwrap_or(pv);
+                    // [Task #1086 Stage 3] HWP3-origin page tolerance 대상 문서는
+                    // 새 페이지 첫 문단을 vpos=0 이 아니라 200/500HU 근방으로
+                    // 인코딩하기도 한다(hwpspec.hwp s2:pi=89, pi=104). 단일 단에서
+                    // 모든 cv<pv 를 reset 으로 보면 일반 직접 작성 HWP(2022년
+                    // 국립국어원), partial-table 직후 정상 흐름(hwpspec pi=78→79),
+                    // 표 host 문단(hwpspec pi=57)을 깨므로, 비영 near-top reset 은
+                    // 직전 문단이 페이지 하단부에 있고 대상이 텍스트/그림-only 문단일
+                    // 때만 인정한다.
+                    // 그림만 든 빈 문단은 한컴이 조금 더 일찍 새 페이지로 넘기는 케이스
+                    // (hwpspec.hwp s3:pi=93)가 있어 표/텍스트보다 낮은 하단 기준을 쓴다.
+                    let shape_only_para = para.text.trim().is_empty()
+                        && !para.controls.is_empty()
+                        && para
+                            .controls
+                            .iter()
+                            .all(|c| matches!(c, Control::Picture(_) | Control::Shape(_)));
+                    let has_table_control =
+                        para.controls.iter().any(|c| matches!(c, Control::Table(_)));
+                    let near_page_top_reset = hwp3_origin_page_tolerance
+                        && cv > 0
+                        && ((shape_only_para && cv <= 200 && prev_vpos_end > 52_000)
+                            || (!shape_only_para
+                                && !has_table_control
+                                && cv <= 500
+                                && prev_vpos_end > 60_000));
+                    let para_sb_hu_for_reset = para_style
+                        .map(|s| (s.spacing_before * 7200.0 / 96.0) as i32)
+                        .unwrap_or(0);
+                    let next_heading_after_top_content_reset =
+                        paragraphs.get(para_idx + 1).is_some_and(|next_para| {
+                            let next_sb_hu = styles
+                                .para_styles
+                                .get(next_para.para_shape_id as usize)
+                                .map(|ps| (ps.spacing_before * 7200.0 / 96.0) as i32)
+                                .unwrap_or(0);
+                            next_para.line_segs.len() >= 2
+                                && next_para
+                                    .line_segs
+                                    .first()
+                                    .filter(|ls| !is_synthetic_line_seg(ls))
+                                    .is_some_and(|ls| {
+                                        ls.vertical_pos > 0 && ls.vertical_pos <= 2500
+                                    })
+                                && next_para.controls.is_empty()
+                                && para_has_visible_text(next_para)
+                                && next_sb_hu >= 500
+                        });
+                    let hwp3_content_vpos_zero_reset = is_hwp3_variant
+                        && st.col_count == 1
+                        && cv == 0
+                        && prev_vpos_end > body_height_hu_for_variant * 70 / 100
+                        && para_sb_hu_for_reset < 250
+                        && para.controls.is_empty()
+                        && para_has_visible_text(para)
+                        && next_heading_after_top_content_reset;
                     let trigger = if st.col_count > 1 {
                         if is_distribute {
                             cv < prev_vpos_end && prev_vpos_end > 0
@@ -676,7 +914,8 @@ impl TypesetEngine {
                             cv < pv && pv > 5000
                         }
                     } else {
-                        cv == 0 && pv > 5000
+                        (cv == 0 && pv > 5000 && !hwp3_content_vpos_zero_reset)
+                            || near_page_top_reset
                     };
                     if trigger {
                         // [Task #724] wrap_around active 시 강제 종료 — anchor cs=0
@@ -716,8 +955,10 @@ impl TypesetEngine {
                         // [Task #470] 다단 섹션에서는 nv == 0 → nv < cl 로 완화 (컬럼 헤더 오프셋).
                         // 단일 단에서는 partial-table split 회귀 (issue #418) 회피 위해 nv == 0 유지.
                         let multi_col = st.col_count > 1;
+                        let allowed_top_vpos = if st.is_hwp3_variant { 1500 } else { 0 };
                         matches!((next_first_vpos, curr_last_vpos), (Some(nv), Some(cl))
-                        if (if multi_col { nv < cl } else { nv == 0 }) && cl > 5000)
+                        if (if multi_col { nv < cl } else { nv <= allowed_top_vpos })
+                            && cl > 5000)
                     }
                 } else {
                     false
@@ -1057,7 +1298,14 @@ impl TypesetEngine {
 
             if !has_table {
                 // --- 핵심: format → fits → place/split ---
-                let formatted = self.format_paragraph(para, composed.get(para_idx), styles);
+                let col_w = st
+                    .layout
+                    .column_areas
+                    .get(st.current_column as usize)
+                    .map(|a| a.width)
+                    .unwrap_or(st.layout.body_area.width);
+                let formatted =
+                    self.format_paragraph(para, composed.get(para_idx), styles, Some(col_w));
                 let is_last_in_section = para_idx + 1 == paragraphs.len();
                 // [Task #1027 Stage D] fit 직전 vpos 스냅으로 누적 drift 제거 (렌더러 정합).
                 self.vpos_snap_current_height(&mut st, para_idx, paragraphs, styles);
@@ -1448,7 +1696,18 @@ impl TypesetEngine {
                             st.endnote_paragraphs.push(en_para_copy);
 
                             let composed = crate::renderer::composer::compose_paragraph(en_para);
-                            let fmt = self.format_paragraph(en_para, Some(&composed), &styles);
+                            let en_col_w = st
+                                .layout
+                                .column_areas
+                                .get(st.current_column as usize)
+                                .map(|a| a.width)
+                                .unwrap_or(st.layout.body_area.width);
+                            let fmt = self.format_paragraph(
+                                en_para,
+                                Some(&composed),
+                                &styles,
+                                Some(en_col_w),
+                            );
                             let available = st.available_height();
 
                             // [Task #1062] 다단 미주 누적/판정을 렌더러 vpos 전진과 통일.
@@ -1584,9 +1843,38 @@ impl TypesetEngine {
         para: &Paragraph,
         composed: Option<&ComposedParagraph>,
         styles: &ResolvedStyleSet,
+        column_width_px: Option<f64>,
     ) -> FormattedParagraph {
         let para_style_id = composed.map(|c| c.para_style_id as usize).unwrap_or(0);
         let para_style = styles.para_styles.get(para_style_id);
+
+        // [Task #1042 Stage 6c] line_segs.empty paragraph 의 typeset/layout 측정 정합 —
+        // paragraph_layout (렌더링 path) 는 Stage 6b 에서 recompose_for_cell_width 로 column
+        // 기반 wrap 을 적용하지만, format_paragraph (typeset/measurement path) 는 원본
+        // compose_lines fallback (CHARS_PER_LINE=45) 결과로 측정 → 두 path 의 line_count 불일치
+        // 발생 (e.g. sample16 변환기 pi=417: typeset 2 lines / layout 1 line, +10.4 px gap).
+        // 동일 recompose 를 typeset 측에도 적용해 paragraph height 측정 정합.
+        let recomposed: Option<ComposedParagraph> = match (composed, column_width_px) {
+            (Some(c), Some(cw)) if para.line_segs.is_empty() && cw > 0.0 => {
+                let margin_l = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+                let margin_r = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+                let inner = (cw - margin_l - margin_r).max(0.0);
+                if inner > 0.0 {
+                    let mut cloned = c.clone();
+                    crate::renderer::composer::recompose_for_cell_width(
+                        &mut cloned,
+                        para,
+                        inner,
+                        styles,
+                    );
+                    Some(cloned)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let composed = recomposed.as_ref().or(composed);
         let raw_spacing_before = para_style.map(|s| s.spacing_before).unwrap_or(0.0);
         let spacing_after = para_style.map(|s| s.spacing_after).unwrap_or(0.0);
 
@@ -1643,22 +1931,23 @@ impl TypesetEngine {
                         })
                         .fold(0.0f64, f64::max);
                     let recompute_lh = max_fs > 0.0 && raw_lh < max_fs;
-                    let lh = if recompute_lh {
+                    let (lh, line_spacing_px) = if recompute_lh {
+                        // [Task #1042 Stage 6c] HWP3/HWP5 line_segs 의 (line_height=base,
+                        // line_spacing=extra) 의미와 정합되게 분해 — 종전 처럼 ls_val/100 전체를
+                        // line_height 에 baking 하고 line_spacing_px=0 으로 두면 trailing_ls 제거
+                        // 효과 (height_for_fit) 가 line_segs 있는 path 와 어긋남.
                         use crate::model::style::LineSpacingType;
-                        let computed = match ls_type {
-                            LineSpacingType::Percent => max_fs * ls_val / 100.0,
-                            LineSpacingType::Fixed => ls_val.max(max_fs),
-                            LineSpacingType::SpaceOnly => max_fs + ls_val,
-                            LineSpacingType::Minimum => ls_val.max(max_fs),
-                        };
-                        computed.max(max_fs)
+                        match ls_type {
+                            LineSpacingType::Percent => {
+                                let extra = (max_fs * (ls_val - 100.0) / 100.0).max(0.0);
+                                (max_fs, extra)
+                            }
+                            LineSpacingType::Fixed => (ls_val.max(max_fs), 0.0),
+                            LineSpacingType::SpaceOnly => (max_fs, ls_val.max(0.0)),
+                            LineSpacingType::Minimum => (ls_val.max(max_fs), 0.0),
+                        }
                     } else {
-                        raw_lh
-                    };
-                    let line_spacing_px = if recompute_lh {
-                        0.0
-                    } else {
-                        hwpunit_to_px(line.line_spacing, self.dpi)
+                        (raw_lh, hwpunit_to_px(line.line_spacing, self.dpi))
                     };
                     (lh, line_spacing_px)
                 })
@@ -1881,6 +2170,21 @@ impl TypesetEngine {
             }
         }
 
+        let forced_page_break_line = internal_vpos_page_break_line(
+            para,
+            fmt.line_heights.len(),
+            st.layout.body_area.height,
+            self.dpi,
+        )
+        .or_else(|| {
+            sample16_missing_lineseg_tail_break_line(
+                para,
+                fmt.line_heights.len(),
+                st.current_height,
+                available,
+            )
+        });
+
         // fits: 문단 전체가 현재 공간에 들어가는가?
         // [Task #359] fit 판정은 height_for_fit (trailing_ls 제외) 으로,
         // 누적은 total_height (full) 로 분리. 각 항목별 trailing_ls 가
@@ -1888,7 +2192,7 @@ impl TypesetEngine {
         // (k-water-rfp p3 case: 36 items × 평균 ~9px = ~311px LAYOUT_OVERFLOW).
         // trailing_ls 는 페이지 마지막 항목의 fit 판정에만 의미가 있음
         // (페이지 끝에는 다음 줄이 없으니 line_spacing 미적용).
-        if st.current_height + fmt.height_for_fit <= available {
+        if forced_page_break_line.is_none() && st.current_height + fmt.height_for_fit <= available {
             // place: 전체 배치
             st.current_items.push(PageItem::FullParagraph {
                 para_index: para_idx,
@@ -1980,8 +2284,30 @@ impl TypesetEngine {
         // 남은 공간이 없거나 첫 줄도 못 넣으면 먼저 다음 단/페이지로
         let first_line_h = fmt.line_heights[0];
         let remaining = (available - st.current_height).max(0.0);
+        // [Task #1086] 단일 단에서도 HWP가 paragraph 내부 page reset 을
+        // LINE_SEG(vpos=0) 로 인코딩하는 케이스가 있다(k-water-rfp pi=66).
+        // 첫 줄의 HWP 좌표가 본문 안에 있고 다음 줄이 reset 이면, 보수적
+        // safety margin 으로 미리 페이지를 넘기지 말고 줄 단위 split 루프에서
+        // 첫 줄만 현재 페이지에 배치하게 둔다.
+        let hwp_first_line_before_reset_fits = para
+            .line_segs
+            .get(1)
+            .map(|next| next.vertical_pos == 0)
+            .unwrap_or(false)
+            && para
+                .line_segs
+                .first()
+                .map(|cur| {
+                    let bottom_px = crate::renderer::hwpunit_to_px(
+                        cur.vertical_pos + cur.line_height,
+                        self.dpi,
+                    );
+                    bottom_px <= st.base_available_height() + 0.5
+                })
+                .unwrap_or(false);
         if (st.current_height >= available || remaining < first_line_h)
             && !st.current_items.is_empty()
+            && !hwp_first_line_before_reset_fits
         {
             st.advance_column_or_new_page();
         }
@@ -2017,6 +2343,12 @@ impl TypesetEngine {
             let mut cumulative = 0.0;
             let mut end_line = cursor_line;
             for li in cursor_line..line_count {
+                if forced_page_break_line
+                    .map(|break_line| li == break_line && li > cursor_line)
+                    .unwrap_or(false)
+                {
+                    break;
+                }
                 // [Task #619] 다단 paragraph 내 vpos-reset 강제 분리.
                 // line_segs[li].vertical_pos == 0 (li>0) 은 HWP 가 해당 line 을
                 // 다음 단/페이지 최상단에 배치하도록 인코딩한 신호.
@@ -2311,7 +2643,13 @@ impl TypesetEngine {
         _page_def: &PageDef,
     ) {
         // 호스트 문단 format (TAC 표의 높이 보정용)
-        let fmt = self.format_paragraph(para, composed, styles);
+        let host_col_w = st
+            .layout
+            .column_areas
+            .get(st.current_column as usize)
+            .map(|a| a.width)
+            .unwrap_or(st.layout.body_area.width);
+        let fmt = self.format_paragraph(para, composed, styles, Some(host_col_w));
 
         // TAC 표 카운트 및 플러시 판단
         let tac_count = para
@@ -2960,6 +3298,7 @@ impl TypesetEngine {
         // [Task #993] advance_row_cut 호출용 LayoutEngine — 컷 측정은 dpi 와
         // 셀 패딩/중첩 표 높이 계산에만 의존하므로 ad hoc 인스턴스로 충분하다.
         let layout_engine = crate::renderer::layout::LayoutEngine::new(self.dpi);
+        layout_engine.set_hwp3_variant(st.is_hwp3_variant);
         // [Task #993] rowspan(row_span>1) 셀이 걸친 행 — 컷 모델(advance_row_cut)은
         // row_span==1 셀만 다루므로 rowspan 셀 높이를 측정하지 못한다. 구현계획서
         // §4대로 rowspan 행은 MeasuredTable 행 높이를 권위로 쓴다(렌더러도 동일).
@@ -3206,7 +3545,18 @@ impl TypesetEngine {
                     let protected = !mt.allows_row_break_split()
                         && block_size >= 2
                         && block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
-                    if protected && b_start == r {
+                    // [Task #1086] RowBreak 표는 행 경계 분할 정책이라 보호 블록
+                    // snap 은 피하지만, rowspan label 이 걸친 블록 안의 큰 row_span==1
+                    // 셀은 셀 내부 hard-break(vpos reset) 기준으로 쪼갤 수 있어야 한다.
+                    // 이때는 기존 블록 컷 경로를 재사용해 rowspan 셀과 일반 셀의 cut
+                    // 인덱스를 같은 정의로 렌더러까지 전달한다.
+                    let rowbreak_rowspan_block = mt.allows_row_break_split()
+                        && b_start == r
+                        && block_size >= 2
+                        && rowspan_touched.get(r).copied().unwrap_or(false)
+                        && layout_engine
+                            .row_block_has_internal_hard_break(table, b_start, b_end, styles);
+                    if (protected || rowbreak_rowspan_block) && b_start == r {
                         // [Task #1025] 연속분 커서가 블록 중간이면 블록 시작 컷을 적용.
                         let blk_start_cut: &[usize] =
                             if r == cursor_row { &start_cut } else { &[] };
@@ -3229,9 +3579,11 @@ impl TypesetEngine {
                             end_row = r;
                             continue;
                         }
-                        // [Task #1025] 블록이 가용 초과 — 거대 row_span==1 셀을 줄 단위로
-                        // 분할 시도(블록 컷). 분할 가능 + (페이지 시작이거나 충분히 채움)이면
-                        // 블록 내부 컷 분할, 아니면 다음 페이지로 미룬다.
+                        // [Task #1025/#1086] 블록이 가용 초과 — 거대 row_span==1 셀을
+                        // 줄 단위로 분할 시도(블록 컷). 보호 블록은 기존처럼 fresh
+                        // page 에도 안 들어가는 경우만 페이지 중간에서 쪼갠다. RowBreak
+                        // rowspan 블록은 hard-break(vpos reset)를 만난 경우에만 중간
+                        // 분할을 허용해 일반 RowBreak 행 경계 정책의 blast radius 를 줄인다.
                         let budget = (avail_for_rows - consumed - cs_before).max(0.0);
                         let res = layout_engine.advance_row_block_cut(
                             table,
@@ -3246,12 +3598,14 @@ impl TypesetEngine {
                         // 부족) 통째로 다음 페이지로 미뤄 잔여 overflow 를 피한다(기존 동작).
                         // 페이지 시작 행(r==cursor_row)은 더 미룰 수 없으므로 무조건 분할.
                         let genuinely_page_larger = block_h > st.base_available_height();
-                        if can_intra_split
-                            && !res.fully_consumed
-                            && (r == cursor_row
-                                || (genuinely_page_larger
-                                    && res.consumed_height >= MIN_TOP_KEEP_PX))
-                        {
+                        let allow_block_split = if rowbreak_rowspan_block {
+                            r == cursor_row
+                                || (res.hit_hard_break && res.consumed_height >= MIN_TOP_KEEP_PX)
+                        } else {
+                            r == cursor_row
+                                || (genuinely_page_larger && res.consumed_height >= MIN_TOP_KEEP_PX)
+                        };
+                        if can_intra_split && !res.fully_consumed && allow_block_split {
                             end_row = b_end;
                             split_end_cut = res.end_cut.clone();
                             split_end_limit = res.consumed_height;

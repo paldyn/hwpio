@@ -858,15 +858,41 @@ impl LayoutEngine {
         wrap_anchor: Option<&crate::renderer::pagination::WrapAnchorRef>,
     ) -> f64 {
         if let Some(comp) = composed {
+            // [Task #1042 Stage 6b] 본문 paragraph 의 line_segs.empty case 의 wrap 정합 —
+            // compose_lines fallback (CHARS_PER_LINE=45 heuristic) 결과를 column inner width
+            // 기반으로 re-split. cell paragraph (Stage 6a 의 height_measurer 호출) 와 동일
+            // recompose path 사용.
+            let recomposed: Option<ComposedParagraph> = if para.line_segs.is_empty() {
+                let para_style = styles.para_styles.get(comp.para_style_id as usize);
+                let margin_l = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+                let margin_r = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+                let column_inner_width = (col_area.width - margin_l - margin_r).max(0.0);
+                if column_inner_width > 0.0 {
+                    let mut cloned = comp.clone();
+                    crate::renderer::composer::recompose_for_cell_width(
+                        &mut cloned,
+                        para,
+                        column_inner_width,
+                        styles,
+                    );
+                    Some(cloned)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let comp_ref = recomposed.as_ref().unwrap_or(comp);
+            let end_line_adjusted = end_line.min(comp_ref.lines.len()).max(start_line);
             return self.layout_composed_paragraph(
                 tree,
                 col_node,
-                comp,
+                comp_ref,
                 styles,
                 col_area,
                 y_start,
                 start_line,
-                end_line,
+                end_line_adjusted,
                 section_index,
                 para_index,
                 None,
@@ -1160,12 +1186,18 @@ impl LayoutEngine {
             // PARA_LINE_SEG가 없는 폴백(400 HWPUNIT=5.333px) 등 line_height가 폰트 크기보다 작으면,
             // ParaShape의 줄간격 설정(line_spacing_type + line_spacing)으로 올바른 줄 높이를 계산한다.
             let raw_lh = hwpunit_to_px(comp_line.line_height, self.dpi);
-            let line_height = {
+            let (line_height, line_spacing_px) = {
                 let ls_val = para_style.map(|s| s.line_spacing).unwrap_or(160.0);
                 let ls_type = para_style
                     .map(|s| s.line_spacing_type)
                     .unwrap_or(LineSpacingType::Percent);
-                crate::renderer::corrected_line_height(raw_lh, max_fs, ls_type, ls_val)
+                crate::renderer::corrected_line_metrics(
+                    raw_lh,
+                    hwpunit_to_px(comp_line.line_spacing, self.dpi),
+                    max_fs,
+                    ls_type,
+                    ls_val,
+                )
             };
             // 인라인 Shape(글상자)가 있는 줄: line_height에 Shape 높이가 포함됨
             // Shape는 별도 패스에서 para_y 기준으로 렌더링되므로,
@@ -3619,7 +3651,6 @@ impl LayoutEngine {
             } else if skip_advance_empty_wrap {
                 // no advance
             } else {
-                let line_spacing_px = hwpunit_to_px(comp_line.line_spacing, self.dpi);
                 y += line_height + line_spacing_px;
             }
         }

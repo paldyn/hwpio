@@ -1190,19 +1190,77 @@ pub fn recompose_for_cell_width(
     if !para.line_segs.is_empty() {
         return;
     }
-    if composed.lines.len() != 1 {
+    if composed.lines.is_empty() {
         return;
     }
     if cell_inner_width_px <= 0.0 {
         return;
     }
-    let single_line = composed.lines.remove(0);
-    let total_width = estimate_composed_line_width(&single_line, styles);
-    if total_width <= cell_inner_width_px + 0.5 {
-        composed.lines.push(single_line);
+    // Some HWP3-origin HWP5 files omit PARA_LINE_SEG for legacy bullet paragraphs.
+    // HY신명조's embedded metrics are slightly wider than Hancom's converted reflow here,
+    // so use a small tolerance only for the tight leading-body style pattern.
+    let effective_width_px = if is_hwp3_hwp5_missing_lineseg_legacy_bullet(para, composed, styles) {
+        cell_inner_width_px * 1.04
+    } else {
+        cell_inner_width_px
+    };
+    // [Task #1042 Stage 6a] multi-line 지원 — compose_lines fallback 의 CHARS_PER_LINE=45
+    // heuristic 결과가 cell width 와 일치 안 할 수 있음. 모든 lines 의 runs 를 합쳐서
+    // 단일 line 으로 만든 후 cell width 기반 re-split.
+    let template = composed.lines[0].clone();
+    let combined_runs: Vec<_> = composed
+        .lines
+        .iter()
+        .flat_map(|l| l.runs.iter().cloned())
+        .collect();
+    let combined_line = ComposedLine {
+        runs: combined_runs,
+        line_height: template.line_height,
+        baseline_distance: template.baseline_distance,
+        segment_width: template.segment_width,
+        column_start: template.column_start,
+        line_spacing: template.line_spacing,
+        has_line_break: false,
+        char_start: 0,
+    };
+    composed.lines.clear();
+    let total_width = estimate_composed_line_width(&combined_line, styles);
+    if total_width <= effective_width_px + 0.5 {
+        composed.lines.push(combined_line);
         return;
     }
-    composed.lines = split_composed_line_by_width(&single_line, cell_inner_width_px, styles);
+    composed.lines = split_composed_line_by_width(&combined_line, effective_width_px, styles);
+}
+
+fn is_hwp3_hwp5_missing_lineseg_legacy_bullet(
+    para: &Paragraph,
+    composed: &ComposedParagraph,
+    styles: &ResolvedStyleSet,
+) -> bool {
+    let has_tight_leading_body_style = para.char_shapes.get(1).is_some_and(|cs_ref| {
+        cs_ref.start_pos <= 3
+            && styles
+                .char_styles
+                .get(cs_ref.char_shape_id as usize)
+                .map(|cs| cs.letter_spacing <= -3.0)
+                .unwrap_or(false)
+    });
+
+    para.line_segs.is_empty()
+        && para.controls.is_empty()
+        && para.text.starts_with('\u{F03C5}')
+        && has_tight_leading_body_style
+        && composed
+            .lines
+            .iter()
+            .flat_map(|line| &line.runs)
+            .any(|run| {
+                styles
+                    .char_styles
+                    .get(run.char_style_id as usize)
+                    .map(|cs| cs.font_family.split(',').next().unwrap_or("").trim() == "HY신명조")
+                    .unwrap_or(false)
+            })
 }
 
 /// 단일 ComposedLine 을 셀 가용 너비에 맞춰 다중 ComposedLine 으로 분할.
