@@ -5,7 +5,8 @@
 - 기준 브랜치: `upstream/devel`
 - 기준 커밋: `dd4bbfed`
 - 작성일: 2026-05-25
-- PR: [edwardkim/rhwp#1119](https://github.com/edwardkim/rhwp/pull/1119) 닫힘. 새 PR은 작업지시자 승인 후 생성 예정
+- PR: [edwardkim/rhwp#1120](https://github.com/edwardkim/rhwp/pull/1120)
+- 이전 PR: [edwardkim/rhwp#1119](https://github.com/edwardkim/rhwp/pull/1119) 닫힘
 
 ## 1. 작업 범위
 
@@ -88,11 +89,12 @@ hwp3-sample16-hwp5-2024: C Palatino=6 HCI=0
 ## 5. PR 준비 상태
 
 - PR #1119는 작업지시자 지시에 따라 닫았다.
+- 작업지시자 승인 후 PR #1120을 생성했다.
 - `local/task1116` 브랜치는 `origin/local/task1116`에 푸시되어 있다.
 - PR 본문 초안은 `mydocs/report/task_m100_1116_pr_body.md`에 별도로 정리했다.
-- 새 PR 생성은 작업지시자 별도 승인 후에만 진행한다.
+- PR #1120은 `jangster77:local/task1116` → `devel` 대상으로 열린 Open PR이다.
 
-승인 후 생성 명령:
+생성 명령:
 
 ```bash
 gh pr create \
