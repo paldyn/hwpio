@@ -1707,6 +1707,7 @@ impl DocumentCore {
                     &measured.tables,
                     section.section_def.hide_empty_line,
                     self.document.is_hwp3_variant,
+                    hwp3_origin_flow_spacing_before,
                     hwp3_origin_page_tolerance,
                 )
             };
