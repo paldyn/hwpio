@@ -113,6 +113,20 @@ PR 댓글 톤은 과장하지 않는다. "정말 감사합니다", "정성스러
 - 이슈 close 전에는 정정 commit이 `devel` 또는 대상 브랜치에 실제 포함되어 있는지 확인한다.
 - 사용자가 만들었을 수 있는 변경은 임의로 되돌리지 않는다.
 
+## Devel Push Rule
+
+`local/devel`은 원격 push 대상이 아니다. 작업 완료 후 원격 `devel`에 반영할 때는 다음 순서를 지킨다.
+
+1. `local/devel`을 로컬 `devel`에 merge한다.
+2. 로컬 `devel`에서 compile/test/wasm build 등 필요한 검증을 통과시킨다.
+3. 검증 통과 후 `git push origin devel`을 실행한다.
+
+금지:
+
+```bash
+git push origin local/devel:devel
+```
+
 ## Current Branch Memory
 
 2026-05-22 현재 작업 브랜치는 `local/task_m100_1053` 이다.

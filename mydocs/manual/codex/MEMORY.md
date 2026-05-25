@@ -40,3 +40,13 @@ Task #854의 현재 교훈은 특히 강하다. HWPX 파싱, IR 매핑, rhwp-stu
 - 예: `gh issue edit 1063 --add-assignee edwardkim -R edwardkim/rhwp`
 - sandbox 네트워크 제한으로 `gh`가 `api.github.com` 연결 실패를 내면, 동일 명령을 escalation으로 재시도한다.
 - Task #1063은 `local/task_m100_1063` 브랜치에서 시작했고, 계획서 작성, assignee 지정, Stage 1 방향 아이콘 정정, Stage 2 새 빈 문서 A4 프리셋 매칭 정정, E2E 검증, Stage 1/2 작업지시자 시각 판정, 보고서 작성까지 완료했다. 커밋 및 이후 merge/close 절차는 작업지시자 지시에 따른다.
+
+## 2026-05-25 Addendum
+
+- `local/devel` 브랜치를 원격 `devel`로 직접 push하지 않는다.
+- 금지 예: `git push origin local/devel:devel`
+- 올바른 순서:
+  1. `local/devel`의 작업을 로컬 `devel`에 merge한다.
+  2. 로컬 `devel`에서 필요한 compile/test/wasm build 검증을 수행한다.
+  3. 검증 통과 후 `git push origin devel`로 원격 `devel`에 push한다.
+- `local/devel`과 `local/task*`는 로컬 유지 브랜치이며, 원격 push 대상은 검증된 `devel`이다.
