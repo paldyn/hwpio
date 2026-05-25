@@ -28,6 +28,7 @@
 - [첫 PR 컨트리뷰터 환영](feedback_first_pr_courtesy.md) — "rhwp 첫 PR" 표현, fork base 동기화 권장
 - [PR 댓글 톤 — 과도한 표현 자제](feedback_pr_comment_tone.md) — 차분하고 사실 중심
 - [작은 단위 PATCH 회전 운영](feedback_small_batch_release_strategy.md) — 빠른 회전, 위험 분산
+- [PR 생성은 별도 승인 후 진행](feedback_pr_requires_explicit_approval.md) — PR 준비와 GitHub PR 생성 분리
 
 ## feedback — 시각 판정/한컴 호환
 - [시각 판정 권위](feedback_visual_judgment_authority.md) — 한컴 2022 정답지, Claude는 정량 측정만 보조
