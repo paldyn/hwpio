@@ -5,7 +5,7 @@
 - 기준 브랜치: `upstream/devel`
 - 기준 커밋: `dd4bbfed`
 - 작성일: 2026-05-25
-- PR: [edwardkim/rhwp#1119](https://github.com/edwardkim/rhwp/pull/1119)
+- PR: [edwardkim/rhwp#1119](https://github.com/edwardkim/rhwp/pull/1119) 닫힘. 새 PR은 작업지시자 승인 후 생성 예정
 
 ## 1. 작업 범위
 
@@ -85,14 +85,25 @@ hwp3-sample16-hwp5-2022: C Palatino=6 HCI=0
 hwp3-sample16-hwp5-2024: C Palatino=6 HCI=0
 ```
 
-## 5. PR 상태
+## 5. PR 준비 상태
 
-- PR #1119는 `local/task1116` → `devel` 대상으로 열려 있다.
-- PR은 Open 상태이며 Draft가 아니다.
-- GitHub상 mergeable 상태는 `MERGEABLE`로 확인했다.
-- 2026-05-25 23:47 KST 확인 시점에 GitHub Actions 일부 체크는 진행 중이었다.
+- PR #1119는 작업지시자 지시에 따라 닫았다.
+- `local/task1116` 브랜치는 `origin/local/task1116`에 푸시되어 있다.
+- PR 본문 초안은 `mydocs/report/task_m100_1116_pr_body.md`에 별도로 정리했다.
+- 새 PR 생성은 작업지시자 별도 승인 후에만 진행한다.
+
+승인 후 생성 명령:
+
+```bash
+gh pr create \
+  -R edwardkim/rhwp \
+  --base devel \
+  --head jangster77:local/task1116 \
+  --title "#1116 sample16 한컴 3mm 격자 정합 후속" \
+  --body-file mydocs/report/task_m100_1116_pr_body.md
+```
 
 ## 6. 남은 절차
 
-- 작업지시자 확인 후 PR 리뷰/머지 절차를 진행한다.
+- 작업지시자 승인 후 새 PR을 생성하고 리뷰/머지 절차를 진행한다.
 - 이슈 #1116 close는 작업지시자 승인 후, 대상 브랜치 포함 여부를 확인한 뒤 수행한다.
