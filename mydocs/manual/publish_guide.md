@@ -60,6 +60,8 @@ GitHub Actions에서 사용하는 시크릿 (Settings → Secrets and variables 
 > npm 배포는 GitHub Actions OIDC 기반 Trusted Publishing을 사용한다.
 > `@rhwp/core`, `@rhwp/editor` 각각의 npm package settings에서
 > trusted publisher를 `edwardkim/rhwp`, workflow `npm-publish.yml`, allowed action `npm publish`로 등록해야 한다.
+> npm package settings의 Environment name을 지정했다면 GitHub Actions publish job의 `environment:`와
+> 정확히 같아야 한다. 현재 배포 환경명은 `NPM_TOKEN`이다.
 > npm publish job에는 장기 토큰(`NPM_TOKEN`, `NODE_AUTH_TOKEN`)을 주입하지 않는다.
 > `npm publish`는 GitHub Actions OIDC로 인증하며 provenance는 npm이 자동 생성한다.
 
@@ -416,6 +418,7 @@ Permission denied: pkg/package.json
   - package: `@rhwp/core`, `@rhwp/editor` 각각 등록 필요
   - repository: `edwardkim/rhwp`
   - workflow filename: `npm-publish.yml`
+  - environment name: `NPM_TOKEN` (npm 설정에서 비워두면 workflow에서도 제거)
   - allowed action: `npm publish`
 - workflow `permissions.id-token: write` 설정 확인
 - npm publish step에 `NPM_TOKEN` 또는 `NODE_AUTH_TOKEN` 환경변수가 주입되지 않는지 확인
