@@ -78,9 +78,19 @@ function buildBackgroundImage(settings: GridViewSettings, zoom: number): string 
       ].join(', ');
     case 'dots':
     default:
-      const dotRadius = Math.max(0.5, zoom * 0.5);
-      return `radial-gradient(circle, ${color} 0 ${dotRadius}px, transparent ${dotRadius}px)`;
+      return buildDotTileImage(settings, zoom);
   }
+}
+
+function buildDotTileImage(settings: GridViewSettings, zoom: number): string {
+  const width = settings.horizontalMm * MM_TO_PX * zoom;
+  const height = settings.verticalMm * MM_TO_PX * zoom;
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    '<rect x="0" y="0" width="1" height="1" fill="#002096" fill-opacity="0.9"/>',
+    '</svg>',
+  ].join('');
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
 }
 
 function buildBackgroundPosition(
@@ -89,14 +99,11 @@ function buildBackgroundPosition(
   settings: GridViewSettings,
 ): string {
   const origin = getGridOriginPx(pageInfo, settings);
-  const dotCenterOffsetX = settings.pattern === 'dots'
-    ? settings.horizontalMm * MM_TO_PX / 2
-    : 0;
-  const dotCenterOffsetY = settings.pattern === 'dots'
-    ? settings.verticalMm * MM_TO_PX / 2
-    : 0;
-  const x = (origin.x + settings.offsetXmm * MM_TO_PX - dotCenterOffsetX) * zoom;
-  const y = (origin.y + settings.offsetYmm * MM_TO_PX - dotCenterOffsetY) * zoom;
+  const x = (origin.x + settings.offsetXmm * MM_TO_PX) * zoom;
+  const y = (origin.y + settings.offsetYmm * MM_TO_PX) * zoom;
+  if (settings.pattern === 'dots') {
+    return `${Math.round(x)}px ${Math.round(y)}px`;
+  }
   return `${x}px ${y}px`;
 }
 
