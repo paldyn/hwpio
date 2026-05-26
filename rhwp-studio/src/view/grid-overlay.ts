@@ -88,8 +88,14 @@ function buildBackgroundPosition(
   settings: GridViewSettings,
 ): string {
   const origin = getGridOriginPx(pageInfo, settings);
-  const x = (origin.x + settings.offsetXmm * MM_TO_PX) * zoom;
-  const y = (origin.y + settings.offsetYmm * MM_TO_PX) * zoom;
+  const dotCenterOffsetX = settings.pattern === 'dots'
+    ? settings.horizontalMm * MM_TO_PX / 2
+    : 0;
+  const dotCenterOffsetY = settings.pattern === 'dots'
+    ? settings.verticalMm * MM_TO_PX / 2
+    : 0;
+  const x = (origin.x + settings.offsetXmm * MM_TO_PX - dotCenterOffsetX) * zoom;
+  const y = (origin.y + settings.offsetYmm * MM_TO_PX - dotCenterOffsetY) * zoom;
   return `${x}px ${y}px`;
 }
 
