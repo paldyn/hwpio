@@ -1045,7 +1045,9 @@ fn json_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::model::control::{Control, Field, FieldType};
+    use crate::model::document::Section;
     use crate::model::paragraph::{FieldRange, Paragraph};
+    use crate::model::table::{Cell, Table};
 
     fn make_field_control(ctrl_id: u32) -> Control {
         Control::Field(Field {
@@ -1133,5 +1135,53 @@ mod tests {
         assert_eq!(para.char_offsets[4], 20); // N — 8-byte gap after ' ' for FIELD_BEGIN
         let gap = para.char_offsets[4] as i64 - (para.char_offsets[3] as i64 + 1);
         assert_eq!(gap, 8); // serializer needs exactly 8 code units for FIELD_BEGIN
+    }
+
+    #[test]
+    fn set_cell_field_text_updates_text_metadata() {
+        let cell_para = Paragraph {
+            text: "기존값".into(),
+            char_count: 3,
+            char_offsets: vec![0, 1, 2],
+            ..Default::default()
+        };
+        let table = Table {
+            cells: vec![Cell {
+                field_name: Some("셀필드".into()),
+                paragraphs: vec![cell_para],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let parent_para = Paragraph {
+            controls: vec![Control::Table(Box::new(table))],
+            ..Default::default()
+        };
+
+        let mut core = DocumentCore::new_empty();
+        core.document.sections.push(Section {
+            paragraphs: vec![parent_para],
+            ..Default::default()
+        });
+
+        let location = FieldLocation {
+            section_index: 0,
+            para_index: 0,
+            nested_path: vec![NestedEntry::TableCell {
+                control_index: 0,
+                cell_index: 0,
+                para_index: 0,
+            }],
+        };
+
+        core.set_cell_field_text(&location, "새값").unwrap();
+
+        let Control::Table(table) = &core.document.sections[0].paragraphs[0].controls[0] else {
+            panic!("expected table control");
+        };
+        let updated = &table.cells[0].paragraphs[0];
+        assert_eq!(updated.text, "새값");
+        assert_eq!(updated.char_count, 2);
+        assert_eq!(updated.char_offsets, vec![0, 1]);
     }
 }
