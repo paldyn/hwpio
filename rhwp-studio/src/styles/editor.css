@@ -50,6 +50,7 @@
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
+  z-index: 0;
   box-shadow: none;
   background: var(--color-surface);
 }

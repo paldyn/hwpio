@@ -2,6 +2,7 @@ import type { PageInfo } from '@/core/types';
 import type { GridViewSettings } from './grid-settings';
 
 const MM_TO_PX = 96 / 25.4;
+const CLIP_CORNER_LENGTH_PX = 10;
 
 export function createGridOverlay(
   pageIdx: number,
@@ -33,6 +34,34 @@ export function applyGridOverlayBox(
   overlay.style.height = canvas.style.height;
   overlay.style.pointerEvents = 'none';
   overlay.style.overflow = 'hidden';
+}
+
+export function createGridClipCornerOverlay(
+  pageIdx: number,
+  pageInfo: PageInfo,
+  zoom: number,
+  settings: GridViewSettings,
+): HTMLDivElement | null {
+  if (settings.origin !== 'page') return null;
+
+  const pageArea = getPageGridAreaPx(pageInfo);
+  const overlay = document.createElement('div');
+  overlay.className = 'page-grid-clip-corners';
+  overlay.dataset.rhwpGridPage = String(pageIdx);
+  overlay.style.zIndex = settings.layer === 'inFrontOfText' ? '5' : '2';
+
+  const left = pageArea.left * zoom;
+  const top = pageArea.top * zoom;
+  const right = (pageInfo.width - pageArea.right) * zoom;
+  const bottom = (pageInfo.height - pageArea.bottom) * zoom;
+  const length = CLIP_CORNER_LENGTH_PX * zoom;
+  const color = 'rgba(0, 0, 0, 0.5)';
+
+  appendClipCorner(overlay, left, top, length, 'top-left', color);
+  appendClipCorner(overlay, right, top, length, 'top-right', color);
+  appendClipCorner(overlay, left, bottom, length, 'bottom-left', color);
+  appendClipCorner(overlay, right, bottom, length, 'bottom-right', color);
+  return overlay;
 }
 
 function buildBackgroundImage(settings: GridViewSettings): string {
@@ -95,11 +124,40 @@ function getGridOriginPx(
 }
 
 function getPageGridAreaPx(pageInfo: PageInfo): { left: number; right: number; top: number; bottom: number } {
-  const bottom = pageInfo.pageBorderBottom ?? pageInfo.marginBottom;
   return {
     left: pageInfo.pageBorderLeft ?? pageInfo.marginLeft,
     right: pageInfo.pageBorderRight ?? pageInfo.marginRight,
     top: pageInfo.pageBorderTop ?? pageInfo.marginTop,
-    bottom: Math.max(bottom, pageInfo.marginBottom),
+    bottom: pageInfo.pageBorderBottom ?? pageInfo.marginBottom,
   };
+}
+
+function appendClipCorner(
+  parent: HTMLElement,
+  x: number,
+  y: number,
+  length: number,
+  corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+  color: string,
+): void {
+  const horizontal = document.createElement('div');
+  const vertical = document.createElement('div');
+  const isLeft = corner.endsWith('left');
+  const isTop = corner.startsWith('top');
+
+  horizontal.style.position = 'absolute';
+  horizontal.style.left = `${isLeft ? x : x - length}px`;
+  horizontal.style.top = `${y}px`;
+  horizontal.style.width = `${length}px`;
+  horizontal.style.height = '1px';
+  horizontal.style.background = color;
+
+  vertical.style.position = 'absolute';
+  vertical.style.left = `${x}px`;
+  vertical.style.top = `${isTop ? y : y - length}px`;
+  vertical.style.width = '1px';
+  vertical.style.height = `${length}px`;
+  vertical.style.background = color;
+
+  parent.append(horizontal, vertical);
 }
