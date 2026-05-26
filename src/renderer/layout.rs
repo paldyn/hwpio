@@ -1230,12 +1230,11 @@ impl LayoutEngine {
                 // body-edge 로 좁아진 시각 회귀 발생 — 본 task 에서 PR #1011 상태 복원.
                 use crate::model::page::PageBorderBasis;
                 let paper_based = matches!(pbf.basis, PageBorderBasis::PaperBased);
-                let footer_inside = (pbf.attr & 0x04) != 0;
                 if std::env::var("RHWP_DEBUG_PAGE_BORDER").is_ok() {
                     eprintln!(
-                        "PAGE_BORDER: attr=0x{:08x} bit0={} bit1={} bit2={} paper_based={} footer_inside={} bfid={} spacing(L={},R={},T={},B={})",
+                        "PAGE_BORDER: attr=0x{:08x} bit0={} bit1={} bit2={} paper_based={} bfid={} spacing(L={},R={},T={},B={})",
                         pbf.attr, pbf.attr & 0x01, (pbf.attr >> 1) & 0x01, (pbf.attr >> 2) & 0x01,
-                        paper_based, footer_inside, pbf.border_fill_id,
+                        paper_based, pbf.border_fill_id,
                         pbf.spacing_left, pbf.spacing_right, pbf.spacing_top, pbf.spacing_bottom,
                     );
                 }
@@ -1256,7 +1255,7 @@ impl LayoutEngine {
                 let sp_b = hwpunit_to_px(pbf.spacing_bottom as i32, self.dpi);
                 // 종이 기준: 종이 가장자리에서 안쪽(+)으로 spacing
                 // 쪽 기준: 본문 영역에서 바깥쪽(-)으로 spacing
-                let (bx, mut by, bw, mut bh) = if paper_based {
+                let (bx, by, bw, bh) = if paper_based {
                     (
                         base_x + sp_l,
                         base_y + sp_t,
@@ -1271,18 +1270,6 @@ impl LayoutEngine {
                         base_h + sp_t + sp_b,
                     )
                 };
-                // [Task #1006 part 2] header_inside 는 clip 미적용 (cover logo
-                // 가 외곽선 내부 top-left 위치 — 작업지시자 Hancom Office close-up
-                // 시각 판정), footer_inside 만 clip 적용 (페이지 번호가 외곽선 바깥
-                // 위치 — 한컴 viewer 정합 — PR #1011). attr bit 1 (header) 무시,
-                // bit 2 (footer) 존중. spec 정의와 다르지만 한컴 실제 동작 정합 우선.
-                if !footer_inside {
-                    let footer_top = layout.body_area.y + layout.body_area.height;
-                    if by + bh > footer_top {
-                        bh = footer_top - by;
-                    }
-                }
-                let _ = &mut by;
 
                 let borders = &bs.borders;
                 let top_nodes = create_border_line_nodes(tree, &borders[2], bx, by, bx + bw, by);

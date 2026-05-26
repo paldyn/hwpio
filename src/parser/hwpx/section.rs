@@ -15,7 +15,7 @@ use crate::model::footnote::{Endnote, Footnote};
 use crate::model::header_footer::{Footer, Header, HeaderFooterApply, MasterPage};
 use crate::model::image::{CropInfo, ImageAttr, ImageEffect};
 use crate::model::page::{
-    BindingMethod, ColumnDef, ColumnDirection, ColumnType, PageBorderFill, PageDef,
+    BindingMethod, ColumnDef, ColumnDirection, ColumnType, PageBorderBasis, PageBorderFill, PageDef,
 };
 use crate::model::paragraph::{CharShapeRef, FieldRange, LineSeg, Paragraph};
 use crate::model::shape::{
@@ -998,8 +998,11 @@ fn parse_page_border_fill_empty(e: &quick_xml::events::BytesStart) -> PageBorder
         header_inside,
         footer_inside,
     );
-    // [Task #1006] HWPX: PR #956 한컴 viewer 정합 — paper-based.
-    page_border_fill.basis = crate::model::page::PageBorderBasis::PaperBased;
+    page_border_fill.basis = if text_border.eq_ignore_ascii_case("PAPER") {
+        crate::model::page::PageBorderBasis::PaperBased
+    } else {
+        crate::model::page::PageBorderBasis::BodyBased
+    };
     page_border_fill
 }
 
@@ -5090,6 +5093,38 @@ mod tests {
             BindingMethod::DuplexSided
         );
         assert_eq!(section.section_def.page_def.attr & (0x03 << 1), 0x02);
+    }
+
+    #[test]
+    fn test_parse_page_border_fill_basis_from_text_border() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:secPr textDirection="HORIZONTAL">
+        <hp:pageBorderFill type="BOTH" borderFillIDRef="1" textBorder="CONTENT" fillArea="PAPER">
+          <hp:offset left="1417" right="1417" top="1417" bottom="1417"/>
+        </hp:pageBorderFill>
+      </hp:secPr>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        assert_eq!(section.section_def.page_border_fill.attr & 0x01, 0);
+        assert_eq!(
+            section.section_def.page_border_fill.basis,
+            PageBorderBasis::BodyBased
+        );
+
+        let xml = xml.replace(r#"textBorder="CONTENT""#, r#"textBorder="PAPER""#);
+        let section = parse_hwpx_section(&xml).unwrap();
+        assert_eq!(section.section_def.page_border_fill.attr & 0x01, 0x01);
+        assert_eq!(
+            section.section_def.page_border_fill.basis,
+            PageBorderBasis::PaperBased
+        );
     }
 
     #[test]
