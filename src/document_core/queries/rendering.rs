@@ -715,8 +715,8 @@ impl DocumentCore {
         let pbf_right = hwpunit_to_px(page_border_fill.spacing_right as i32, self.dpi);
         let pbf_top = hwpunit_to_px(page_border_fill.spacing_top as i32, self.dpi);
         let pbf_bottom = hwpunit_to_px(page_border_fill.spacing_bottom as i32, self.dpi);
-        let body_top = mt + mh;
-        let body_bottom_margin = mb + mf;
+        let page_area_top = mt;
+        let page_area_bottom_margin = mb;
         let visual_outsets = if matches!(page_border_fill.basis, PageBorderBasis::BodyBased)
             && page_border_fill.border_fill_id > 0
         {
@@ -743,8 +743,8 @@ impl DocumentCore {
                 PageBorderBasis::BodyBased => (
                     (ml - pbf_left - out_l).max(0.0),
                     (mr - pbf_right - out_r).max(0.0),
-                    (body_top - pbf_top - out_t).max(0.0),
-                    (body_bottom_margin - pbf_bottom - out_b).max(0.0),
+                    (page_area_top - pbf_top - out_t).max(0.0),
+                    (page_area_bottom_margin - pbf_bottom - out_b).max(0.0),
                 ),
             };
         // 단별 영역 정보
@@ -3708,8 +3708,8 @@ mod tests {
             "쪽 기준 border top should be inside paper 기준: paper={paper_hwp_top}, page={page_hwp_top}"
         );
         assert!(
-            (sample16_top - 53.7).abs() < 0.2,
-            "sample16 page-basis UI should include the visual line span outset: top={sample16_top}"
+            (sample16_top - 15.9).abs() < 0.2,
+            "sample16 page-basis UI should use page margin, not header/body top: top={sample16_top}"
         );
     }
 

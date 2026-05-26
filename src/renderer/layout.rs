@@ -1244,11 +1244,13 @@ impl LayoutEngine {
                 let (base_x, base_y, base_w, base_h) = if paper_based {
                     (0.0, 0.0, layout.page_width, layout.page_height)
                 } else {
+                    let page_area_top = layout.header_area.y;
+                    let page_area_bottom = layout.page_height - layout.footer_area.height;
                     (
                         layout.body_area.x,
-                        layout.body_area.y,
+                        page_area_top,
                         layout.body_area.width,
-                        layout.body_area.height,
+                        page_area_bottom - page_area_top,
                     )
                 };
 

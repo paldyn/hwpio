@@ -78,7 +78,7 @@ function buildBackgroundImage(settings: GridViewSettings): string {
       ].join(', ');
     case 'dots':
     default:
-      return `radial-gradient(circle, ${color} 0 0.65px, transparent 0.85px)`;
+      return `radial-gradient(circle, ${color} 0 0.5px, transparent 0.55px)`;
   }
 }
 
