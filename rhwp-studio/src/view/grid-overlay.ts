@@ -17,7 +17,7 @@ export function createGridOverlay(
   overlay.style.backgroundPosition = buildBackgroundPosition(pageInfo, zoom, settings);
   overlay.style.clipPath = buildClipPath(pageInfo, zoom, settings);
   overlay.style.zIndex = settings.layer === 'inFrontOfText' ? '4' : '1';
-  overlay.style.opacity = settings.layer === 'inFrontOfText' ? '0.72' : '0.5';
+  overlay.style.opacity = settings.layer === 'inFrontOfText' ? '0.85' : '1';
   return overlay;
 }
 
@@ -36,7 +36,7 @@ export function applyGridOverlayBox(
 }
 
 function buildBackgroundImage(settings: GridViewSettings): string {
-  const color = 'rgba(35, 103, 255, 0.72)';
+  const color = 'rgba(0, 38, 160, 0.85)';
   switch (settings.pattern) {
     case 'horizontal':
       return `linear-gradient(to bottom, ${color} 0, ${color} 1px, transparent 1px)`;
@@ -49,7 +49,7 @@ function buildBackgroundImage(settings: GridViewSettings): string {
       ].join(', ');
     case 'dots':
     default:
-      return `radial-gradient(circle, ${color} 0 1px, transparent 1.2px)`;
+      return `radial-gradient(circle, ${color} 0 0.55px, transparent 0.75px)`;
   }
 }
 
@@ -59,9 +59,8 @@ function buildBackgroundPosition(
   settings: GridViewSettings,
 ): string {
   const origin = getGridOriginPx(pageInfo, settings);
-  const patternOffset = getPatternOffsetPx(settings);
-  const x = (origin.x + settings.offsetXmm * MM_TO_PX + patternOffset.x) * zoom;
-  const y = (origin.y + settings.offsetYmm * MM_TO_PX + patternOffset.y) * zoom;
+  const x = (origin.x + settings.offsetXmm * MM_TO_PX) * zoom;
+  const y = (origin.y + settings.offsetYmm * MM_TO_PX) * zoom;
   return `${x}px ${y}px`;
 }
 
@@ -73,10 +72,11 @@ function buildClipPath(
   if (settings.origin === 'paper') return 'none';
 
   const pageArea = getPageGridAreaPx(pageInfo);
-  const left = pageArea.left * zoom;
-  const top = pageArea.top * zoom;
-  const right = pageArea.right * zoom;
-  const bottom = pageArea.bottom * zoom;
+  const insetPadding = 1;
+  const left = pageArea.left * zoom + insetPadding;
+  const top = pageArea.top * zoom + insetPadding;
+  const right = pageArea.right * zoom + insetPadding;
+  const bottom = pageArea.bottom * zoom + insetPadding;
   return `inset(${top}px ${right}px ${bottom}px ${left}px)`;
 }
 
@@ -100,15 +100,5 @@ function getPageGridAreaPx(pageInfo: PageInfo): { left: number; right: number; t
     right: pageInfo.pageBorderRight ?? pageInfo.marginRight,
     top: pageInfo.pageBorderTop ?? pageInfo.marginTop,
     bottom: pageInfo.pageBorderBottom ?? pageInfo.marginBottom,
-  };
-}
-
-function getPatternOffsetPx(settings: GridViewSettings): { x: number; y: number } {
-  if (settings.pattern !== 'dots') {
-    return { x: 0, y: 0 };
-  }
-  return {
-    x: settings.horizontalMm * MM_TO_PX / 2,
-    y: settings.verticalMm * MM_TO_PX / 2,
   };
 }
