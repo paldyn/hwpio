@@ -944,6 +944,9 @@ impl LayoutEngine {
                         path_node.para_index = Some(para_index);
                         path_node.control_index = Some(control_index);
                         path_node.transform = transform;
+                        path_node.cell_index = cell_index;
+                        path_node.cell_para_index = cell_para_index;
+                        path_node.outer_table_control_index = outer_table_control_index;
                         // 연결선: 시작/끝 좌표 (선 선택 방식용) + 화살표
                         path_node.connector_endpoints = Some((conn_x1, conn_y1, conn_x2, conn_y2));
                         if line_style.start_arrow != super::super::ArrowStyle::None
@@ -988,6 +991,9 @@ impl LayoutEngine {
                         line_node.para_index = Some(para_index);
                         line_node.control_index = Some(control_index);
                         line_node.transform = transform;
+                        line_node.cell_index = cell_index;
+                        line_node.cell_para_index = cell_para_index;
+                        line_node.outer_table_control_index = outer_table_control_index;
                         let node = RenderNode::new(
                             node_id,
                             RenderNodeType::Line(line_node),
@@ -1008,6 +1014,9 @@ impl LayoutEngine {
                     line_node.para_index = Some(para_index);
                     line_node.control_index = Some(control_index);
                     line_node.transform = transform;
+                    line_node.cell_index = cell_index;
+                    line_node.cell_para_index = cell_para_index;
+                    line_node.outer_table_control_index = outer_table_control_index;
                     let node = RenderNode::new(
                         node_id,
                         RenderNodeType::Line(line_node),
@@ -1024,6 +1033,9 @@ impl LayoutEngine {
                 ell_node.para_index = Some(para_index);
                 ell_node.control_index = Some(control_index);
                 ell_node.transform = transform;
+                ell_node.cell_index = cell_index;
+                ell_node.cell_para_index = cell_para_index;
+                ell_node.outer_table_control_index = outer_table_control_index;
                 let mut node = RenderNode::new(
                     node_id,
                     RenderNodeType::Ellipse(ell_node),
@@ -1151,6 +1163,9 @@ impl LayoutEngine {
                 path_node.para_index = Some(para_index);
                 path_node.control_index = Some(control_index);
                 path_node.transform = transform;
+                path_node.cell_index = cell_index;
+                path_node.cell_para_index = cell_para_index;
+                path_node.outer_table_control_index = outer_table_control_index;
                 let node = RenderNode::new(
                     node_id,
                     RenderNodeType::Path(path_node),
@@ -1196,6 +1211,9 @@ impl LayoutEngine {
                 path_node.para_index = Some(para_index);
                 path_node.control_index = Some(control_index);
                 path_node.transform = transform;
+                path_node.cell_index = cell_index;
+                path_node.cell_para_index = cell_para_index;
+                path_node.outer_table_control_index = outer_table_control_index;
                 let mut node = RenderNode::new(
                     node_id,
                     RenderNodeType::Path(path_node),
@@ -1252,6 +1270,9 @@ impl LayoutEngine {
                 path_node.para_index = Some(para_index);
                 path_node.control_index = Some(control_index);
                 path_node.transform = transform;
+                path_node.cell_index = cell_index;
+                path_node.cell_para_index = cell_para_index;
+                path_node.outer_table_control_index = outer_table_control_index;
                 let mut node = RenderNode::new(
                     node_id,
                     RenderNodeType::Path(path_node),
