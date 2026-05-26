@@ -71,10 +71,11 @@ function buildClipPath(
 ): string {
   if (settings.origin === 'paper') return 'none';
 
-  const left = pageInfo.marginLeft * zoom;
-  const top = (pageInfo.marginTop + pageInfo.marginHeader) * zoom;
-  const right = pageInfo.marginRight * zoom;
-  const bottom = (pageInfo.marginBottom + pageInfo.marginFooter) * zoom;
+  const pageArea = getPageGridAreaPx(pageInfo);
+  const left = pageArea.left * zoom;
+  const top = pageArea.top * zoom;
+  const right = pageArea.right * zoom;
+  const bottom = pageArea.bottom * zoom;
   return `inset(${top}px ${right}px ${bottom}px ${left}px)`;
 }
 
@@ -85,8 +86,18 @@ function getGridOriginPx(
   if (settings.origin === 'paper') {
     return { x: 0, y: 0 };
   }
+  const pageArea = getPageGridAreaPx(pageInfo);
   return {
-    x: pageInfo.marginLeft,
-    y: pageInfo.marginTop + pageInfo.marginHeader,
+    x: pageArea.left,
+    y: pageArea.top,
+  };
+}
+
+function getPageGridAreaPx(pageInfo: PageInfo): { left: number; right: number; top: number; bottom: number } {
+  return {
+    left: pageInfo.pageBorderLeft ?? pageInfo.marginLeft,
+    right: pageInfo.pageBorderRight ?? pageInfo.marginRight,
+    top: pageInfo.pageBorderTop ?? (pageInfo.marginTop + pageInfo.marginHeader),
+    bottom: pageInfo.pageBorderBottom ?? (pageInfo.marginBottom + pageInfo.marginFooter),
   };
 }

@@ -697,16 +697,33 @@ impl DocumentCore {
 
     /// 페이지 정보 (네이티브 에러 타입)
     pub fn get_page_info_native(&self, page_num: u32) -> Result<String, HwpError> {
+        use crate::model::page::PageBorderBasis;
         use crate::renderer::hwpunit_to_px;
         let (page_content, _, _) = self.find_page(page_num)?;
         let sec_idx = page_content.section_index;
-        let page_def = &self.document.sections[sec_idx].section_def.page_def;
+        let section_def = &self.document.sections[sec_idx].section_def;
+        let page_def = &section_def.page_def;
+        let page_border_fill = &section_def.page_border_fill;
         let ml = hwpunit_to_px(page_def.margin_left as i32, self.dpi);
         let mr = hwpunit_to_px(page_def.margin_right as i32, self.dpi);
         let mt = hwpunit_to_px(page_def.margin_top as i32, self.dpi);
         let mb = hwpunit_to_px(page_def.margin_bottom as i32, self.dpi);
         let mh = hwpunit_to_px(page_def.margin_header as i32, self.dpi);
         let mf = hwpunit_to_px(page_def.margin_footer as i32, self.dpi);
+        let pbf_left = hwpunit_to_px(page_border_fill.spacing_left as i32, self.dpi);
+        let pbf_right = hwpunit_to_px(page_border_fill.spacing_right as i32, self.dpi);
+        let pbf_top = hwpunit_to_px(page_border_fill.spacing_top as i32, self.dpi);
+        let pbf_bottom = hwpunit_to_px(page_border_fill.spacing_bottom as i32, self.dpi);
+        let (page_border_left, page_border_right, page_border_top, page_border_bottom) =
+            match page_border_fill.basis {
+                PageBorderBasis::PaperBased => (pbf_left, pbf_right, pbf_top, pbf_bottom),
+                PageBorderBasis::BodyBased => (
+                    ml + pbf_left,
+                    mr + pbf_right,
+                    mt + mh + pbf_top,
+                    mb + mf + pbf_bottom,
+                ),
+            };
         // 단별 영역 정보
         let cols_json: String = page_content
             .layout
@@ -718,7 +735,9 @@ impl DocumentCore {
         Ok(format!(
             "{{\"pageIndex\":{},\"width\":{:.1},\"height\":{:.1},\"sectionIndex\":{},\
             \"marginLeft\":{:.1},\"marginRight\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\
-            \"marginHeader\":{:.1},\"marginFooter\":{:.1},\"columns\":[{}]}}",
+            \"marginHeader\":{:.1},\"marginFooter\":{:.1},\
+            \"pageBorderLeft\":{:.1},\"pageBorderRight\":{:.1},\"pageBorderTop\":{:.1},\"pageBorderBottom\":{:.1},\
+            \"columns\":[{}]}}",
             page_content.page_index,
             page_content.layout.page_width,
             page_content.layout.page_height,
@@ -729,6 +748,10 @@ impl DocumentCore {
             mb,
             mh,
             mf,
+            page_border_left,
+            page_border_right,
+            page_border_top,
+            page_border_bottom,
             cols_json,
         ))
     }

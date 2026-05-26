@@ -28,6 +28,14 @@ export interface PageInfo {
   marginHeader: number;
   /** 꼬리말 여백 (px) */
   marginFooter: number;
+  /** 쪽 테두리/쪽 영역 왼쪽 위치 (px) */
+  pageBorderLeft?: number;
+  /** 쪽 테두리/쪽 영역 오른쪽 여백 (px) */
+  pageBorderRight?: number;
+  /** 쪽 테두리/쪽 영역 위쪽 위치 (px) */
+  pageBorderTop?: number;
+  /** 쪽 테두리/쪽 영역 아래쪽 여백 (px) */
+  pageBorderBottom?: number;
   /** 단별 영역 (px, 페이지 좌표) */
   columns?: { x: number; width: number }[];
 }
