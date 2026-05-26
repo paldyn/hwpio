@@ -388,7 +388,7 @@ pub(crate) use text_measurement::{
 // [Task #826] map_pua_bullet_char 는 통합 테스트 (tests/issue_826.rs) 에서 직접 검증
 // (PUA substitution 매핑 정합) — pub 노출.
 pub(crate) use border_rendering::{
-    border_line_visual_span, border_width_to_px, create_border_line_nodes,
+    body_page_border_outset, border_line_visual_span, border_width_to_px, create_border_line_nodes,
 };
 pub use paragraph_layout::map_pua_bullet_char;
 pub(crate) use utils::{
@@ -1244,13 +1244,11 @@ impl LayoutEngine {
                 let (base_x, base_y, base_w, base_h) = if paper_based {
                     (0.0, 0.0, layout.page_width, layout.page_height)
                 } else {
-                    let page_area_top = layout.header_area.y;
-                    let page_area_bottom = layout.page_height - layout.footer_area.height;
                     (
                         layout.body_area.x,
-                        page_area_top,
+                        layout.body_area.y,
                         layout.body_area.width,
-                        page_area_bottom - page_area_top,
+                        layout.body_area.height,
                     )
                 };
 
@@ -1262,10 +1260,10 @@ impl LayoutEngine {
                     (0.0, 0.0, 0.0, 0.0)
                 } else {
                     (
-                        border_line_visual_span(&borders[0]),
-                        border_line_visual_span(&borders[1]),
-                        border_line_visual_span(&borders[2]),
-                        border_line_visual_span(&borders[3]),
+                        body_page_border_outset(&borders[0]),
+                        body_page_border_outset(&borders[1]),
+                        body_page_border_outset(&borders[2]),
+                        body_page_border_outset(&borders[3]),
                     )
                 };
                 // 종이 기준: 종이 가장자리에서 안쪽(+)으로 spacing

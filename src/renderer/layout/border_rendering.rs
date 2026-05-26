@@ -552,6 +552,24 @@ pub(crate) fn border_line_visual_span(border: &BorderLine) -> f64 {
     }
 }
 
+/// 쪽 기준 페이지 테두리를 본문 영역 바깥쪽에 배치할 때 쓰는 보정 폭(px).
+///
+/// 한컴오피스는 `쪽 기준` 이중선 페이지 테두리에서 저장된 간격값에 선 묶음의
+/// 시각 폭을 한 번 더 반영해, 테두리가 본문/객체 쪽으로 파고들지 않게 그린다.
+/// 표/문단 테두리의 선 자체 분해 규칙은 그대로 두고, 페이지 테두리 위치 계산에만
+/// 이 값을 사용한다.
+pub(crate) fn body_page_border_outset(border: &BorderLine) -> f64 {
+    const BODY_PAGE_DOUBLE_LINE_OUTSET_FACTOR: f64 = 2.5;
+    let span = border_line_visual_span(border);
+    match border.line_type {
+        BorderLineType::Double
+        | BorderLineType::ThinThickDouble
+        | BorderLineType::ThickThinDouble
+        | BorderLineType::ThinThickThinTriple => span * BODY_PAGE_DOUBLE_LINE_OUTSET_FACTOR,
+        _ => span,
+    }
+}
+
 /// HWP 테두리 굵기 인덱스 → 픽셀 변환
 /// HWP 스펙 (표 28): mm 값을 96dpi 기준 px로 변환
 pub(crate) fn border_width_to_px(width: u8) -> f64 {
