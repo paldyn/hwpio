@@ -54,6 +54,11 @@
   background: var(--color-surface);
 }
 
+#scroll-content .page-grid-overlay {
+  position: absolute;
+  mix-blend-mode: multiply;
+}
+
 #scroll-content.grid-mode canvas {
   box-shadow: 0 1px 4px var(--overlay-bg);
 }

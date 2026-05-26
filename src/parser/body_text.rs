@@ -534,8 +534,8 @@ fn parse_section_def(ctrl_data: &[u8], child_records: &[Record]) -> SectionDef {
 
     sd.flags = r.read_u32().unwrap_or(0);
     sd.column_spacing = r.read_i16().unwrap_or(0);
-    let _vertical_align = r.read_u16().unwrap_or(0);
-    let _horizontal_align = r.read_u16().unwrap_or(0);
+    sd.line_grid = r.read_i16().unwrap_or(0);
+    sd.char_grid = r.read_i16().unwrap_or(0);
     sd.default_tab_spacing = r.read_u32().unwrap_or(0);
     sd.outline_numbering_id = r.read_u16().unwrap_or(0);
     sd.page_num = r.read_u16().unwrap_or(0);

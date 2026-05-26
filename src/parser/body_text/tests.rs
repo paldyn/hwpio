@@ -277,8 +277,8 @@ fn test_parse_section_with_section_def() {
     ctrl_data.extend_from_slice(&tags::CTRL_SECTION_DEF.to_le_bytes()); // ctrl_id
     ctrl_data.extend_from_slice(&0u32.to_le_bytes()); // flags
     ctrl_data.extend_from_slice(&0i16.to_le_bytes()); // column_spacing
-    ctrl_data.extend_from_slice(&0u16.to_le_bytes()); // vertical_align
-    ctrl_data.extend_from_slice(&0u16.to_le_bytes()); // horizontal_align
+    ctrl_data.extend_from_slice(&1200i16.to_le_bytes()); // line_grid
+    ctrl_data.extend_from_slice(&900i16.to_le_bytes()); // char_grid
     ctrl_data.extend_from_slice(&800u32.to_le_bytes()); // default_tab_spacing
     ctrl_data.extend_from_slice(&0u16.to_le_bytes()); // numbering_id
     ctrl_data.extend_from_slice(&1u16.to_le_bytes()); // page_num
@@ -299,6 +299,8 @@ fn test_parse_section_with_section_def() {
 
     let section = parse_body_text_section(&section_bytes).unwrap();
     assert_eq!(section.section_def.default_tab_spacing, 800);
+    assert_eq!(section.section_def.line_grid, 1200);
+    assert_eq!(section.section_def.char_grid, 900);
     assert_eq!(section.section_def.page_num, 1);
     assert_eq!(section.section_def.page_def.width, 59528);
 }

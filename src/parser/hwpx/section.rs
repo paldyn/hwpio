@@ -250,6 +250,16 @@ fn parse_page_pr(e: &quick_xml::events::BytesStart, page: &mut PageDef) {
     }
 }
 
+fn parse_grid(e: &quick_xml::events::BytesStart, sec_def: &mut SectionDef) {
+    for attr in e.attributes().flatten() {
+        match attr.key.as_ref() {
+            b"lineGrid" => sec_def.line_grid = parse_i32(&attr) as i16,
+            b"charGrid" => sec_def.char_grid = parse_i32(&attr) as i16,
+            _ => {}
+        }
+    }
+}
+
 fn parse_page_margin(e: &quick_xml::events::BytesStart, page: &mut PageDef) {
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
@@ -682,6 +692,7 @@ fn parse_sec_pr_children(
                 match local {
                     b"pagePr" => parse_page_pr(e, &mut sec_def.page_def),
                     b"margin" => parse_page_margin(e, &mut sec_def.page_def),
+                    b"grid" => parse_grid(e, sec_def),
                     b"colPr" => {
                         col_def = Some(parse_col_pr_with_children(e, reader)?);
                     }
@@ -708,6 +719,7 @@ fn parse_sec_pr_children(
                 match local {
                     b"pagePr" => parse_page_pr(e, &mut sec_def.page_def),
                     b"margin" => parse_page_margin(e, &mut sec_def.page_def),
+                    b"grid" => parse_grid(e, sec_def),
                     b"colPr" => {
                         col_def = Some(parse_col_pr(e));
                     }
@@ -5078,6 +5090,26 @@ mod tests {
             BindingMethod::DuplexSided
         );
         assert_eq!(section.section_def.page_def.attr & (0x03 << 1), 0x02);
+    }
+
+    #[test]
+    fn test_parse_section_grid_preserves_line_and_char_grid() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:secPr textDirection="HORIZONTAL">
+        <hp:grid lineGrid="1200" charGrid="900" wonggojiFormat="0"/>
+      </hp:secPr>
+    </hp:run>
+  </hp:p>
+</hs:sec>"#;
+
+        let section = parse_hwpx_section(xml).unwrap();
+
+        assert_eq!(section.section_def.line_grid, 1200);
+        assert_eq!(section.section_def.char_grid, 900);
     }
 
     #[test]
