@@ -95,10 +95,12 @@ function getGridOriginPx(
 }
 
 function getPageGridAreaPx(pageInfo: PageInfo): { left: number; right: number; top: number; bottom: number } {
+  // 한컴의 "쪽" 격자는 편집 용지의 본문 클립 코너와 같은 영역에 맞춘다.
+  // PageRenderer.drawMarginGuides()와 같은 기준을 써야 코너 표시와 격자가 어긋나지 않는다.
   return {
-    left: pageInfo.pageBorderLeft ?? pageInfo.marginLeft,
-    right: pageInfo.pageBorderRight ?? pageInfo.marginRight,
-    top: pageInfo.pageBorderTop ?? pageInfo.marginTop,
-    bottom: pageInfo.pageBorderBottom ?? pageInfo.marginBottom,
+    left: pageInfo.marginLeft,
+    right: pageInfo.marginRight,
+    top: pageInfo.marginTop + pageInfo.marginHeader,
+    bottom: pageInfo.marginBottom + pageInfo.marginFooter,
   };
 }
