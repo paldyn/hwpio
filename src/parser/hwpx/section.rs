@@ -1000,10 +1000,9 @@ fn parse_page_border_fill_empty(e: &quick_xml::events::BytesStart) -> PageBorder
         footer_inside,
     );
     page_border_fill.ui_basis = if text_border.eq_ignore_ascii_case("PAPER") {
-        // Task #1129 Stage 21: textBorder=PAPER is shown as page basis in the
-        // dialog, but imported HWP5/HWPX samples still render the outline from
-        // the paper edge.
-        page_border_fill.basis = PageBorderBasis::PaperBased;
+        // Task #1129 Stage 22: textBorder=PAPER is shown as page basis in the
+        // dialog and must render from the body area edge on initial load.
+        page_border_fill.basis = PageBorderBasis::BodyBased;
         PageBorderUiBasis::Page
     } else {
         page_border_fill.basis = PageBorderBasis::PaperBased;
@@ -5133,7 +5132,7 @@ mod tests {
         assert_eq!(section.section_def.page_border_fill.attr & 0x01, 0x01);
         assert_eq!(
             section.section_def.page_border_fill.basis,
-            PageBorderBasis::PaperBased
+            PageBorderBasis::BodyBased
         );
         assert_eq!(
             section.section_def.page_border_fill.ui_basis,

@@ -409,7 +409,7 @@ fn test_parse_page_border_fill() {
     assert_eq!(pbf.attr, 0x01);
     assert_eq!(pbf.spacing_left, 100);
     assert_eq!(pbf.border_fill_id, 7);
-    assert_eq!(pbf.basis, crate::model::page::PageBorderBasis::PaperBased);
+    assert_eq!(pbf.basis, crate::model::page::PageBorderBasis::BodyBased);
     assert_eq!(pbf.ui_basis, crate::model::page::PageBorderUiBasis::Page);
 
     data[0..4].copy_from_slice(&0x00u32.to_le_bytes());
