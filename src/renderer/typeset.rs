@@ -2744,12 +2744,27 @@ impl TypesetEngine {
         let tac_count = para
             .controls
             .iter()
-            .filter(|c| matches!(c, Control::Table(t) if t.attr & 0x01 != 0))
+            .filter(
+                |c| matches!(c, Control::Table(t) if self.is_effective_tac_table(para, t, &fmt)),
+            )
             .count();
 
         let has_tac = tac_count > 0;
+        let first_line_tac_height = if tac_count == 1 && fmt.line_heights.len() > 1 {
+            para.controls.iter().find_map(|ctrl| match ctrl {
+                Control::Table(t)
+                    if self.is_effective_tac_table(para, t, &fmt)
+                        && self.tac_table_line_index(para, t, &fmt) == Some(0) =>
+                {
+                    Some(fmt.line_advance(0))
+                }
+                _ => None,
+            })
+        } else {
+            None
+        };
         let height_for_fit = if has_tac {
-            fmt.height_for_fit
+            first_line_tac_height.unwrap_or(fmt.height_for_fit)
         } else {
             fmt.total_height
         };
@@ -2868,7 +2883,7 @@ impl TypesetEngine {
                         .find(|mt| mt.para_index == para_idx && mt.control_index == ctrl_idx);
                     let is_first_placed = first_placed_table == Some(ctrl_idx);
                     let is_last_placed = last_placed_table == Some(ctrl_idx);
-                    if ft.is_tac {
+                    if self.is_effective_tac_table(para, table, &fmt) {
                         self.typeset_tac_table(
                             st,
                             para_idx,
@@ -2997,7 +3012,7 @@ impl TypesetEngine {
             let mut tac_idx = 0;
             for (ci, c) in para.controls.iter().enumerate() {
                 if let Control::Table(t) = c {
-                    if t.attr & 0x01 != 0 {
+                    if self.is_effective_tac_table(para, t, &fmt) {
                         if let Some(seg) = para.line_segs.get(tac_idx) {
                             let seg_lh = hwpunit_to_px(seg.line_height, self.dpi);
                             let mt_h = measured_tables
@@ -3020,7 +3035,7 @@ impl TypesetEngine {
                     .controls
                     .iter()
                     .filter_map(|c| match c {
-                        Control::Table(t) if t.attr & 0x01 != 0 => {
+                        Control::Table(t) if self.is_effective_tac_table(para, t, &fmt) => {
                             Some(hwpunit_to_px(t.outer_margin_top as i32, self.dpi))
                         }
                         _ => None,
@@ -3143,13 +3158,16 @@ impl TypesetEngine {
         is_first_placed: bool,
         is_last_placed: bool,
     ) {
+        let tac_table_line_idx = self.tac_table_line_index(para, table, fmt);
         // 다중 TAC 표: LINE_SEG 기반 개별 높이 계산
         let table_height = if tac_count > 1 {
             let tac_idx = para
                 .controls
                 .iter()
                 .take(ctrl_idx)
-                .filter(|c| matches!(c, Control::Table(t) if t.attr & 0x01 != 0))
+                .filter(
+                    |c| matches!(c, Control::Table(t) if self.is_effective_tac_table(para, t, fmt)),
+                )
                 .count();
             let is_last_tac = tac_idx + 1 == tac_count;
             para.line_segs
@@ -3163,6 +3181,13 @@ impl TypesetEngine {
                     }
                 })
                 .unwrap_or(ft.total_height)
+        } else if tac_table_line_idx == Some(0) && fmt.line_heights.len() > 1 {
+            // PR #1088 follow-up: hwp-multi-001 pi=46 처럼 TAC 표가 문단의
+            // 첫 줄이고 뒤따르는 제목 줄이 같은 문단의 line1(vpos reset)로
+            // 인코딩된 경우가 있다. 표 자체는 현재 페이지에 들어가고 post-text
+            // 만 다음 페이지로 넘어가야 하는데, 문단 전체 height_for_fit으로
+            // fit 판단하면 표까지 다음 페이지로 밀린다.
+            fmt.line_advance(0)
         } else if fmt.total_height > 0.0 {
             // 단일 TAC: 호스트 문단의 height_for_fit 사용
             fmt.height_for_fit
@@ -3289,7 +3314,7 @@ impl TypesetEngine {
         let tac_table_count = para
             .controls
             .iter()
-            .filter(|c| matches!(c, Control::Table(t) if t.attr & 0x01 != 0))
+            .filter(|c| matches!(c, Control::Table(t) if self.is_effective_tac_table(para, t, fmt)))
             .count();
         let post_table_start = if tac_wrap_split {
             (pre_table_end_line + 1).min(total_lines).max(1)
@@ -3320,6 +3345,12 @@ impl TypesetEngine {
             && !pre_text_exists;
         if should_add_post_text {
             let post_height: f64 = fmt.line_advances_sum(post_table_start..total_lines);
+            if self.tac_table_line_index(para, table, fmt) == Some(0)
+                && st.current_height + post_height > st.available_height() + 0.5
+                && !st.current_items.is_empty()
+            {
+                st.advance_column_or_new_page();
+            }
             st.current_items.push(PageItem::PartialParagraph {
                 para_index: para_idx,
                 start_line: post_table_start,
@@ -3330,11 +3361,44 @@ impl TypesetEngine {
 
         // TAC 표: trailing line_spacing 복원 (Paginator place_table_fits:777-783 동일)
         // has_post_text는 tac_table_count와 무관하게 텍스트 줄 존재 여부만 확인
-        let is_tac = table.attr & 0x01 != 0;
+        let is_tac = self.is_effective_tac_table(para, table, fmt);
         let has_post_text = !para.text.is_empty() && total_lines > post_table_start;
         if is_tac && fmt.total_height > fmt.height_for_fit && !has_post_text {
             st.current_height += fmt.total_height - fmt.height_for_fit;
         }
+    }
+
+    fn tac_table_line_index(
+        &self,
+        para: &Paragraph,
+        table: &crate::model::table::Table,
+        fmt: &FormattedParagraph,
+    ) -> Option<usize> {
+        if !table.common.treat_as_char || fmt.line_heights.len() <= 1 {
+            return None;
+        }
+
+        let om_top = hwpunit_to_px(table.outer_margin_top as i32, self.dpi);
+        let om_bot = hwpunit_to_px(table.outer_margin_bottom as i32, self.dpi);
+        let table_line_h = hwpunit_to_px(table.common.height as i32, self.dpi) + om_top + om_bot;
+
+        para.line_segs.iter().enumerate().find_map(|(idx, seg)| {
+            let line_h = hwpunit_to_px(seg.line_height, self.dpi);
+            if (line_h - table_line_h).abs() < 1.0 {
+                Some(idx)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn is_effective_tac_table(
+        &self,
+        para: &Paragraph,
+        table: &crate::model::table::Table,
+        fmt: &FormattedParagraph,
+    ) -> bool {
+        table.attr & 0x01 != 0 || self.tac_table_line_index(para, table, fmt) == Some(0)
     }
 
     /// 비-TAC 블록 표의 조판: fits → place / split(Break Token 기반).
