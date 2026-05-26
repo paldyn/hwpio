@@ -1041,7 +1041,7 @@ impl DocumentCore {
                 attr &= !0x01;
             } else {
                 pbf.ui_basis = PageBorderUiBasis::Page;
-                pbf.basis = PageBorderBasis::PaperBased;
+                pbf.basis = PageBorderBasis::BodyBased;
                 attr |= 0x01;
             }
         }
@@ -3632,7 +3632,22 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn page_border_fill_sample_basis_matches_hancom_ui() {
-        fn assert_basis(path: &str, expected: &str) {
+        use crate::model::page::PageBorderBasis;
+
+        fn json_number(json: &str, key: &str) -> f64 {
+            let needle = format!("\"{}\":", key);
+            let start = json
+                .find(&needle)
+                .unwrap_or_else(|| panic!("{key} missing in {json}"))
+                + needle.len();
+            let end = json[start..]
+                .find(|c| c == ',' || c == '}')
+                .map(|idx| start + idx)
+                .unwrap_or(json.len());
+            json[start..end].trim().parse().unwrap()
+        }
+
+        fn assert_basis(path: &str, expected: &str, expected_render_basis: PageBorderBasis) -> f64 {
             let data = std::fs::read(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
             let core =
                 DocumentCore::from_bytes(&data).unwrap_or_else(|e| panic!("load {path}: {e}"));
@@ -3643,13 +3658,34 @@ mod tests {
                 json.contains(&format!("\"basis\":\"{}\"", expected)),
                 "{path} expected basis={expected}, got {json}"
             );
+            assert_eq!(
+                core.document.sections[0].section_def.page_border_fill.basis,
+                expected_render_basis
+            );
+            let info = core
+                .get_page_info_native(0)
+                .unwrap_or_else(|e| panic!("page info {path}: {e}"));
+            json_number(&info, "pageBorderTop")
         }
 
-        assert_basis("samples/종이기준.hwp", "paper");
-        assert_basis("samples/종이기준.hwpx", "paper");
-        assert_basis("samples/쪽기준.hwp", "page");
-        assert_basis("samples/쪽기준.hwpx", "page");
-        assert_basis("samples/hwp3-sample16-hwp5.hwp", "page");
+        let paper_hwp_top =
+            assert_basis("samples/종이기준.hwp", "paper", PageBorderBasis::PaperBased);
+        assert_basis(
+            "samples/종이기준.hwpx",
+            "paper",
+            PageBorderBasis::PaperBased,
+        );
+        let page_hwp_top = assert_basis("samples/쪽기준.hwp", "page", PageBorderBasis::BodyBased);
+        assert_basis("samples/쪽기준.hwpx", "page", PageBorderBasis::BodyBased);
+        assert_basis(
+            "samples/hwp3-sample16-hwp5.hwp",
+            "page",
+            PageBorderBasis::BodyBased,
+        );
+        assert!(
+            page_hwp_top > paper_hwp_top,
+            "쪽 기준 border top should be inside paper 기준: paper={paper_hwp_top}, page={page_hwp_top}"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

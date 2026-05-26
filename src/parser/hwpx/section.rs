@@ -999,10 +999,11 @@ fn parse_page_border_fill_empty(e: &quick_xml::events::BytesStart) -> PageBorder
         header_inside,
         footer_inside,
     );
-    page_border_fill.basis = PageBorderBasis::PaperBased;
     page_border_fill.ui_basis = if text_border.eq_ignore_ascii_case("PAPER") {
+        page_border_fill.basis = PageBorderBasis::BodyBased;
         PageBorderUiBasis::Page
     } else {
+        page_border_fill.basis = PageBorderBasis::PaperBased;
         PageBorderUiBasis::Paper
     };
     page_border_fill
@@ -5129,7 +5130,7 @@ mod tests {
         assert_eq!(section.section_def.page_border_fill.attr & 0x01, 0x01);
         assert_eq!(
             section.section_def.page_border_fill.basis,
-            PageBorderBasis::PaperBased
+            PageBorderBasis::BodyBased
         );
         assert_eq!(
             section.section_def.page_border_fill.ui_basis,
