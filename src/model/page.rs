@@ -61,9 +61,10 @@ pub struct PageBorderFill {
     pub spacing_bottom: HwpUnit16,
     /// 테두리/배경 ID 참조
     pub border_fill_id: u16,
-    /// [Task #1006] 쪽 테두리 기준 (포맷별 분리).
-    /// HWP3 parser → `BodyBased` (HWP3 spec convention).
-    /// HWP5/HWPX parser → `PaperBased` (PR #956 한컴 viewer 정합).
+    /// [Task #1006, #1129 Stage 21] 쪽 테두리 렌더 기준 (포맷별 분리).
+    /// HWP3 parser → `PaperBased` (Task #1006 close-up visual decision).
+    /// HWP5/HWPX parser → `PaperBased` (PR #956 한컴 viewer 정합,
+    /// sample16 logo overlap regression guard).
     /// renderer 가 attr bit 0 단일 해석 대신 본 필드를 직접 사용 — 포맷/출처별
     /// 계약 분리로 #987(HWP3) ↔ #956(HWP5/HWPX) ↔ #1006(변환본 logo) 동시 충족.
     pub basis: PageBorderBasis,
@@ -75,10 +76,10 @@ pub struct PageBorderFill {
     pub ui_basis: PageBorderUiBasis,
 }
 
-/// 쪽 테두리 위치 기준
+/// 쪽 테두리 렌더 위치 기준
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PageBorderBasis {
-    /// 본문 영역 기준 (HWP3 default — body_area edge 에서 spacing)
+    /// 본문 영역 기준 (body_area edge 에서 spacing)
     #[default]
     BodyBased,
     /// 종이 기준 (HWP5/HWPX default — paper edge 에서 spacing)

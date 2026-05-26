@@ -3675,16 +3675,20 @@ mod tests {
             "paper",
             PageBorderBasis::PaperBased,
         );
-        let page_hwp_top = assert_basis("samples/쪽기준.hwp", "page", PageBorderBasis::BodyBased);
-        assert_basis("samples/쪽기준.hwpx", "page", PageBorderBasis::BodyBased);
-        assert_basis(
+        let page_hwp_top = assert_basis("samples/쪽기준.hwp", "page", PageBorderBasis::PaperBased);
+        assert_basis("samples/쪽기준.hwpx", "page", PageBorderBasis::PaperBased);
+        let sample16_top = assert_basis(
             "samples/hwp3-sample16-hwp5.hwp",
             "page",
-            PageBorderBasis::BodyBased,
+            PageBorderBasis::PaperBased,
         );
         assert!(
-            page_hwp_top > paper_hwp_top,
-            "쪽 기준 border top should be inside paper 기준: paper={paper_hwp_top}, page={page_hwp_top}"
+            (page_hwp_top - paper_hwp_top).abs() < 0.2,
+            "imported page/paper UI basis should not shift render top: paper={paper_hwp_top}, page={page_hwp_top}"
+        );
+        assert!(
+            (sample16_top - 18.9).abs() < 0.2,
+            "sample16 page-basis UI should keep the border at the paper-edge render position: top={sample16_top}"
         );
     }
 
