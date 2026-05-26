@@ -1,168 +1,265 @@
-# PR #1077 검토 — raw_ctrl_data 오프셋 4바이트 밀림 (표 위치 편집 시 flags 오염)
+# PR #1077 재검토 문서
 
-## 1. PR 정보
+- PR: <https://github.com/edwardkim/rhwp/pull/1077>
+- 제목: `fix: 표 위치 편집 시 raw_ctrl_data 오프셋 4바이트 밀림 — flags 오염 (#698)`
+- 관련 이슈: <https://github.com/edwardkim/rhwp/issues/698>
+- 작성일: 2026-05-26
+- 작성자: Codex
+
+## 1. PR 상태
 
 | 항목 | 값 |
-|------|-----|
-| 번호 | #1077 |
-| 제목 | fix: 표 위치 편집 시 raw_ctrl_data 오프셋 4바이트 밀림 — flags 오염 (#698) |
-| 작성자 | oksure (Hyunwoo Park) — 기존 컨트리뷰터 |
-| base ← head | `devel` ← `contrib/fix-table-position-offset` |
-| 연결 이슈 | Closes #698 (assignee 본인 지정 완료) |
-| mergeable | MERGEABLE / BEHIND (cherry-pick 으로 해소) |
-| CI | Build & Test ✅ / Analyze ✅ / CodeQL ✅ |
-| 커밋 | 3 (fix + 회귀 가드 test + cargo fmt) |
-| 변경 | `src/document_core/commands/table_ops.rs` 단일 Rust 파일 |
+|---|---|
+| 상태 | open |
+| base | `devel` |
+| head | `contrib/fix-table-position-offset` |
+| head sha | `a6a8745506949807f81ebd474129ef2848642ea8` |
+| mergeable | mergeable |
+| 작성자 | `oksure` |
+| 변경 파일 | 2개 |
+| 변경 범위 | `src/document_core/commands/table_ops.rs`, `src/model/table.rs` |
+| 관련 이슈 | `#698` |
 
-## 2. 배경 (이슈 #698)
+CI 확인:
 
-rhwp 로 생성한 표가 들어간 문서를 저장 후 다시 열면 표 위치가
-줄 끝으로 밀려 보이지 않거나 위치 편집 불가. 보고된 환경:
-firefox/chrome/edge/HOP 전부 동일 (v0.7.9).
+| check | status |
+|---|---|
+| Build & Test | pass |
+| Analyze (javascript-typescript) | pass |
+| Analyze (python) | pass |
+| Analyze (rust) | pass |
+| CodeQL | pass |
+| WASM Build | skipped |
 
-## 3. 한컴 스펙 교차 검증 (작업지시자 지시)
+## 2. PR 변경 이력
 
-### 3.1 스펙 — 표 69 (개체 공통 속성)
+PR #1077은 4개 커밋으로 구성되어 있다.
 
-`mydocs/tech/한글문서파일형식_5.0_revision1.3.md:1442`:
-
-| 자료형 | 길이 | 설명 |
-|--------|------|------|
-| UINT32 | 4 | **ctrl ID** |
-| UINT32 | 4 | **속성(flags)** (표 70 참조) |
-| HWPUNIT | 4 | **세로 오프셋** |
-| HWPUNIT | 4 | **가로 오프셋** |
-| HWPUNIT | 4 | width |
-| HWPUNIT | 4 | height |
-| ... | ... | ... |
-
-스펙 절대 오프셋: ctrl_id [0..4], flags [4..8], v_offset [8..12],
-h_offset [12..16], width [16..20], height [20..24].
-
-### 3.2 rhwp `raw_ctrl_data` 의미 (실제 동작)
-
-`src/parser/control.rs:153`: `table.raw_ctrl_data = ctrl_data.to_vec()`
-— **ctrl_id 를 제외한 ctrl_data 본체** 저장.
-`parse_common_obj_attr(ctrl_data)` (`shape.rs:332`): 첫 4 바이트를
-`attr` 로 읽음.
-
-→ **rhwp `raw_ctrl_data` 권위 레이아웃** (스펙 - ctrl_id):
-- **[0..4] = attr (flags)**
-- **[4..8] = vertical_offset**
-- **[8..12] = horizontal_offset**
-- **[12..16] = width**
-- **[16..20] = height**
-
-### 3.3 권위 자료 일치 확인
-
-`src/model/table.rs:251` 주석 (rhwp 자체 명세):
-> raw_ctrl_data 레이아웃 (attr 4바이트 이후):
->   [0..4] vertical_offset, [4..8] horizontal_offset,
->   [8..12] width, [12..16] height
-
-→ attr(4) 이후 기준이므로 **전체로는 v_offset=[4..8], h_offset=[8..12]**
-— 위 §3.2 와 정확히 일치.
-
-`src/document_core/html_table_import.rs:495-509` (기존 HTML 표 import):
-- `raw_ctrl_data[8..12]` = total_width (= attr 이후 [4..8])
-- `raw_ctrl_data[12..16]` = total_height
-→ 동일 레이아웃 일관 사용.
-
-`src/document_core/converters/common_obj_attr_writer.rs`: HWPX→HWP
-변환기. 같은 권위 자료 참조.
-
-**결론**: rhwp 코드베이스 전체가 `raw_ctrl_data` 레이아웃에 대해
-일관된 권위 자료([4..8]=v_offset, [8..12]=h_offset)를 사용. PR
-**이전** `table_ops.rs` 만 4바이트 밀려 있었던 회귀였음.
-
-## 4. PR 변경 분석
-
-### 4.1 코드 수정 (`table_ops.rs`, 6곳)
-
-| 위치 | Before | After | 정합 |
-|------|--------|-------|------|
-| `move_table_position` v_offset read | `[0..4]` | `[4..8]` | ✅ |
-| `move_table_position` v_offset write | `[0..4]` | `[4..8]` | ✅ |
-| `move_table_position` 문단 교환 후 v_offset | `[0..4]` | `[4..8]` | ✅ |
-| `move_table_position` h_offset read | `[4..8]` | `[8..12]` | ✅ |
-| `move_table_position` h_offset write | `[4..8]` | `[8..12]` | ✅ |
-| `set_table_properties_json` v/h offset write | `+0`, `+4` | `+4`, `+8` | ✅ |
-| `get_table_properties_json` v/h offset read | `+0`, `+4` | `+4`, `+8` | ✅ |
-| 패딩 가드 | `len < 8` | `len < 12` | ✅ (h_offset 포함) |
-
-기존 코드가 **flags 위에 v_offset 을 덮어쓰던 오염** — 정확히
-첨부 이슈 사례 (`horz=문단(41950=148.0mm)` 비정상값 = flags 오염
-결과) 와 부합.
-
-### 4.2 회귀 가드 테스트 (커밋 f46fab29)
-
-```rust
-#[test]
-fn raw_ctrl_data_offsets_match_parser() {
-    // CommonObjAttr layout: [0..4]=flags, [4..8]=v_offset, [8..12]=h_offset
-    let mut data = vec![0u8; 36];
-    data[0..4].copy_from_slice(&flags.to_le_bytes());
-    data[4..8].copy_from_slice(&42_u32.to_le_bytes());  // v_offset
-    data[8..12].copy_from_slice(&99_u32.to_le_bytes()); // h_offset
-    ...
-    let common = parse_common_obj_attr(&data);
-    assert_eq!(common.vertical_offset, 42);   // [4..8] 정합
-    assert_eq!(common.horizontal_offset, 99); // [8..12] 정합
-}
+```text
+927b1003 fix: raw_ctrl_data 오프셋 4바이트 밀림 — 표 위치 편집 시 flags 오염 (#698)
+f46fab29 test: raw_ctrl_data 오프셋 레이아웃 회귀 방지 테스트 추가
+7a8781e5 style: cargo fmt 포맷 정규화
+a6a87455 fix: update_ctrl_dimensions/set_table_properties 오프셋 4바이트 밀림 정정 (#698 잔존)
 ```
 
-**`parse_common_obj_attr` 와 같은 진실 출처를 assert** — 향후
-인덱스 회귀를 자동 검출. PR #1076 의 회귀 가드 부재 문제를 본
-PR 은 자체 해소.
+중요한 점:
 
-## 5. 검토 의견
+```text
+처음 3개 커밋은 v/h offset 경로만 수정했다.
+이후 메인테이너 수동 검증에서 표 resize 경로의 width/height 오염이 남는 것이 확인되었다.
+마지막 커밋 a6a87455가 그 지적 사항을 반영했다.
+```
 
-### 5.1 강점
+따라서 수용 여부는 4개 커밋 전체 기준으로 판단해야 한다.
 
-- **root cause 정확**: 4바이트 밀림으로 flags 가 v_offset 으로
-  덮어써지고, v/h 가 뒤바뀌고, h_offset 이 미갱신되던 정확한
-  진단. 이슈 첨부 dump 의 비정상 값 `horz=148mm` 와 부합.
-- **rhwp 전체 코드베이스 권위 자료와 일치**: model/table.rs:251
-  주석, html_table_import.rs, parse_common_obj_attr 모두 동일
-  레이아웃 사용. **`table_ops.rs` 만 회귀였던 외톨이 코드**.
-- **한컴 스펙 표 69 와도 정합** (스펙 - ctrl_id = rhwp raw_ctrl_data).
-- **회귀 가드 테스트 동반** (PR #1076 부재 보완): 코드와 테스트가
-  같은 진실 출처(`parse_common_obj_attr`) 를 검증 — 미래 회귀 방지.
-- 주석에 정확한 레이아웃 명시 — 추후 유지보수 용이.
-- 패딩 가드 `len < 8 → < 12` 도 함께 갱신 — h_offset 까지 보장.
+## 3. 컨트리뷰터 주장 검증
 
-### 5.2 검토 포인트
+### 3.1 권위 레이아웃 주장
 
-- **본질이 한컴 호환 파일 무결성** — `feedback_self_verification_not_hancom`:
-  자체 cargo test 통과 외에 **한컴 수동 검증 게이트 권고**.
-  이슈 #698 재현(표 이동 → 저장 → 한컴 재오픈 → 표 위치 정상)
-  으로 검증 필요.
-- **자매 PR 들과의 관계**:
-  - PR #1078 (HTML 테이블 붙여넣기 raw_ctrl_data, #698 관련)
-  - PR #1081 (CommonObjAttr 상수 모듈 리팩터링, #698 후속)
+컨트리뷰터 주장:
 
-  → 본 PR 이 가장 직접적인 버그 fix. 자매 PR 들은 같은 영역의
-    유사 회귀(#1078) 또는 상수화 리팩터링(#1081). 본 PR 먼저
-    처리 후 자매 PR 검토 권고.
+```text
+table.raw_ctrl_data는 CommonObjAttr payload이며,
+[0..4]=flags, [4..8]=vertical_offset, [8..12]=horizontal_offset,
+[12..16]=width, [16..20]=height 이다.
+```
 
-## 6. 검증 계획
+코드 검증:
 
-- [ ] cherry-pick (`927b1003` + `f46fab29` + `7a8781e5` → 최신 devel)
-- [ ] 전체 `cargo test` + `cargo clippy -D warnings` + `cargo fmt --check`
-- [ ] WASM 빌드 (table_ops 변경 — WASM 영향)
-- [ ] **한컴 수동 검증 게이트** (작업지시자 판단):
-      이슈 #698 재현 시나리오 — 표 이동/속성 변경 → 저장 → 한컴
-      재오픈 → 표 위치/속성 정상 확인
+```text
+src/parser/control.rs:
+  table.raw_ctrl_data = ctrl_data.to_vec()
 
-## 7. 판단 (잠정)
+src/parser/control/shape.rs::parse_common_obj_attr:
+  read_u32() -> attr
+  read_u32() -> vertical_offset
+  read_u32() -> horizontal_offset
+  read_u32() -> width
+  read_u32() -> height
+  read_i32() -> z_order
+  read_i16 x4 -> outer_margin
+  read_u32() -> instance_id
+  read_i32() -> prevent_page_break
+```
 
-root cause 진단 정밀 + rhwp 전체 권위 자료와 정합 + 한컴 스펙
-표 69 와 일관 + **회귀 가드 테스트 자체 동반** (PR #1076 보완).
-`table_ops.rs` 가 같은 코드베이스 내 다른 모듈들과 다르게 4바이트
-밀려 있던 명백한 회귀. 본 PR 은 그 외톨이 회귀를 정정.
+판정:
 
-본질이 한컴 호환 파일 무결성 → **한컴 수동 검증**이 판정 핵심.
-검증 + 한컴 수동 검증 통과 시 수용 권고. 자매 PR #1078/#1081 은
-본 PR 처리 후 별도 검토.
+```text
+확인됨.
+rhwp의 raw_ctrl_data는 ctrl_id를 제외한 CommonObjAttr 본체로 보는 것이 맞다.
+따라서 현재 local/devel의 table_ops.rs와 table.rs 일부 인덱싱은 4바이트 밀려 있다.
+```
 
-검증 결과에 따라 `pr_1077_report.md` 작성.
+### 3.2 현재 local/devel 버그 존재 여부
+
+현재 `local/devel` 확인 결과:
+
+```text
+src/document_core/commands/table_ops.rs:
+  move_table_offset_native:
+    vertical_offset   [0..4]  사용
+    horizontal_offset [4..8]  사용
+
+  get_table_properties_json:
+    table_width       [8..12] 사용
+    table_height      [12..16] 사용
+    keepWithAnchor    [32..36] 사용
+
+  set_table_properties_json:
+    vertOffset        [0..4]  사용
+    horzOffset        [4..8]  사용
+    outer_margin      [20..28] 사용
+
+src/model/table.rs:
+  update_ctrl_dimensions:
+    width             [8..12] 사용
+    height            [12..16] 사용
+```
+
+이는 `parse_common_obj_attr` 기준과 불일치한다.
+
+판정:
+
+```text
+확인됨.
+특히 update_ctrl_dimensions()는 resize_table_cells_native()에서 호출되므로,
+표 크기 조절 후 total_width가 h_offset 슬롯에 저장되는 문제가 실제로 발생할 수 있다.
+```
+
+### 3.3 메인테이너 수동 검증 지적 반영 여부
+
+이전 메인테이너 지적:
+
+```text
+1. update_ctrl_dimensions width/height를 [12..16]/[16..20]으로 정정
+2. set_table_properties outer_margin을 [24..32]로 정정
+3. keepWithAnchor/prevent_page_break 위치를 [36..40]으로 정정
+4. 회귀 가드를 width/height까지 확장
+```
+
+PR 최신 커밋 `a6a87455` 확인 결과:
+
+| 항목 | 반영 여부 |
+|---|---|
+| `update_ctrl_dimensions` width/height 슬롯 정정 | 반영 |
+| `get_table_properties_json` width/height 읽기 정정 | 반영 |
+| `outer_margin` 읽기/쓰기 `[24..32]` 정정 | 반영 |
+| `keepWithAnchor` `[36..40]` 정정 | 반영 |
+| `update_ctrl_dimensions_writes_correct_slots` 테스트 추가 | 반영 |
+
+판정:
+
+```text
+확인됨.
+이전 수동 검증에서 발견한 "width가 h_offset 슬롯에 들어가는 잔존 버그"는 최신 PR에서 처리되었다.
+```
+
+### 3.4 컨트리뷰터의 8바이트 legacy 설명
+
+컨트리뷰터는 Copilot 피드백에 대해 다음 취지로 답했다.
+
+```text
+기존 8바이트 raw_ctrl_data는 이미 잘못된 레이아웃이었고,
+parse_common_obj_attr가 바이트 수에 맞게 파싱하므로 raw_ctrl_data 직접 접근 경로만 수정하면 된다.
+```
+
+코드 기준 검토:
+
+```text
+parse_common_obj_attr는 legacy 8바이트 레이아웃을 별도로 마이그레이션하지 않는다.
+항상 [0..4]=attr, [4..8]=v_offset, [8..12]=h_offset 순서로 읽는다.
+```
+
+판정:
+
+```text
+컨트리뷰터의 "parser가 바이트 수에 맞게 legacy를 처리한다"는 설명은 코드상 확인되지 않는다.
+다만 PR이 겨냥한 HWP5 CommonObjAttr 저장/편집 경로의 권위 레이아웃은 명확하며,
+현재 버그도 valid CommonObjAttr raw_ctrl_data를 잘못 덮어쓰는 문제다.
+```
+
+따라서 legacy 8바이트 호환성은 이번 PR의 blocker로 보지는 않되, 별도 이슈가 되면 마이그레이션
+정책을 따로 정해야 한다.
+
+## 4. 적용 방식 검토
+
+PR branch는 현재 `devel`보다 오래된 base에서 출발한다.
+
+```text
+merge-base = 8a1f9fd2240a7c9372abeadc381164f05a33e541
+현재 local/devel에는 #1084, #1091, #1093 등 이후 변경이 이미 반영되어 있음
+```
+
+따라서 PR branch를 그대로 merge하면 현재 devel의 많은 변경과 문서가 사라지는 diff가 된다.
+수용 시에는 반드시 4개 커밋을 순서대로 `-x` cherry-pick 해야 한다.
+
+권장 커맨드:
+
+```text
+git cherry-pick -x 927b1003a0537cc3f795e13950b640376a92f638
+git cherry-pick -x f46fab299e342a54f30cf26fbc072dc57f2c54da
+git cherry-pick -x 7a8781e56f00242c3720d325e316e703ceaf6521
+git cherry-pick -x a6a8745506949807f81ebd474129ef2848642ea8
+```
+
+`git merge-tree` 기준 충돌은 예상되지 않는다.
+
+## 5. 리스크
+
+### 5.1 html_table_import 미포함
+
+현재 `src/document_core/html_table_import.rs`에도 비슷한 offset 패턴이 남아 있다.
+
+```text
+raw_ctrl_data[8..12]  = total_width
+raw_ctrl_data[12..16] = total_height
+raw_ctrl_data[20..28] = outer_margin
+raw_ctrl_data[28..32] = instance_id
+```
+
+이 PR은 `table_ops.rs`와 `model/table.rs`만 수정한다.
+PR 본문과 메인테이너 코멘트 모두 자매 PR #1078을 별도 점검 대상으로 언급하고 있으므로,
+HTML 테이블 import 경로는 이번 PR 수용 범위 밖으로 둔다.
+
+### 5.2 회귀 가드 범위
+
+추가된 테스트는 raw offset layout과 `update_ctrl_dimensions()` 슬롯 오염을 직접 검증한다.
+하지만 실제 한컴 재오픈까지 포함한 end-to-end 검증은 자동화되어 있지 않다.
+
+따라서 최종 수용 전에는 다음 수동 검증이 필요하다.
+
+```text
+1. rhwp-studio에서 빈 문서 생성
+2. 표 생성
+3. 표 전체 셀 선택 후 일괄 크기 조절
+4. 저장
+5. 한컴 에디터에서 재오픈
+6. 표가 줄 끝으로 밀리지 않고 정상 위치에 남는지 확인
+```
+
+## 6. 권장 처리 방향
+
+권장안:
+
+```text
+1. 4개 커밋을 현재 local/devel에 -x cherry-pick 한다.
+2. cargo fmt --check
+3. cargo check
+4. cargo test raw_ctrl_data_offsets_match_parser update_ctrl_dimensions_writes_correct_slots
+5. cargo test --lib
+6. docker compose --env-file .env.docker run --rm wasm
+7. 메인테이너 수동 한컴 검증
+8. 통과 시 devel에 반영하고 PR #1077 및 이슈 #698 close
+```
+
+현재 판단:
+
+```text
+컨트리뷰터의 핵심 기술 주장(raw_ctrl_data CommonObjAttr offset)은 코드와 스펙 기준으로 맞다.
+이전 메인테이너 수동 검증에서 발견한 누락 영역도 최신 커밋에서 반영되었다.
+따라서 체리픽 수용 후보로 보는 것이 타당하다.
+```
+
+## 7. 승인 요청
+
+위 권장안대로 진행해도 되는지 승인 요청한다.

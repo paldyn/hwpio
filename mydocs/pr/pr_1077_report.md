@@ -1,109 +1,147 @@
-# PR #1077 처리 보고 — raw_ctrl_data 오프셋 4바이트 밀림 (부분 해소)
+# PR #1077 처리 보고서
 
-## 1. 결정
+- PR: <https://github.com/edwardkim/rhwp/pull/1077>
+- 관련 이슈: <https://github.com/edwardkim/rhwp/issues/698>
+- 작성일: 2026-05-26
+- 처리 방식: `-x` cherry-pick 수용 후보
 
-**수정 요청 (거절)** — 자동 검증 통과했으나 한컴 수동 검증에서
-이슈 #698 증상 잔존. PR 수정 범위 외 동일 버그 발견.
+## 1. 처리 요약
 
-| 항목 | 값 |
-|------|-----|
-| 번호 | #1077 |
-| 작성자 | oksure (Hyunwoo Park) |
-| 연결 이슈 | Closes #698 (증상 **잔존**) |
-| 상태 | **OPEN 유지, 수정 요청** (PR 댓글 게시) |
+PR #1077의 4개 커밋을 현재 `local/devel`에 순서대로 체리픽했다.
 
-## 2. 검증 결과
+```text
+원본 커밋: 927b1003 fix: raw_ctrl_data 오프셋 4바이트 밀림 — 표 위치 편집 시 flags 오염 (#698)
+반영 커밋: db25906d
 
-### 자동 검증 (통과)
+원본 커밋: f46fab29 test: raw_ctrl_data 오프셋 레이아웃 회귀 방지 테스트 추가
+반영 커밋: a0f776f7
 
-| 항목 | 결과 |
-|------|------|
-| cherry-pick `65db20f2+a4514b17+fb74c54c` | ✅ 충돌 없음 |
-| 회귀 가드 `raw_ctrl_data_offsets_match_parser` | ✅ 통과 |
-| 전체 `cargo test` | ✅ 1587 passed, 0 failed |
-| `cargo clippy -- -D warnings` | ✅ 0 warnings |
-| `cargo fmt --all -- --check` | ✅ 위반 0건 |
-| WASM 빌드 | ✅ 성공 |
-| CI | ✅ 전부 pass |
+원본 커밋: 7a8781e5 style: cargo fmt 포맷 정규화
+반영 커밋: 3c060476
 
-### 한컴 수동 검증 — **실패**
-
-작업지시자 시나리오:
-1. rhwp-studio 표 생성
-2. 전체 셀 선택 후 일괄 크기 조절
-3. 저장 → `saved/tb-002.hwp`
-4. 한컴 / rhwp-studio 재오픈 → `horz=문단(35952=126.8mm)` 비정상
-5. 속성창에서 `horzOffset=0` 설정 → 저장 → 다시 망가짐
-
-## 3. 결함 진단 (확정)
-
-`saved/tb-002.hwp` raw_ctrl_data 분석:
-
-| offset | 값 | 권위 의미 | 평가 |
-|--------|-----|----------|------|
-| [0..4] | 0x002a0310 | flags | ✅ |
-| [4..8] | 0 | v_offset | ✅ |
-| **[8..12]** | **35952 (126.8mm)** | h_offset | ❌ **width 값이 잘못 기록** |
-| [12..16] | 847 (3.0mm) | width | ❌ height 값이 들어감 |
-| [16..20] | 3846 (13.6mm) | height | ❌ z_order 값 위치에 height |
-
-### Root cause — PR 수정 범위 밖 잔존 버그
-
-**`src/model/table.rs:251` `update_ctrl_dimensions`**:
-```rust
-// 주석: "attr 4바이트 이후" — 잘못된 기준 설명
-self.raw_ctrl_data[8..12].copy_from_slice(&total_width.to_le_bytes());
-self.raw_ctrl_data[12..16].copy_from_slice(&total_height.to_le_bytes());
+원본 커밋: a6a87455 fix: update_ctrl_dimensions/set_table_properties 오프셋 4바이트 밀림 정정 (#698 잔존)
+반영 커밋: 2455584b
 ```
 
-이 함수가 `resize_table_cells_native` (table_ops.rs:799) 에서
-호출되어 표 크기 조절 시 **total_width 를 h_offset 슬롯([8..12]) 에,
-total_height 를 width 슬롯([12..16]) 에 잘못 기록**.
+변경 내용:
 
-권위 레이아웃 (PR 검토 문서와 동일):
-- [0..4] flags / [4..8] v_offset / [8..12] h_offset
-- **[12..16] width / [16..20] height**
-- [20..24] z_order / [24..32] outer_margin × 4
+```text
+1. table_ops.rs의 v_offset/h_offset 직접 접근을 CommonObjAttr 레이아웃에 맞게 정정
+   - [4..8] = vertical_offset
+   - [8..12] = horizontal_offset
+2. get/set table properties의 width/height, outer_margin, keepWithAnchor offset 정정
+3. Table::update_ctrl_dimensions()가 width/height를 [12..16]/[16..20]에 쓰도록 정정
+4. raw_ctrl_data offset 레이아웃 회귀 가드 추가
+5. update_ctrl_dimensions()가 h_offset 슬롯을 오염시키지 않는지 검증하는 회귀 가드 추가
+```
 
-### 추가 잔존 버그 의심 위치
+## 2. 컨트리뷰터 주장 검증
 
-PR 검토 중 발견한 같은 패턴 다른 위치:
-1. `update_ctrl_dimensions` width/height 슬롯 (위 핵심)
-2. `set_table_properties_native:1248-1262` outer_margin `[20..28]`
-   → 권위는 `[24..32]`
-3. `update_ctrl_dimensions` 주석 자체가 raw_ctrl_data 전체 기준
-   인덱싱과 불일치
+컨트리뷰터의 핵심 주장은 다음과 같다.
 
-## 4. 처리
+```text
+table.raw_ctrl_data는 ctrl_id를 제외한 CommonObjAttr 본체이며,
+[0..4]=flags, [4..8]=vertical_offset, [8..12]=horizontal_offset,
+[12..16]=width, [16..20]=height 이다.
+```
 
-- **PR #1077 OPEN 유지** — 작성자에게 수정 요청 댓글 게시
-  (https://github.com/edwardkim/rhwp/pull/1077#issuecomment-4524721648)
-- cherry-pick 브랜치 `pr1077-cherry` 삭제
-- 이슈 #698 OPEN 유지 (PR 재푸시 시 재검토)
-- local/devel `dd342ac0` 으로 origin/devel 정렬 (그 사이 외부 push 통합)
-- **자매 PR #1078** (HTML 테이블 raw_ctrl_data) 도 동일 영역 →
-  본 PR 처리 후 별도 검토
+코드 검증 결과:
 
-## 5. 평가
+```text
+src/parser/control.rs:
+  table.raw_ctrl_data = ctrl_data.to_vec()
 
-### PR 의 강점 (수정 범위 내)
-- `move_table_position`, `set/get_table_properties_json_native` 의
-  v/h_offset 오프셋 수정은 정확.
-- 회귀 가드 테스트 (`raw_ctrl_data_offsets_match_parser`) 동반 —
-  PR #1076 보완.
+src/parser/control/shape.rs::parse_common_obj_attr:
+  attr → vertical_offset → horizontal_offset → width → height 순서로 읽음
+```
 
-### 한계
-- **PR 가 #698 의 일부 경로만 해소** — \"표 위치 편집\" (move/
-  속성창) 은 고쳤으나 \"표 크기 조절\" (resize_table_cells) 경로의
-  동일 버그 (`update_ctrl_dimensions`) 누락.
-- 회귀 가드도 v/h_offset 만 검증, width/height/outer_margin 미포함
-  → 잔존 버그를 자동 검출 못 함.
+판정:
 
-## 6. 후속 권고
+```text
+주장은 확인되었다.
+현재 local/devel의 기존 table_ops.rs/model/table.rs 일부 경로는 이 레이아웃보다 4바이트 밀려 있었다.
+```
 
-- 작성자가 `update_ctrl_dimensions` 의 width/height 오프셋
-  `[12..16]/[16..20]` 로 정정 + 주석 갱신
-- `set_table_properties_native` outer_margin `[24..32]` 로 정정
-- 회귀 가드를 width/height/outer_margin 까지 확장
-- 표 크기 조절 → 저장 → 재오픈 시나리오 단위 테스트 추가
-- 자매 PR #1078 도 함께 점검 부탁
+이전 메인테이너 수동 검증에서 발견한 잔존 버그도 최신 PR 커밋에서 반영되었다.
+
+```text
+update_ctrl_dimensions:
+  before: width [8..12], height [12..16]
+  after : width [12..16], height [16..20]
+
+outer_margin:
+  before: [20..28]
+  after : [24..32]
+
+keepWithAnchor / prevent_page_break:
+  before: [32..36]
+  after : [36..40]
+```
+
+## 3. 검증
+
+자동 검증:
+
+| command | result |
+|---|---|
+| `cargo fmt --check` | pass |
+| `cargo check` | pass |
+| `cargo test raw_ctrl_data_offsets_match_parser` | pass |
+| `cargo test update_ctrl_dimensions_writes_correct_slots` | pass |
+| `cargo test --lib` | pass, 1398 passed / 0 failed / 6 ignored |
+| `docker compose --env-file .env.docker run --rm wasm` | pass |
+
+메인테이너 수동 검증:
+
+```text
+통과
+```
+
+## 4. 판단
+
+수용 후보 판단:
+
+```text
+PR #1077은 #698의 표 위치 저장 손상 원인인 table raw_ctrl_data CommonObjAttr offset 오염을 정정한다.
+최초 PR 범위에서 누락되었던 resize/update_ctrl_dimensions 경로도 최신 커밋에서 보강되었다.
+현재 local/devel 기준 자동 검증과 wasm 빌드는 통과했다.
+```
+
+따라서 PR #1077은 체리픽 수용으로 처리하는 것이 타당하다.
+
+수동 검증 권장 시나리오:
+
+```text
+1. rhwp-studio에서 빈 문서 생성
+2. 표 생성
+3. 표 전체 셀 선택 후 일괄 크기 조절
+4. 저장
+5. 한컴 에디터에서 재오픈
+6. 표가 줄 끝으로 밀리지 않고 정상 위치에 남는지 확인
+```
+
+## 5. 주의 사항
+
+이번 PR은 `table_ops.rs`와 `model/table.rs`만 수정한다.
+
+```text
+src/document_core/html_table_import.rs에도 유사한 offset 패턴이 남아 있다.
+이 경로는 PR #1078의 별도 검토 범위로 보고 이번 PR의 blocker로 두지 않는다.
+```
+
+또한 컨트리뷰터가 언급한 8바이트 legacy raw_ctrl_data 자동 마이그레이션 설명은 코드상 확인되지 않는다.
+다만 이번 PR의 대상은 valid CommonObjAttr raw_ctrl_data를 직접 접근 경로에서 잘못 덮어쓰는 문제이므로,
+legacy 마이그레이션은 별도 이슈로 분리 가능하다.
+
+## 6. 다음 절차
+
+승인 후 진행:
+
+```text
+1. pr_1077_review.md / pr_1077_report.md 커밋
+2. local/devel → devel fast-forward merge
+3. devel 기준 검증
+4. origin/devel push
+5. PR #1077에 체리픽 반영 댓글 작성 후 close
+6. 이슈 #698 close(completed)
+```
