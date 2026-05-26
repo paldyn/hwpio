@@ -868,10 +868,14 @@ fn parse_page_border_fill(data: &[u8]) -> PageBorderFill {
     pbf.spacing_top = r.read_i16().unwrap_or(0);
     pbf.spacing_bottom = r.read_i16().unwrap_or(0);
     pbf.border_fill_id = r.read_u16().unwrap_or(0);
-    pbf.basis = if (pbf.attr & 0x01) != 0 {
-        crate::model::page::PageBorderBasis::PaperBased
+    // HWP5 PAGE_BORDER_FILL attr bit0 is the stored textBorder value, but
+    // Hancom Office's dialog labels it as page/paper in the opposite way.
+    // Keep renderer placement as paper-edge, and expose dialog basis separately.
+    pbf.basis = crate::model::page::PageBorderBasis::PaperBased;
+    pbf.ui_basis = if (pbf.attr & 0x01) != 0 {
+        crate::model::page::PageBorderUiBasis::Page
     } else {
-        crate::model::page::PageBorderBasis::BodyBased
+        crate::model::page::PageBorderUiBasis::Paper
     };
 
     pbf

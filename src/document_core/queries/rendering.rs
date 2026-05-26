@@ -915,7 +915,7 @@ impl DocumentCore {
     /// 구역의 쪽 테두리/배경 설정을 JSON으로 반환한다.
     pub fn get_page_border_fill_native(&self, section_idx: usize) -> Result<String, HwpError> {
         use crate::document_core::helpers::{border_line_type_to_u8_val, color_ref_to_css};
-        use crate::model::page::PageBorderBasis;
+        use crate::model::page::PageBorderUiBasis;
         use crate::model::style::FillType;
 
         let section = self
@@ -924,9 +924,9 @@ impl DocumentCore {
             .get(section_idx)
             .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
         let pbf = &section.section_def.page_border_fill;
-        let basis = match pbf.basis {
-            PageBorderBasis::PaperBased => "paper",
-            PageBorderBasis::BodyBased => "page",
+        let basis = match pbf.ui_basis {
+            PageBorderUiBasis::Paper => "paper",
+            PageBorderUiBasis::Page => "page",
         };
         let fill_area = match (pbf.attr >> 3) & 0x03 {
             1 => "page",
@@ -1009,7 +1009,7 @@ impl DocumentCore {
         json: &str,
     ) -> Result<String, HwpError> {
         use crate::document_core::helpers::{json_bool, json_i16, json_str, json_u32};
-        use crate::model::page::PageBorderBasis;
+        use crate::model::page::{PageBorderBasis, PageBorderUiBasis};
 
         let border_fill_id = self.create_border_fill_from_json(json);
         let section = self
@@ -1036,11 +1036,13 @@ impl DocumentCore {
         let mut attr = pbf.attr;
         if let Some(basis) = json_str(json, "basis") {
             if basis == "paper" {
+                pbf.ui_basis = PageBorderUiBasis::Paper;
+                pbf.basis = PageBorderBasis::PaperBased;
+                attr &= !0x01;
+            } else {
+                pbf.ui_basis = PageBorderUiBasis::Page;
                 pbf.basis = PageBorderBasis::PaperBased;
                 attr |= 0x01;
-            } else {
-                pbf.basis = PageBorderBasis::BodyBased;
-                attr &= !0x01;
             }
         }
         if let Some(v) = json_bool(json, "headerInside") {
@@ -1082,7 +1084,7 @@ impl DocumentCore {
         }
 
         let flags = &mut sd.flags;
-        if pbf.basis == PageBorderBasis::PaperBased {
+        if pbf.ui_basis == PageBorderUiBasis::Page {
             pbf.attr |= 0x01;
         } else {
             pbf.attr &= !0x01;
@@ -3625,6 +3627,29 @@ mod tests {
             .get_page_info_native(0)
             .expect("page info should reflect updated page border");
         assert!(info.contains("\"pageBorderTop\":"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn page_border_fill_sample_basis_matches_hancom_ui() {
+        fn assert_basis(path: &str, expected: &str) {
+            let data = std::fs::read(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+            let core =
+                DocumentCore::from_bytes(&data).unwrap_or_else(|e| panic!("load {path}: {e}"));
+            let json = core
+                .get_page_border_fill_native(0)
+                .unwrap_or_else(|e| panic!("query {path}: {e}"));
+            assert!(
+                json.contains(&format!("\"basis\":\"{}\"", expected)),
+                "{path} expected basis={expected}, got {json}"
+            );
+        }
+
+        assert_basis("samples/종이기준.hwp", "paper");
+        assert_basis("samples/종이기준.hwpx", "paper");
+        assert_basis("samples/쪽기준.hwp", "page");
+        assert_basis("samples/쪽기준.hwpx", "page");
+        assert_basis("samples/hwp3-sample16-hwp5.hwp", "page");
     }
 
     #[cfg(not(target_arch = "wasm32"))]

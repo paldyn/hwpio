@@ -2865,6 +2865,7 @@ pub fn parse_hwp3(data: &[u8]) -> Result<Document, Hwp3Error> {
             // outline 내부 top-left 위치 (HWP5 변환본과 동일). HWP3/HWP5/HWPX 모두 동일
             // contract (PaperBased) 로 통합.
             basis: crate::model::page::PageBorderBasis::PaperBased,
+            ui_basis: crate::model::page::PageBorderUiBasis::Page,
         };
     }
 

@@ -67,6 +67,12 @@ pub struct PageBorderFill {
     /// renderer 가 attr bit 0 단일 해석 대신 본 필드를 직접 사용 — 포맷/출처별
     /// 계약 분리로 #987(HWP3) ↔ #956(HWP5/HWPX) ↔ #1006(변환본 logo) 동시 충족.
     pub basis: PageBorderBasis,
+    /// 한컴오피스 쪽 테두리/배경 대화상자에 표시되는 위치 기준.
+    /// HWP5/HWPX raw 값 기준:
+    ///   - attr bit0=0 / textBorder=CONTENT → 종이 기준
+    ///   - attr bit0=1 / textBorder=PAPER → 쪽 기준
+    /// 렌더러의 외곽선 배치 계약인 `basis`와 분리한다.
+    pub ui_basis: PageBorderUiBasis,
 }
 
 /// 쪽 테두리 위치 기준
@@ -77,6 +83,16 @@ pub enum PageBorderBasis {
     BodyBased,
     /// 종이 기준 (HWP5/HWPX default — paper edge 에서 spacing)
     PaperBased,
+}
+
+/// 쪽 테두리/배경 대화상자 위치 기준
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageBorderUiBasis {
+    /// 한컴 UI의 종이 기준
+    #[default]
+    Paper,
+    /// 한컴 UI의 쪽 기준
+    Page,
 }
 
 /// 단 정의 ('cold' 컨트롤)

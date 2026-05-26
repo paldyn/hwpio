@@ -15,7 +15,8 @@ use crate::model::footnote::{Endnote, Footnote};
 use crate::model::header_footer::{Footer, Header, HeaderFooterApply, MasterPage};
 use crate::model::image::{CropInfo, ImageAttr, ImageEffect};
 use crate::model::page::{
-    BindingMethod, ColumnDef, ColumnDirection, ColumnType, PageBorderBasis, PageBorderFill, PageDef,
+    BindingMethod, ColumnDef, ColumnDirection, ColumnType, PageBorderBasis, PageBorderFill,
+    PageBorderUiBasis, PageDef,
 };
 use crate::model::paragraph::{CharShapeRef, FieldRange, LineSeg, Paragraph};
 use crate::model::shape::{
@@ -998,10 +999,11 @@ fn parse_page_border_fill_empty(e: &quick_xml::events::BytesStart) -> PageBorder
         header_inside,
         footer_inside,
     );
-    page_border_fill.basis = if text_border.eq_ignore_ascii_case("PAPER") {
-        crate::model::page::PageBorderBasis::PaperBased
+    page_border_fill.basis = PageBorderBasis::PaperBased;
+    page_border_fill.ui_basis = if text_border.eq_ignore_ascii_case("PAPER") {
+        PageBorderUiBasis::Page
     } else {
-        crate::model::page::PageBorderBasis::BodyBased
+        PageBorderUiBasis::Paper
     };
     page_border_fill
 }
@@ -5115,7 +5117,11 @@ mod tests {
         assert_eq!(section.section_def.page_border_fill.attr & 0x01, 0);
         assert_eq!(
             section.section_def.page_border_fill.basis,
-            PageBorderBasis::BodyBased
+            PageBorderBasis::PaperBased
+        );
+        assert_eq!(
+            section.section_def.page_border_fill.ui_basis,
+            PageBorderUiBasis::Paper
         );
 
         let xml = xml.replace(r#"textBorder="CONTENT""#, r#"textBorder="PAPER""#);
@@ -5124,6 +5130,10 @@ mod tests {
         assert_eq!(
             section.section_def.page_border_fill.basis,
             PageBorderBasis::PaperBased
+        );
+        assert_eq!(
+            section.section_def.page_border_fill.ui_basis,
+            PageBorderUiBasis::Page
         );
     }
 
