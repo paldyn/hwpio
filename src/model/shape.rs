@@ -21,7 +21,9 @@ pub(crate) mod common_obj_offsets {
     pub const MARGIN_TOP: std::ops::Range<usize> = 28..30;
     pub const MARGIN_BOTTOM: std::ops::Range<usize> = 30..32;
     pub const INSTANCE_ID: std::ops::Range<usize> = 32..36;
+    pub const PREVENT_PAGE_BREAK: std::ops::Range<usize> = 36..40;
     pub const MIN_LEN: usize = INSTANCE_ID.end;
+    pub const MIN_LEN_WITH_PREVENT_PAGE_BREAK: usize = PREVENT_PAGE_BREAK.end;
 }
 
 /// 개체 공통 속성 (모든 개체에 공통)

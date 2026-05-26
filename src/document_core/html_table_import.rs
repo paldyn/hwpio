@@ -5,6 +5,7 @@ use crate::document_core::DocumentCore;
 use crate::error::HwpError;
 use crate::model::control::Control;
 use crate::model::paragraph::Paragraph;
+use crate::model::shape::common_obj_offsets;
 use crate::renderer::style_resolver::resolve_styles;
 
 impl DocumentCore {
@@ -506,14 +507,16 @@ impl DocumentCore {
         // [32..36] instance_id, [36..38] desc_len(=0)
         let outer_margin: i16 = 283; // 바깥 여백 ~1mm
         let mut raw_ctrl_data = vec![0u8; 38]; // 32(base) + 2(desc_len) + 4(extra)
-        raw_ctrl_data[0..4].copy_from_slice(&table_attr.to_le_bytes());
-        raw_ctrl_data[12..16].copy_from_slice(&total_width.to_le_bytes());
-        raw_ctrl_data[16..20].copy_from_slice(&total_height.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::FLAGS].copy_from_slice(&table_attr.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::WIDTH].copy_from_slice(&total_width.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::HEIGHT].copy_from_slice(&total_height.to_le_bytes());
         // 바깥 여백 (left, right, top, bottom)
-        raw_ctrl_data[24..26].copy_from_slice(&outer_margin.to_le_bytes());
-        raw_ctrl_data[26..28].copy_from_slice(&outer_margin.to_le_bytes());
-        raw_ctrl_data[28..30].copy_from_slice(&outer_margin.to_le_bytes());
-        raw_ctrl_data[30..32].copy_from_slice(&outer_margin.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::MARGIN_LEFT].copy_from_slice(&outer_margin.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::MARGIN_RIGHT]
+            .copy_from_slice(&outer_margin.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::MARGIN_TOP].copy_from_slice(&outer_margin.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::MARGIN_BOTTOM]
+            .copy_from_slice(&outer_margin.to_le_bytes());
         // [32..36] instance_id (DIFF-7 수정: 해시 기반 유니크 값 생성)
         // 정상 HWP 파일에서는 instance_id가 고유한 비-0 값을 가짐
         let instance_id: u32 = {
@@ -529,7 +532,7 @@ impl DocumentCore {
             } // 절대 0이 되지 않도록
             h
         };
-        raw_ctrl_data[32..36].copy_from_slice(&instance_id.to_le_bytes());
+        raw_ctrl_data[common_obj_offsets::INSTANCE_ID].copy_from_slice(&instance_id.to_le_bytes());
         // [36..38] desc_len = 0
 
         // row_sizes: 각 행의 셀 수

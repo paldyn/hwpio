@@ -6,6 +6,7 @@ use crate::error::HwpError;
 use crate::model::control::Control;
 use crate::model::event::DocumentEvent;
 use crate::model::path::{path_from_flat, PathSegment};
+use crate::model::shape::common_obj_offsets;
 
 impl DocumentCore {
     pub(crate) fn get_table_mut(
@@ -862,43 +863,40 @@ impl DocumentCore {
     ) -> Result<String, HwpError> {
         let table = self.get_table_mut(section_idx, parent_para_idx, control_idx)?;
 
-        // CommonObjAttr 바이트 레이아웃: [0..4]=flags, [4..8]=v_offset, [8..12]=h_offset
-        while table.raw_ctrl_data.len() < 12 {
+        // CommonObjAttr 바이트 레이아웃: flags/v_offset/h_offset
+        while table.raw_ctrl_data.len() < common_obj_offsets::H_OFFSET.end {
             table.raw_ctrl_data.push(0);
         }
 
         let is_treat_as_char = (table.attr & 0x01) != 0;
 
-        // vertical_offset: raw_ctrl_data[4..8] (i32 LE)
+        // vertical_offset: CommonObjAttr::V_OFFSET (i32 LE)
         let mut new_v = if delta_v != 0 {
-            let cur_v = i32::from_le_bytes([
-                table.raw_ctrl_data[4],
-                table.raw_ctrl_data[5],
-                table.raw_ctrl_data[6],
-                table.raw_ctrl_data[7],
-            ]);
+            let cur_v = i32::from_le_bytes(
+                table.raw_ctrl_data[common_obj_offsets::V_OFFSET]
+                    .try_into()
+                    .unwrap(),
+            );
             let nv = cur_v.wrapping_add(delta_v);
-            table.raw_ctrl_data[4..8].copy_from_slice(&nv.to_le_bytes());
+            table.raw_ctrl_data[common_obj_offsets::V_OFFSET].copy_from_slice(&nv.to_le_bytes());
             nv
         } else {
-            i32::from_le_bytes([
-                table.raw_ctrl_data[4],
-                table.raw_ctrl_data[5],
-                table.raw_ctrl_data[6],
-                table.raw_ctrl_data[7],
-            ])
+            i32::from_le_bytes(
+                table.raw_ctrl_data[common_obj_offsets::V_OFFSET]
+                    .try_into()
+                    .unwrap(),
+            )
         };
 
-        // horizontal_offset: raw_ctrl_data[8..12] (i32 LE)
+        // horizontal_offset: CommonObjAttr::H_OFFSET (i32 LE)
         if delta_h != 0 {
-            let cur_h = i32::from_le_bytes([
-                table.raw_ctrl_data[8],
-                table.raw_ctrl_data[9],
-                table.raw_ctrl_data[10],
-                table.raw_ctrl_data[11],
-            ]);
+            let cur_h = i32::from_le_bytes(
+                table.raw_ctrl_data[common_obj_offsets::H_OFFSET]
+                    .try_into()
+                    .unwrap(),
+            );
             let new_h = cur_h.wrapping_add(delta_h);
-            table.raw_ctrl_data[8..12].copy_from_slice(&new_h.to_le_bytes());
+            table.raw_ctrl_data[common_obj_offsets::H_OFFSET].copy_from_slice(&new_h.to_le_bytes());
         }
 
         // treat_as_char 표: 문단 경계를 넘으면 문단 이동 (다중 경계 루프)
@@ -940,7 +938,8 @@ impl DocumentCore {
             // 최종 v_offset 갱신
             if result_ppi != parent_para_idx {
                 let tbl = self.get_table_mut(section_idx, result_ppi, control_idx)?;
-                tbl.raw_ctrl_data[4..8].copy_from_slice(&new_v.to_le_bytes());
+                tbl.raw_ctrl_data[common_obj_offsets::V_OFFSET]
+                    .copy_from_slice(&new_v.to_le_bytes());
             }
         }
 
@@ -992,35 +991,35 @@ impl DocumentCore {
         // raw_ctrl_data에서 표 크기 & 바깥 여백 추출 (parse_common_obj_attr 정합)
         // [0..4]=flags, [4..8]=v_offset, [8..12]=h_offset, [12..16]=width, [16..20]=height
         let rd = &table.raw_ctrl_data;
-        let table_width = if rd.len() >= 16 {
-            u32::from_le_bytes([rd[12], rd[13], rd[14], rd[15]])
+        let table_width = if rd.len() >= common_obj_offsets::WIDTH.end {
+            u32::from_le_bytes(rd[common_obj_offsets::WIDTH].try_into().unwrap())
         } else {
             0
         };
-        let table_height = if rd.len() >= 20 {
-            u32::from_le_bytes([rd[16], rd[17], rd[18], rd[19]])
+        let table_height = if rd.len() >= common_obj_offsets::HEIGHT.end {
+            u32::from_le_bytes(rd[common_obj_offsets::HEIGHT].try_into().unwrap())
         } else {
             0
         };
         // outer_margin: [24..32] (parse_common_obj_attr 정합)
         // [20..24]=z_order, [24..26]=left, [26..28]=right, [28..30]=top, [30..32]=bottom
-        let outer_left = if rd.len() >= 26 {
-            i16::from_le_bytes([rd[24], rd[25]])
+        let outer_left = if rd.len() >= common_obj_offsets::MARGIN_LEFT.end {
+            i16::from_le_bytes(rd[common_obj_offsets::MARGIN_LEFT].try_into().unwrap())
         } else {
             0
         };
-        let outer_right = if rd.len() >= 28 {
-            i16::from_le_bytes([rd[26], rd[27]])
+        let outer_right = if rd.len() >= common_obj_offsets::MARGIN_RIGHT.end {
+            i16::from_le_bytes(rd[common_obj_offsets::MARGIN_RIGHT].try_into().unwrap())
         } else {
             0
         };
-        let outer_top = if rd.len() >= 30 {
-            i16::from_le_bytes([rd[28], rd[29]])
+        let outer_top = if rd.len() >= common_obj_offsets::MARGIN_TOP.end {
+            i16::from_le_bytes(rd[common_obj_offsets::MARGIN_TOP].try_into().unwrap())
         } else {
             0
         };
-        let outer_bottom = if rd.len() >= 32 {
-            i16::from_le_bytes([rd[30], rd[31]])
+        let outer_bottom = if rd.len() >= common_obj_offsets::MARGIN_BOTTOM.end {
+            i16::from_le_bytes(rd[common_obj_offsets::MARGIN_BOTTOM].try_into().unwrap())
         } else {
             0
         };
@@ -1079,23 +1078,26 @@ impl DocumentCore {
             crate::model::shape::HorzAlign::Inside => "Inside",
             crate::model::shape::HorzAlign::Outside => "Outside",
         };
-        // CommonObjAttr: [0..4]=flags, [4..8]=v_offset, [8..12]=h_offset
-        let vert_offset = if rd.len() >= 8 {
-            i32::from_le_bytes([rd[4], rd[5], rd[6], rd[7]])
+        // CommonObjAttr: flags/v_offset/h_offset
+        let vert_offset = if rd.len() >= common_obj_offsets::V_OFFSET.end {
+            i32::from_le_bytes(rd[common_obj_offsets::V_OFFSET].try_into().unwrap())
         } else {
             0
         };
-        let horz_offset = if rd.len() >= 12 {
-            i32::from_le_bytes([rd[8], rd[9], rd[10], rd[11]])
+        let horz_offset = if rd.len() >= common_obj_offsets::H_OFFSET.end {
+            i32::from_le_bytes(rd[common_obj_offsets::H_OFFSET].try_into().unwrap())
         } else {
             0
         };
         let restrict_in_page = (table.attr >> 13) & 0x01 != 0;
         let allow_overlap = (table.attr >> 14) & 0x01 != 0;
-        // raw_ctrl_data[36..40] = prevent_page_break (parse_common_obj_attr 정합)
-        // [32..36]=instance_id, [36..40]=prevent_page_break
-        let keep_with_anchor = if rd.len() >= 40 {
-            i32::from_le_bytes([rd[36], rd[37], rd[38], rd[39]]) != 0
+        // prevent_page_break: CommonObjAttr::PREVENT_PAGE_BREAK
+        let keep_with_anchor = if rd.len() >= common_obj_offsets::PREVENT_PAGE_BREAK.end {
+            i32::from_le_bytes(
+                rd[common_obj_offsets::PREVENT_PAGE_BREAK]
+                    .try_into()
+                    .unwrap(),
+            ) != 0
         } else {
             false
         };
@@ -1214,14 +1216,14 @@ impl DocumentCore {
             table.attr = (table.attr & !(0x07 << 10)) | (bits << 10);
         }
         // 위치 오프셋: CommonObjAttr [0..4]=flags, [4..8]=v_offset, [8..12]=h_offset
-        while table.raw_ctrl_data.len() < 12 {
+        while table.raw_ctrl_data.len() < common_obj_offsets::H_OFFSET.end {
             table.raw_ctrl_data.push(0);
         }
         if let Some(v) = json_i32(json, "vertOffset") {
-            table.raw_ctrl_data[4..8].copy_from_slice(&v.to_le_bytes());
+            table.raw_ctrl_data[common_obj_offsets::V_OFFSET].copy_from_slice(&v.to_le_bytes());
         }
         if let Some(v) = json_i32(json, "horzOffset") {
-            table.raw_ctrl_data[8..12].copy_from_slice(&v.to_le_bytes());
+            table.raw_ctrl_data[common_obj_offsets::H_OFFSET].copy_from_slice(&v.to_le_bytes());
         }
         // restrictInPage → attr bit 13
         if let Some(v) = json_bool(json, "restrictInPage") {
@@ -1239,31 +1241,34 @@ impl DocumentCore {
                 table.attr &= !(1 << 14);
             }
         }
-        // keepWithAnchor → raw_ctrl_data[36..40] (prevent_page_break)
-        // [32..36]=instance_id, [36..40]=prevent_page_break (parse_common_obj_attr 정합)
+        // keepWithAnchor → prevent_page_break
+        // CommonObjAttr::PREVENT_PAGE_BREAK (parse_common_obj_attr 정합)
         if let Some(v) = json_bool(json, "keepWithAnchor") {
-            while table.raw_ctrl_data.len() < 40 {
+            while table.raw_ctrl_data.len() < common_obj_offsets::PREVENT_PAGE_BREAK.end {
                 table.raw_ctrl_data.push(0);
             }
             let val: i32 = if v { 1 } else { 0 };
-            table.raw_ctrl_data[36..40].copy_from_slice(&val.to_le_bytes());
+            table.raw_ctrl_data[common_obj_offsets::PREVENT_PAGE_BREAK]
+                .copy_from_slice(&val.to_le_bytes());
         }
 
-        // 바깥 여백 (raw_ctrl_data[24..32], parse_common_obj_attr 정합)
-        // [20..24]=z_order, [24..26]=margin_left, [26..28]=margin_right,
-        // [28..30]=margin_top, [30..32]=margin_bottom
-        if table.raw_ctrl_data.len() >= 32 {
+        // 바깥 여백 (CommonObjAttr margin ranges, parse_common_obj_attr 정합)
+        if table.raw_ctrl_data.len() >= common_obj_offsets::MARGIN_BOTTOM.end {
             if let Some(v) = json_i16(json, "outerLeft") {
-                table.raw_ctrl_data[24..26].copy_from_slice(&v.to_le_bytes());
+                table.raw_ctrl_data[common_obj_offsets::MARGIN_LEFT]
+                    .copy_from_slice(&v.to_le_bytes());
             }
             if let Some(v) = json_i16(json, "outerRight") {
-                table.raw_ctrl_data[26..28].copy_from_slice(&v.to_le_bytes());
+                table.raw_ctrl_data[common_obj_offsets::MARGIN_RIGHT]
+                    .copy_from_slice(&v.to_le_bytes());
             }
             if let Some(v) = json_i16(json, "outerTop") {
-                table.raw_ctrl_data[28..30].copy_from_slice(&v.to_le_bytes());
+                table.raw_ctrl_data[common_obj_offsets::MARGIN_TOP]
+                    .copy_from_slice(&v.to_le_bytes());
             }
             if let Some(v) = json_i16(json, "outerBottom") {
-                table.raw_ctrl_data[30..32].copy_from_slice(&v.to_le_bytes());
+                table.raw_ctrl_data[common_obj_offsets::MARGIN_BOTTOM]
+                    .copy_from_slice(&v.to_le_bytes());
             }
         }
 
@@ -1820,6 +1825,7 @@ fn json_escape(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use crate::model::shape::common_obj_offsets;
     use crate::parser::control::parse_common_obj_attr;
 
     #[test]
@@ -1827,11 +1833,20 @@ mod tests {
         // CommonObjAttr layout: [0..4]=flags, [4..8]=v_offset, [8..12]=h_offset, [12..16]=width
         let mut data = vec![0u8; 36];
         let flags: u32 = (2 << 3) | (3 << 8) | (1 << 21); // vert=Para, horz=Para, wrap=TopAndBottom
-        data[0..4].copy_from_slice(&flags.to_le_bytes());
-        data[4..8].copy_from_slice(&42_u32.to_le_bytes()); // v_offset = 42
-        data[8..12].copy_from_slice(&99_u32.to_le_bytes()); // h_offset = 99
-        data[12..16].copy_from_slice(&5000_u32.to_le_bytes()); // width
-        data[16..20].copy_from_slice(&3000_u32.to_le_bytes()); // height
+        data[common_obj_offsets::FLAGS].copy_from_slice(&flags.to_le_bytes());
+        data[common_obj_offsets::V_OFFSET].copy_from_slice(&42_u32.to_le_bytes());
+        data[common_obj_offsets::H_OFFSET].copy_from_slice(&99_u32.to_le_bytes());
+        data[common_obj_offsets::WIDTH].copy_from_slice(&5000_u32.to_le_bytes());
+        data[common_obj_offsets::HEIGHT].copy_from_slice(&3000_u32.to_le_bytes());
+
+        assert_eq!(
+            common_obj_offsets::MIN_LEN,
+            common_obj_offsets::INSTANCE_ID.end
+        );
+        assert_eq!(
+            common_obj_offsets::MIN_LEN_WITH_PREVENT_PAGE_BREAK,
+            common_obj_offsets::PREVENT_PAGE_BREAK.end
+        );
 
         let common = parse_common_obj_attr(&data);
         assert_eq!(

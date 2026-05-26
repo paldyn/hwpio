@@ -21,7 +21,7 @@ use crate::model::control::Control;
 use crate::model::document::{Document, Section, SectionDef};
 use crate::model::image::Picture;
 use crate::model::paragraph::Paragraph;
-use crate::model::shape::{ShapeObject, TextBox};
+use crate::model::shape::{common_obj_offsets, ShapeObject, TextBox};
 use crate::model::style::{BorderFill, BorderLineType, FillType};
 use crate::model::table::{Cell, Table, TablePageBreak};
 use crate::parser::FileFormat;
@@ -1072,13 +1072,12 @@ fn adapt_table_with_context(
         table.raw_ctrl_data = serialize_common_obj_attr(&table.common);
         report.tables_ctrl_data_synthesized += 1;
 
-        if table.raw_ctrl_data.len() >= 4 {
-            let packed = u32::from_le_bytes([
-                table.raw_ctrl_data[0],
-                table.raw_ctrl_data[1],
-                table.raw_ctrl_data[2],
-                table.raw_ctrl_data[3],
-            ]);
+        if table.raw_ctrl_data.len() >= common_obj_offsets::FLAGS.end {
+            let packed = u32::from_le_bytes(
+                table.raw_ctrl_data[common_obj_offsets::FLAGS]
+                    .try_into()
+                    .unwrap(),
+            );
             if table.attr != packed {
                 table.attr = packed;
                 report.tables_attr_packed += 1;
@@ -1335,15 +1334,35 @@ mod tests {
         assert_eq!(table.row_sizes, vec![3]);
         assert_eq!(table.raw_table_record_extra, vec![0, 0]);
         assert_eq!(
-            u32::from_le_bytes(table.raw_ctrl_data[0..4].try_into().unwrap()),
+            u32::from_le_bytes(
+                table.raw_ctrl_data[common_obj_offsets::FLAGS]
+                    .try_into()
+                    .unwrap(),
+            ),
             0x082a_2311
         );
         assert_eq!(
             (
-                i16::from_le_bytes(table.raw_ctrl_data[24..26].try_into().unwrap()),
-                i16::from_le_bytes(table.raw_ctrl_data[26..28].try_into().unwrap()),
-                i16::from_le_bytes(table.raw_ctrl_data[28..30].try_into().unwrap()),
-                i16::from_le_bytes(table.raw_ctrl_data[30..32].try_into().unwrap()),
+                i16::from_le_bytes(
+                    table.raw_ctrl_data[common_obj_offsets::MARGIN_LEFT]
+                        .try_into()
+                        .unwrap(),
+                ),
+                i16::from_le_bytes(
+                    table.raw_ctrl_data[common_obj_offsets::MARGIN_RIGHT]
+                        .try_into()
+                        .unwrap(),
+                ),
+                i16::from_le_bytes(
+                    table.raw_ctrl_data[common_obj_offsets::MARGIN_TOP]
+                        .try_into()
+                        .unwrap(),
+                ),
+                i16::from_le_bytes(
+                    table.raw_ctrl_data[common_obj_offsets::MARGIN_BOTTOM]
+                        .try_into()
+                        .unwrap(),
+                ),
             ),
             (283, 283, 283, 283)
         );
@@ -1431,7 +1450,11 @@ mod tests {
         adapt_table(&mut table, &mut report);
 
         assert_eq!(
-            u32::from_le_bytes(table.raw_ctrl_data[0..4].try_into().unwrap()),
+            u32::from_le_bytes(
+                table.raw_ctrl_data[common_obj_offsets::FLAGS]
+                    .try_into()
+                    .unwrap(),
+            ),
             0x282a_2311
         );
     }

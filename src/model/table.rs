@@ -1,7 +1,7 @@
 //! 표 (Table, Cell, Row)
 
 use super::paragraph::Paragraph;
-use super::shape::Caption;
+use super::shape::{common_obj_offsets, Caption};
 use super::*;
 
 /// 표 개체 (HWPTAG_TABLE)
@@ -253,13 +253,13 @@ impl Table {
     ///   [12..16] width, [16..20] height, [20..24] z_order,
     ///   [24..32] outer_margin (i16×4), [32..36] instance_id
     pub fn update_ctrl_dimensions(&mut self) {
-        if self.raw_ctrl_data.len() < 20 {
+        if self.raw_ctrl_data.len() < common_obj_offsets::HEIGHT.end {
             return;
         }
         let total_width: HwpUnit = self.get_column_widths().iter().sum();
         let total_height: HwpUnit = self.get_row_heights().iter().sum();
-        self.raw_ctrl_data[12..16].copy_from_slice(&total_width.to_le_bytes());
-        self.raw_ctrl_data[16..20].copy_from_slice(&total_height.to_le_bytes());
+        self.raw_ctrl_data[common_obj_offsets::WIDTH].copy_from_slice(&total_width.to_le_bytes());
+        self.raw_ctrl_data[common_obj_offsets::HEIGHT].copy_from_slice(&total_height.to_le_bytes());
     }
 
     /// 열별 폭을 추출한다 (col_span==1인 셀 기준).
