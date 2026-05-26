@@ -72,6 +72,7 @@ pub struct PageBorderFill {
     /// HWP5/HWPX raw 값 기준:
     ///   - attr bit0=0 / textBorder=CONTENT → 종이 기준
     ///   - attr bit0=1 / textBorder=PAPER → 쪽 기준
+    ///
     /// 렌더러의 외곽선 배치 계약인 `basis`와 분리한다.
     pub ui_basis: PageBorderUiBasis,
 }
