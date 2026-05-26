@@ -148,11 +148,17 @@ cd dist
 zip -r ../rhwp-firefox-{version}.zip .
 
 cd ../..
-git archive --format=zip --prefix=rhwp-source/ --output=rhwp-firefox/rhwp-source-{version}.zip HEAD
+git archive --format=zip --prefix=rhwp-source/ --output=rhwp-firefox/rhwp-source-{version}-amo.zip HEAD Cargo.toml rust-toolchain.toml rustfmt.toml Dockerfile docker-compose.yml .env.docker.example LICENSE README.md README_EN.md CHANGELOG.md CHANGELOG_EN.md THIRD_PARTY_LICENSES.md src rhwp-studio rhwp-firefox rhwp-shared web/fonts scripts npm/README.md npm/editor
 ```
 
 Firefox AMO 제출 시에는 확장 패키지와 함께 검토용 source zip을 업로드한다.
-source zip은 `dist/`, `node_modules/`, `target/` 같은 빌드 산출물을 포함하지 않는 Git tree 기준으로 만든다.
+AMO source 업로드 제한은 200 MB 이므로 전체 Git tree를 압축하지 않는다. 전체 archive는
+`samples/`, `pdf-large/` 같은 대형 fixture를 포함해 제한을 초과할 수 있다.
+
+source zip은 확장 재빌드에 필요한 경로만 포함한다.
+
+- 포함: `src/`, `rhwp-studio/`, `rhwp-firefox/`, `rhwp-shared/`, `web/fonts/`, build scripts, manifest/package files
+- 제외: top-level `samples/`, `pdf-large/`, `output/`, `target/`, `node_modules/`, extension `dist/`
 
 ### 버전 올리기 예시
 
