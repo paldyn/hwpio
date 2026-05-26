@@ -2458,6 +2458,46 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// [Task #1138] 표 셀 내 그림 속성 조회 (by_path).
+    /// cell_path_json: `[{"controlIdx":N,"cellIdx":M,"cellParaIdx":P}, ...]`
+    /// inner_control_idx: 셀 paragraph 내 그림 control 인덱스.
+    #[wasm_bindgen(js_name = getCellPicturePropertiesByPath)]
+    pub fn get_cell_picture_properties_by_path(
+        &self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        inner_control_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.get_cell_picture_properties_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            cell_path_json,
+            inner_control_idx as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// [Task #1138] 표 셀 내 그림 속성 변경 (by_path).
+    #[wasm_bindgen(js_name = setCellPicturePropertiesByPath)]
+    pub fn set_cell_picture_properties_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        inner_control_idx: u32,
+        props_json: &str,
+    ) -> Result<String, JsValue> {
+        self.set_cell_picture_properties_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            cell_path_json,
+            inner_control_idx as usize,
+            props_json,
+        )
+        .map_err(|e| e.into())
+    }
+
     // ─── Equation(수식) API ──────────────────────────────
 
     /// 수식 컨트롤을 문단에서 삭제한다.
