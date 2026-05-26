@@ -1,4 +1,4 @@
-# 최종 결과보고서 — task_m07x_1131_report
+# 최종 결과보고서 — task_m100_1131_report
 
 - **이슈**: edwardkim/rhwp#1131
 - **브랜치**: `feature/1131-file-url-access-guidance` (upstream/devel 기준)

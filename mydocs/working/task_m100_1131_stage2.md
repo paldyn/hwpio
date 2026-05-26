@@ -1,4 +1,4 @@
-# 단계 2 완료보고서 — task_m07x_1131_stage2
+# 단계 2 완료보고서 — task_m100_1131_stage2
 
 - **이슈**: edwardkim/rhwp#1131
 - **브랜치**: `feature/1131-file-url-access-guidance`
