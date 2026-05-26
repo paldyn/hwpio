@@ -13,7 +13,7 @@ export function createGridOverlay(
   const overlay = document.createElement('div');
   overlay.className = 'page-grid-overlay';
   overlay.dataset.rhwpGridPage = String(pageIdx);
-  overlay.style.backgroundImage = buildBackgroundImage(settings);
+  overlay.style.backgroundImage = buildBackgroundImage(settings, zoom);
   overlay.style.backgroundSize = `${settings.horizontalMm * MM_TO_PX * zoom}px ${settings.verticalMm * MM_TO_PX * zoom}px`;
   overlay.style.backgroundPosition = buildBackgroundPosition(pageInfo, zoom, settings);
   overlay.style.clipPath = buildClipPath(pageInfo, zoom, settings);
@@ -64,7 +64,7 @@ export function createGridClipCornerOverlay(
   return overlay;
 }
 
-function buildBackgroundImage(settings: GridViewSettings): string {
+function buildBackgroundImage(settings: GridViewSettings, zoom: number): string {
   const color = 'rgba(0, 32, 150, 0.9)';
   switch (settings.pattern) {
     case 'horizontal':
@@ -78,7 +78,8 @@ function buildBackgroundImage(settings: GridViewSettings): string {
       ].join(', ');
     case 'dots':
     default:
-      return `radial-gradient(circle, ${color} 0 0.5px, transparent 0.55px)`;
+      const dotRadius = Math.max(0.5, zoom * 0.5);
+      return `radial-gradient(circle, ${color} 0 ${dotRadius}px, transparent ${dotRadius}px)`;
   }
 }
 
