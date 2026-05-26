@@ -458,6 +458,7 @@ impl LayoutEngine {
             bin_data_content,
             overflow_map,
             &[],
+            None, // [Task #1138] 본문 도형 — 셀 정보 없음
         );
 
         // 캡션 렌더링
@@ -699,6 +700,7 @@ impl LayoutEngine {
                     bin_data_content,
                     &empty_map,
                     parent_cell_path,
+                    None, // [Task #1138] TODO: layout_group_child_affine 에 cell ctx propagate (별도 후속)
                 );
             }
         }
@@ -707,6 +709,7 @@ impl LayoutEngine {
     /// 개별 ShapeObject를 렌더 노드로 변환한다.
     /// base_x/y는 도형의 절대 좌표, w/h는 도형 크기.
     /// parent_cell_path: 중첩 글상자/표에서 상위 경로 (최상위 도형이면 빈 슬라이스)
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_shape_object(
         &self,
@@ -724,11 +727,18 @@ impl LayoutEngine {
         bin_data_content: &[BinDataContent],
         overflow_map: &std::collections::HashMap<(usize, usize), Vec<Paragraph>>,
         parent_cell_path: &[CellPathEntry],
+        // [Task #1138] 표 셀 내 도형인 경우: (cell_idx, cell_para_idx, outer_table_ctrl_idx)
+        table_cell_ref: Option<(usize, usize, usize)>,
     ) {
         use crate::model::shape::ShapeObject;
 
         // 공통: 회전/대칭 정보 추출
         let transform = extract_shape_transform(shape.shape_attr());
+
+        // [Task #1138] 표 셀 내 도형 식별을 위한 cell 정보 추출 (helper)
+        let cell_index = table_cell_ref.map(|(ci, _, _)| ci);
+        let cell_para_index = table_cell_ref.map(|(_, cpi, _)| cpi);
+        let outer_table_control_index = table_cell_ref.map(|(_, _, otci)| otci);
 
         // 회전/대칭이 있으면 current 크기로 중앙 배치
         // 그렇지 않으면 호출자가 전달한 w, h를 그대로 사용
@@ -764,6 +774,9 @@ impl LayoutEngine {
                         para_index: Some(para_index),
                         control_index: Some(control_index),
                         transform,
+                        cell_index,
+                        cell_para_index,
+                        outer_table_control_index,
                         ..RectangleNode::new(round_px, style, gradient)
                     }),
                     BoundingBox::new(render_x, render_y, render_w, render_h),
@@ -1347,6 +1360,7 @@ impl LayoutEngine {
                             bin_data_content,
                             &empty_map,
                             parent_cell_path,
+                            table_cell_ref, // [Task #1138] 그룹 자식 — 부모와 같은 셀 컨텍스트
                         );
                     }
                 }
@@ -2115,6 +2129,7 @@ impl LayoutEngine {
                             bin_data_content,
                             &empty_map,
                             &nested_parent_path,
+                            None, // [Task #1138] TODO: layout_textbox_content 에 cell ctx propagate (별도 후속)
                         );
                     }
                     Control::Picture(pic) => {

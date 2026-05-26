@@ -992,6 +992,11 @@ impl LayoutEngine {
                                         width: shape_w,
                                         height: inner_area.height,
                                     };
+                                    // [Task #1138] 분할 표 셀 컨텍스트
+                                    let table_cell_ctx = Some((
+                                        section_index, para_index, control_index,
+                                        cell_idx, cp_idx, ctrl_idx,
+                                    ));
                                     self.layout_cell_shape(
                                         tree,
                                         &mut cell_node,
@@ -1002,6 +1007,7 @@ impl LayoutEngine {
                                         styles,
                                         bin_data_content,
                                         clamp_header_negative_para_offset,
+                                        table_cell_ctx,
                                     );
                                     inline_x += shape_w;
                                 } else {
@@ -1014,6 +1020,11 @@ impl LayoutEngine {
                                     } else {
                                         para_y
                                     };
+                                    // [Task #1138] 분할 표 셀 컨텍스트
+                                    let table_cell_ctx = Some((
+                                        section_index, para_index, control_index,
+                                        cell_idx, cp_idx, ctrl_idx,
+                                    ));
                                     self.layout_cell_shape(
                                         tree,
                                         &mut cell_node,
@@ -1024,6 +1035,7 @@ impl LayoutEngine {
                                         styles,
                                         bin_data_content,
                                         clamp_header_negative_para_offset,
+                                        table_cell_ctx,
                                     );
                                 }
                             }
