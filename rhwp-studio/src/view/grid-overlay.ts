@@ -95,9 +95,9 @@ function getGridOriginPx(
 
 function getPageGridAreaPx(pageInfo: PageInfo): { left: number; right: number; top: number; bottom: number } {
   return {
-    left: pageInfo.pageBorderLeft ?? pageInfo.marginLeft,
-    right: pageInfo.pageBorderRight ?? pageInfo.marginRight,
-    top: pageInfo.pageBorderTop ?? (pageInfo.marginTop + pageInfo.marginHeader),
-    bottom: pageInfo.pageBorderBottom ?? (pageInfo.marginBottom + pageInfo.marginFooter),
+    left: pageInfo.marginLeft,
+    right: pageInfo.marginRight,
+    top: pageInfo.marginTop,
+    bottom: pageInfo.marginBottom,
   };
 }
