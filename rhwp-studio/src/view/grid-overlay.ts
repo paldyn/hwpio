@@ -59,8 +59,9 @@ function buildBackgroundPosition(
   settings: GridViewSettings,
 ): string {
   const origin = getGridOriginPx(pageInfo, settings);
-  const x = (origin.x + settings.offsetXmm * MM_TO_PX) * zoom;
-  const y = (origin.y + settings.offsetYmm * MM_TO_PX) * zoom;
+  const patternOffset = getPatternOffsetPx(settings);
+  const x = (origin.x + settings.offsetXmm * MM_TO_PX + patternOffset.x) * zoom;
+  const y = (origin.y + settings.offsetYmm * MM_TO_PX + patternOffset.y) * zoom;
   return `${x}px ${y}px`;
 }
 
@@ -95,9 +96,19 @@ function getGridOriginPx(
 
 function getPageGridAreaPx(pageInfo: PageInfo): { left: number; right: number; top: number; bottom: number } {
   return {
-    left: pageInfo.marginLeft,
-    right: pageInfo.marginRight,
-    top: pageInfo.marginTop,
-    bottom: pageInfo.marginBottom,
+    left: pageInfo.pageBorderLeft ?? pageInfo.marginLeft,
+    right: pageInfo.pageBorderRight ?? pageInfo.marginRight,
+    top: pageInfo.pageBorderTop ?? pageInfo.marginTop,
+    bottom: pageInfo.pageBorderBottom ?? pageInfo.marginBottom,
+  };
+}
+
+function getPatternOffsetPx(settings: GridViewSettings): { x: number; y: number } {
+  if (settings.pattern !== 'dots') {
+    return { x: 0, y: 0 };
+  }
+  return {
+    x: settings.horizontalMm * MM_TO_PX / 2,
+    y: settings.verticalMm * MM_TO_PX / 2,
   };
 }
