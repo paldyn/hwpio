@@ -3657,10 +3657,25 @@ impl TypesetEngine {
         };
         let first_block_size = first_block_end.saturating_sub(first_block_start);
         let first_block_is_single_row = first_block_size == 1;
-        // [Task #474] RowBreak 표는 보호 블록 정책 비적용
-        let first_block_protected = !mt.allows_row_break_split()
-            && first_block_size >= 2
-            && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+        let first_block_has_protectable_rowspan = first_block_size >= 2
+            && first_block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS
+            && (first_block_start..first_block_end)
+                .any(|r| rowspan_touched.get(r).copied().unwrap_or(false));
+        let first_rowbreak_block_has_hard_break =
+            if mt.allows_row_break_split() && first_block_has_protectable_rowspan {
+                layout_engine.row_block_has_internal_hard_break(
+                    table,
+                    first_block_start,
+                    first_block_end,
+                    styles,
+                )
+            } else {
+                false
+            };
+        // [Task #1145] RowBreak 표도 작은 rowspan 제목/라벨 블록은 내부 hard-break가
+        // 없으면 중간 행에서 자르지 않는다. 일반 RowBreak 행 경계 분할은 유지한다.
+        let first_block_protected = first_block_has_protectable_rowspan
+            && (!mt.allows_row_break_split() || !first_rowbreak_block_has_hard_break);
         // Task #398 v2: 보호 블록(2~3 rows)만 블록 전체 높이로 판정. 큰 rowspan(>3)은 행 단위 분할.
         let split_unit_h = if first_block_protected {
             first_block_h
@@ -3887,9 +3902,21 @@ impl TypesetEngine {
                     // rowspan 보호 블록 — 블록 전체를 분할 없이 한 단위로.
                     let (b_start, b_end, _) = mt.row_block_for(r);
                     let block_size = b_end.saturating_sub(b_start);
-                    let protected = !mt.allows_row_break_split()
-                        && block_size >= 2
-                        && block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS;
+                    let block_has_protectable_rowspan = block_size >= 2
+                        && block_size <= crate::renderer::height_measurer::BLOCK_UNIT_MAX_ROWS
+                        && (b_start..b_end)
+                            .any(|x| rowspan_touched.get(x).copied().unwrap_or(false));
+                    let rowbreak_has_internal_hard_break = if mt.allows_row_break_split()
+                        && b_start == r
+                        && block_has_protectable_rowspan
+                    {
+                        layout_engine
+                            .row_block_has_internal_hard_break(table, b_start, b_end, styles)
+                    } else {
+                        false
+                    };
+                    let protected = block_has_protectable_rowspan
+                        && (!mt.allows_row_break_split() || !rowbreak_has_internal_hard_break);
                     // [Task #1086] RowBreak 표는 행 경계 분할 정책이라 보호 블록
                     // snap 은 피하지만, rowspan label 이 걸친 블록 안의 큰 row_span==1
                     // 셀은 셀 내부 hard-break(vpos reset) 기준으로 쪼갤 수 있어야 한다.
@@ -3897,10 +3924,8 @@ impl TypesetEngine {
                     // 인덱스를 같은 정의로 렌더러까지 전달한다.
                     let rowbreak_rowspan_block = mt.allows_row_break_split()
                         && b_start == r
-                        && block_size >= 2
-                        && rowspan_touched.get(r).copied().unwrap_or(false)
-                        && layout_engine
-                            .row_block_has_internal_hard_break(table, b_start, b_end, styles);
+                        && block_has_protectable_rowspan
+                        && rowbreak_has_internal_hard_break;
                     if (protected || rowbreak_rowspan_block) && b_start == r {
                         // [Task #1025] 연속분 커서가 블록 중간이면 블록 시작 컷을 적용.
                         let blk_start_cut: &[usize] =
