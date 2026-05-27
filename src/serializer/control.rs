@@ -141,7 +141,7 @@ pub fn serialize_control(
             //   12..   UTF-16 LE 필드 이름 (예: "myMsg01")
             //
             // ctrl_data_name (HWPX `<hp:fieldBegin name="...">`) 우선, 비어있으면 생성 안 함.
-            if matches!(f.field_type, FieldType::ClickHere) {
+            if matches!(f.field_type, FieldType::ClickHere) && ctrl_data_record.is_none() {
                 if let Some(name) = &f.ctrl_data_name {
                     if !name.is_empty() {
                         let name_utf16: Vec<u16> = name.encode_utf16().collect();
