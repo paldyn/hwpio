@@ -4868,12 +4868,16 @@ impl LayoutEngine {
                                 vpos_accounts_for_height,
                             );
                             // layout_body_picture needs the host paragraph y for Para-relative
-                            // positioning, but InFront/Behind pictures must not rewind the
+                            // positioning, but InFront pictures must not rewind the
                             // already-advanced text flow cursor back to that paragraph y.
+                            //
+                            // Keep BehindText on the legacy non-advancing path. HWP5 files such
+                            // as samples/복학원서.hwp use an empty first paragraph with a
+                            // BehindText logo; preserving the advanced cursor there inserts an
+                            // extra line-height before the following table.
                             if matches!(
                                 pic.common.text_wrap,
                                 crate::model::shape::TextWrap::InFrontOfText
-                                    | crate::model::shape::TextWrap::BehindText
                             ) {
                                 result_y = saved_y_offset;
                             }
