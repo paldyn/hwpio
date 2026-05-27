@@ -1267,7 +1267,9 @@ impl DocumentCore {
                     ) {
                         // [Task #1138] 표 셀 안 사각형: cellIdx/cellParaIdx/outerTableControlIdx
                         let cell_str = match (rect_node.cell_index, rect_node.cell_para_index) {
-                            (Some(cei), Some(cpi)) => format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi),
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
                             _ => String::new(),
                         };
                         let outer_table_str = match rect_node.outer_table_control_index {
@@ -1290,7 +1292,9 @@ impl DocumentCore {
                     ) {
                         // [Task #1138] 표 셀 안 직선
                         let cell_str = match (line_node.cell_index, line_node.cell_para_index) {
-                            (Some(cei), Some(cpi)) => format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi),
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
                             _ => String::new(),
                         };
                         let outer_table_str = match line_node.outer_table_control_index {
@@ -1314,7 +1318,9 @@ impl DocumentCore {
                     ) {
                         // [Task #1138] 표 셀 안 타원
                         let cell_str = match (ell_node.cell_index, ell_node.cell_para_index) {
-                            (Some(cei), Some(cpi)) => format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi),
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
                             _ => String::new(),
                         };
                         let outer_table_str = match ell_node.outer_table_control_index {
@@ -1337,7 +1343,9 @@ impl DocumentCore {
                     ) {
                         // [Task #1138] 표 셀 안 path (다각형/곡선/연결선)
                         let cell_str = match (path_node.cell_index, path_node.cell_para_index) {
-                            (Some(cei), Some(cpi)) => format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi),
+                            (Some(cei), Some(cpi)) => {
+                                format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                            }
                             _ => String::new(),
                         };
                         let outer_table_str = match path_node.outer_table_control_index {

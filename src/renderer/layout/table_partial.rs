@@ -994,8 +994,12 @@ impl LayoutEngine {
                                     };
                                     // [Task #1138] 분할 표 셀 컨텍스트
                                     let table_cell_ctx = Some((
-                                        section_index, para_index, control_index,
-                                        cell_idx, cp_idx, ctrl_idx,
+                                        section_index,
+                                        para_index,
+                                        control_index,
+                                        cell_idx,
+                                        cp_idx,
+                                        ctrl_idx,
                                     ));
                                     self.layout_cell_shape(
                                         tree,
@@ -1022,8 +1026,12 @@ impl LayoutEngine {
                                     };
                                     // [Task #1138] 분할 표 셀 컨텍스트
                                     let table_cell_ctx = Some((
-                                        section_index, para_index, control_index,
-                                        cell_idx, cp_idx, ctrl_idx,
+                                        section_index,
+                                        para_index,
+                                        control_index,
+                                        cell_idx,
+                                        cp_idx,
+                                        ctrl_idx,
                                     ));
                                     self.layout_cell_shape(
                                         tree,

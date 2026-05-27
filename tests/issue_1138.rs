@@ -21,7 +21,11 @@ fn cell_shape_properties_by_path_basic_get() {
     // dump 결과: 표 control_idx=2, 셀[5] (r=2,c=1), 셀 paragraph[0], 사각형 control[0]
     let path_json = r#"[{"controlIdx":2,"cellIdx":5,"cellParaIdx":0}]"#;
     let result = core.get_cell_shape_properties_by_path_native(0, 0, path_json, 0);
-    assert!(result.is_ok(), "셀 안 사각형 properties 조회 실패: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "셀 안 사각형 properties 조회 실패: {:?}",
+        result.err()
+    );
 
     let props_json = result.unwrap();
     let props: serde_json::Value = serde_json::from_str(&props_json).expect("JSON 파싱");

@@ -2547,8 +2547,9 @@ impl LayoutEngine {
                                         height: inner_area.height,
                                     };
                                     // [Task #1138] 셀 컨텍스트 (section, outer_para, outer_table_ctrl, cell, cell_para, inner_ctrl)
-                                    let table_cell_ctx = table_meta
-                                        .map(|(opi, otci)| (section_index, opi, otci, cell_idx, cp_idx, ctrl_idx));
+                                    let table_cell_ctx = table_meta.map(|(opi, otci)| {
+                                        (section_index, opi, otci, cell_idx, cp_idx, ctrl_idx)
+                                    });
                                     self.layout_cell_shape(
                                         tree,
                                         &mut cell_node,
@@ -2572,8 +2573,9 @@ impl LayoutEngine {
                                         para_y
                                     };
                                     // [Task #1138] 셀 컨텍스트
-                                    let table_cell_ctx = table_meta
-                                        .map(|(opi, otci)| (section_index, opi, otci, cell_idx, cp_idx, ctrl_idx));
+                                    let table_cell_ctx = table_meta.map(|(opi, otci)| {
+                                        (section_index, opi, otci, cell_idx, cp_idx, ctrl_idx)
+                                    });
                                     self.layout_cell_shape(
                                         tree,
                                         &mut cell_node,

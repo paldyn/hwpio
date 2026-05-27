@@ -2424,10 +2424,7 @@ impl DocumentCore {
     /// [Task #1138] Shape 속성 JSON 적용 (mutation only). 후처리 (recompose /
     /// paginate / cache invalidate / event log) 는 호출자 책임.
     /// set_shape_properties_native + set_cell_shape_properties_by_path_native 공유.
-    fn apply_shape_props_inner(
-        shape: &mut crate::model::shape::ShapeObject,
-        props_json: &str,
-    ) {
+    fn apply_shape_props_inner(shape: &mut crate::model::shape::ShapeObject, props_json: &str) {
         use super::super::helpers::{json_bool, json_i32, json_str};
 
         let c = shape.common_mut();
@@ -2518,12 +2515,13 @@ impl DocumentCore {
                 };
             }
             if let Some(v) = json_i32(props_json, "fillBgColor") {
-                let solid = d.fill.solid.get_or_insert_with(|| {
-                    crate::model::style::SolidFill {
+                let solid = d
+                    .fill
+                    .solid
+                    .get_or_insert_with(|| crate::model::style::SolidFill {
                         pattern_type: -1,
                         ..Default::default()
-                    }
-                });
+                    });
                 solid.background_color = v as u32;
             }
             if let Some(v) = json_i32(props_json, "fillPatColor") {
@@ -2648,18 +2646,21 @@ impl DocumentCore {
         cell_path_json: &str,
         inner_control_idx: usize,
     ) -> Result<String, HwpError> {
-        let path: Vec<(usize, usize, usize)> = serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
-            .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
-            .iter()
-            .map(|v| {
-                let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                (c, ci, cpi)
-            })
-            .collect();
+        let path: Vec<(usize, usize, usize)> =
+            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
+                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
+                .iter()
+                .map(|v| {
+                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    (c, ci, cpi)
+                })
+                .collect();
         if path.is_empty() {
-            return Err(HwpError::RenderError("cell_path 가 비어있습니다".to_string()));
+            return Err(HwpError::RenderError(
+                "cell_path 가 비어있습니다".to_string(),
+            ));
         }
         let cell = self.resolve_cell_by_path(section_idx, parent_para_idx, &path)?;
         let last_cell_para_idx = path.last().unwrap().2;
@@ -2689,26 +2690,30 @@ impl DocumentCore {
         inner_control_idx: usize,
         props_json: &str,
     ) -> Result<String, HwpError> {
-        let path: Vec<(usize, usize, usize)> = serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
-            .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
-            .iter()
-            .map(|v| {
-                let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                (c, ci, cpi)
-            })
-            .collect();
+        let path: Vec<(usize, usize, usize)> =
+            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
+                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
+                .iter()
+                .map(|v| {
+                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    (c, ci, cpi)
+                })
+                .collect();
         if path.is_empty() {
-            return Err(HwpError::RenderError("cell_path 가 비어있습니다".to_string()));
+            return Err(HwpError::RenderError(
+                "cell_path 가 비어있습니다".to_string(),
+            ));
         }
         {
             let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
                 HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
             })?;
-            let mut current_para = section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
-                HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
-            })?;
+            let mut current_para =
+                section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
+                    HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+                })?;
             for (i, &(ctrl_idx, cell_idx, cell_para_idx)) in path.iter().enumerate() {
                 let ctrl = current_para.controls.get_mut(ctrl_idx).ok_or_else(|| {
                     HwpError::RenderError(format!("경로[{}]: controls[{}] 범위 초과", i, ctrl_idx))
@@ -2732,9 +2737,12 @@ impl DocumentCore {
                     ))
                 })?;
             }
-            let ctrl = current_para.controls.get_mut(inner_control_idx).ok_or_else(|| {
-                HwpError::RenderError(format!("셀 내 컨트롤 {} 범위 초과", inner_control_idx))
-            })?;
+            let ctrl = current_para
+                .controls
+                .get_mut(inner_control_idx)
+                .ok_or_else(|| {
+                    HwpError::RenderError(format!("셀 내 컨트롤 {} 범위 초과", inner_control_idx))
+                })?;
             let shape = match ctrl {
                 Control::Shape(s) => s.as_mut(),
                 _ => {
