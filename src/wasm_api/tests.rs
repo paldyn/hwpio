@@ -21566,3 +21566,186 @@ fn test_reflow_linesegs_empty_document_returns_zero() {
     let count = doc.reflow_linesegs();
     assert_eq!(count, 0);
 }
+
+/// [진단] #838 수정 파일 저장 + 메타데이터 덤프
+#[test]
+fn diag_issue838_save_and_inspect() {
+    use crate::model::control::FieldType;
+
+    let data = std::fs::read("samples/field-01.hwp").expect("읽기");
+    let mut doc = HwpDocument::from_bytes(&data).expect("파싱");
+
+    // 원본 para7 메타데이터
+    {
+        let para = &doc.document().sections[0].paragraphs[7];
+        eprintln!(
+            "[ORIG] p7 cc={} tl={}",
+            para.char_count,
+            para.text.chars().count()
+        );
+        eprintln!(
+            "[ORIG] p7 char_shapes: {:?}",
+            para.char_shapes
+                .iter()
+                .map(|cs| cs.start_pos)
+                .collect::<Vec<_>>()
+        );
+        eprintln!(
+            "[ORIG] p7 line_segs: {:?}",
+            para.line_segs
+                .iter()
+                .map(|ls| ls.text_start)
+                .collect::<Vec<_>>()
+        );
+        eprintln!("[ORIG] p7 char_offsets: {:?}", para.char_offsets);
+    }
+
+    let fields = doc.collect_all_fields();
+    let empty: Vec<_> = fields
+        .iter()
+        .filter(|f| f.field.field_type == FieldType::ClickHere && f.value.is_empty())
+        .collect();
+
+    doc.set_field_value_by_id(empty[0].field.field_id, "첫회사명 필드")
+        .expect("설정1");
+    doc.set_field_value_by_id(empty[1].field.field_id, "홍길동")
+        .expect("설정2");
+
+    {
+        let para = &doc.document().sections[0].paragraphs[7];
+        eprintln!(
+            "[MOD] p7 cc={} tl={} text={:?}",
+            para.char_count,
+            para.text.chars().count(),
+            para.text
+        );
+        eprintln!(
+            "[MOD] p7 char_shapes: {:?}",
+            para.char_shapes
+                .iter()
+                .map(|cs| cs.start_pos)
+                .collect::<Vec<_>>()
+        );
+        eprintln!(
+            "[MOD] p7 line_segs: {:?}",
+            para.line_segs
+                .iter()
+                .map(|ls| ls.text_start)
+                .collect::<Vec<_>>()
+        );
+        eprintln!("[MOD] p7 char_offsets: {:?}", para.char_offsets);
+        eprintln!(
+            "[MOD] p7 field_ranges: {:?}",
+            para.field_ranges
+                .iter()
+                .map(|fr| (fr.start_char_idx, fr.end_char_idx, fr.control_idx))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let saved = doc.export_hwp().expect("직렬화");
+    std::fs::create_dir_all("output").ok();
+    std::fs::write("output/field-01-modified.hwp", &saved).expect("저장");
+    eprintln!(
+        "[SAVE] output/field-01-modified.hwp ({} bytes)",
+        saved.len()
+    );
+}
+
+/// #838 회귀 테스트: 빈 ClickHere 필드 2개에 setFieldValue 후 직렬화 → 재파싱 왕복 검증
+#[test]
+fn test_issue838_two_field_setvalue_roundtrip() {
+    use crate::model::control::FieldType;
+
+    let data = std::fs::read("samples/field-01.hwp").expect("파일 읽기 실패");
+    let mut hwp_doc = HwpDocument::from_bytes(&data).expect("HwpDocument 생성 실패");
+
+    let fields = hwp_doc.collect_all_fields();
+    let empty: Vec<_> = fields
+        .iter()
+        .filter(|f| f.field.field_type == FieldType::ClickHere && f.value.is_empty())
+        .collect();
+    assert!(empty.len() >= 2, "최소 2개의 빈 ClickHere 필드 필요");
+
+    let id1 = empty[0].field.field_id;
+    let id2 = empty[1].field.field_id;
+
+    for pi in 7..=8 {
+        let para = &hwp_doc.document().sections[0].paragraphs[pi];
+        eprintln!(
+            "[PRE] p{}: cc={} tl={} text={:?} fr={:?}",
+            pi,
+            para.char_count,
+            para.text.chars().count(),
+            para.text,
+            para.field_ranges
+                .iter()
+                .map(|fr| (fr.start_char_idx, fr.end_char_idx))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    hwp_doc
+        .set_field_value_by_id(id1, "테스트회사")
+        .expect("필드1 설정 실패");
+    hwp_doc
+        .set_field_value_by_id(id2, "테스트작성자")
+        .expect("필드2 설정 실패");
+
+    for pi in 7..=8 {
+        let para = &hwp_doc.document().sections[0].paragraphs[pi];
+        eprintln!(
+            "[POST] p{}: cc={} tl={} text={:?} fr={:?} co_len={}",
+            pi,
+            para.char_count,
+            para.text.chars().count(),
+            para.text,
+            para.field_ranges
+                .iter()
+                .map(|fr| (fr.start_char_idx, fr.end_char_idx))
+                .collect::<Vec<_>>(),
+            para.char_offsets.len()
+        );
+        assert_eq!(
+            para.char_offsets.len(),
+            para.text.chars().count(),
+            "p{} char_offsets 길이 != text 길이",
+            pi
+        );
+    }
+
+    let saved = hwp_doc.export_hwp().expect("직렬화 실패");
+    let doc2 = HwpDocument::from_bytes(&saved).expect("재파싱 실패");
+
+    for pi in 7..=8 {
+        let para = &doc2.document().sections[0].paragraphs[pi];
+        eprintln!(
+            "[RELOAD] p{}: cc={} tl={} text={:?} fr={:?}",
+            pi,
+            para.char_count,
+            para.text.chars().count(),
+            para.text,
+            para.field_ranges
+                .iter()
+                .map(|fr| (fr.start_char_idx, fr.end_char_idx))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    let fields2 = doc2.collect_all_fields();
+    let f1 = fields2
+        .iter()
+        .find(|f| f.field.field_id == id1)
+        .expect("필드1 찾기");
+    let f2 = fields2
+        .iter()
+        .find(|f| f.field.field_id == id2)
+        .expect("필드2 찾기");
+    assert_eq!(f1.value, "테스트회사", "필드1 값 불일치");
+    assert_eq!(f2.value, "테스트작성자", "필드2 값 불일치");
+
+    let p7 = &doc2.document().sections[0].paragraphs[7];
+    assert!(p7.text.starts_with("회사명\t\t: "), "para7 라벨 손상");
+    let p8 = &doc2.document().sections[0].paragraphs[8];
+    assert!(p8.text.starts_with("작성자\t\t: "), "para8 라벨 손상");
+}

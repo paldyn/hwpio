@@ -334,48 +334,7 @@ impl DocumentCore {
             .ok_or_else(|| HwpError::InvalidField("field_range 인덱스 초과".into()))?
             .clone();
 
-        // ClickHere 빈 필드(start==end)에서 안내문이 필드 바로 앞에 있으면 삭제 (#838)
-        let start_idx = if fr.start_char_idx == fr.end_char_idx && fr.start_char_idx > 0 {
-            if let Some(Control::Field(field)) = para.controls.get(fr.control_idx) {
-                if field.field_type == FieldType::ClickHere {
-                    if let Some(guide) = field.guide_text() {
-                        let text_chars: Vec<char> = para.text.chars().collect();
-                        let guide_len = guide.chars().count();
-                        if guide_len > 0 && fr.start_char_idx >= guide_len {
-                            let guide_start = fr.start_char_idx - guide_len;
-                            let candidate: String =
-                                text_chars[guide_start..fr.start_char_idx].iter().collect();
-                            if candidate.trim_end() == guide || candidate == guide {
-                                para.delete_text_at(guide_start, guide_len);
-                                let shifted = guide_start;
-                                for other_fr in &mut para.field_ranges {
-                                    if other_fr.start_char_idx >= fr.start_char_idx {
-                                        other_fr.start_char_idx -= guide_len;
-                                    }
-                                    if other_fr.end_char_idx >= fr.start_char_idx {
-                                        other_fr.end_char_idx -= guide_len;
-                                    }
-                                }
-                                shifted
-                            } else {
-                                fr.start_char_idx
-                            }
-                        } else {
-                            fr.start_char_idx
-                        }
-                    } else {
-                        fr.start_char_idx
-                    }
-                } else {
-                    fr.start_char_idx
-                }
-            } else {
-                fr.start_char_idx
-            }
-        } else {
-            fr.start_char_idx
-        };
-
+        let start_idx = fr.start_char_idx;
         let count = fr.end_char_idx.saturating_sub(start_idx);
 
         // 기존 텍스트 삭제 (char_shapes, line_segs, range_tags 등 자동 시프트)
