@@ -347,14 +347,16 @@ impl DocumentCore {
             para.insert_text_at(start_idx, value);
         }
 
-        // field_ranges 갱신: start와 end 재설정
+        // field_ranges 갱신: start와 end를 명시적으로 재설정
         let new_end = start_idx + value.chars().count();
-        if let Some(current_fr) = para.field_ranges.get_mut(field_range_index) {
-            current_fr.start_char_idx = start_idx;
-            current_fr.end_char_idx = new_end;
-        }
+        let current_fr = para
+            .field_ranges
+            .get_mut(field_range_index)
+            .ok_or_else(|| HwpError::InvalidField("field_range 인덱스 초과".into()))?;
+        current_fr.start_char_idx = start_idx;
+        current_fr.end_char_idx = new_end;
 
-        // char_offsets 재생성 (FIELD_BEGIN/END 갭 보정)
+        // char_offsets 재생성: FIELD_BEGIN/END 갭, 탭 폭, UTF-16 code unit 크기 반영
         rebuild_char_offsets(para);
 
         Ok(())
