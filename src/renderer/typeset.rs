@@ -2756,7 +2756,12 @@ impl TypesetEngine {
                     if self.is_effective_tac_table(para, t, &fmt)
                         && self.tac_table_line_index(para, t, &fmt) == Some(0) =>
                 {
-                    Some(fmt.line_advance(0))
+                    Some(
+                        fmt.line_heights
+                            .first()
+                            .copied()
+                            .unwrap_or_else(|| fmt.line_advance(0)),
+                    )
                 }
                 _ => None,
             })
@@ -3187,7 +3192,12 @@ impl TypesetEngine {
             // 인코딩된 경우가 있다. 표 자체는 현재 페이지에 들어가고 post-text
             // 만 다음 페이지로 넘어가야 하는데, 문단 전체 height_for_fit으로
             // fit 판단하면 표까지 다음 페이지로 밀린다.
-            fmt.line_advance(0)
+            //
+            // 이때 fit 기준은 line_height만 사용한다. line_spacing까지 포함한
+            // line_advance를 쓰면 HWPX lineSeg가 `표줄 + 다음 텍스트줄`로
+            // 분리된 문서에서, 표 자체는 남은 영역에 들어가는데도 spacing 때문에
+            // 표가 다음 페이지로 밀린다(2025 donations HWPX pi=25).
+            fmt.line_heights[0]
         } else if fmt.total_height > 0.0 {
             // 단일 TAC: 호스트 문단의 height_for_fit 사용
             fmt.height_for_fit

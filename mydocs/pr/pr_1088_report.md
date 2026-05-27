@@ -121,7 +121,8 @@ tests/golden_svg/issue-157/page-1.svg
 src/renderer/typeset.rs
   - raw TAC bit가 없더라도, common.treat_as_char 이고 LINE_SEG line0 이 표 높이와
     일치하면 effective TAC 표로 취급
-  - line0 TAC 표 + line1 post-text 문단은 표 높이만 먼저 fit 판단
+  - line0 TAC 표 + line1 post-text 문단은 표 line_height만 먼저 fit 판단
+    (line_spacing은 뒤따르는 텍스트 줄과 함께 처리)
   - post-text 만 현재 페이지 잔여 영역에 들어가지 않을 때 다음 페이지로 분리
   - 이 분리는 line0 TAC 표 케이스에만 적용하여 복학원서 pi=16 PUA filler 표 회귀 방지
 ```
@@ -147,6 +148,31 @@ cargo clippy -- -D warnings: success
 docker compose --env-file .env.docker run --rm wasm: success
 ```
 
+CI 후속 보정:
+
+```text
+devel push 후 CI run 26487958667에서 tests/issue_554.rs::task554_no_regression_2025_donations_hwpx 실패.
+samples/2025년 기부·답례품 실적 지자체 보고서_양식.hwpx 의 3페이지 pi=25 표가
+다음 페이지로 밀려 page_count 30 -> 31 회귀.
+
+원인:
+  HWPX lineSeg는 line0=표줄(line_height=표 높이+outer margin),
+  line1=post-text로 분리되어 있었지만, fit 판단에 line_advance(0)
+  (=line_height + line_spacing)를 사용해 표 자체는 남은 영역에 들어가는데도
+  spacing 때문에 페이지를 넘겼다.
+
+보정:
+  line0 TAC 표 단독 fit 판단은 line_height만 사용하고,
+  line_spacing/post-text는 후속 텍스트 줄 처리에 맡긴다.
+
+검증:
+  cargo test --test issue_554: 12 passed
+  cargo test --test svg_snapshot: 8 passed
+  cargo test: success
+  cargo fmt --all -- --check: success
+  cargo clippy -- -D warnings: success
+```
+
 작업지시자 시각 판정:
 
 ```text
@@ -158,8 +184,9 @@ docker compose --env-file .env.docker run --rm wasm: success
 이전 보고서의 "회귀 1건 확정" 및 "수정 요청" 판단은 철회한다.
 PR #1088의 핵심 변경은 한컴 PDF 기준과 정합하며, maintainer 보강
 패치 후 `hwp-multi-001.hwp`의 `pi=14` vpos 회귀와 3페이지 `pi=46`
-표 페이지네이션 회귀도 해소되었다. WASM 빌드와 작업지시자 시각
-판정도 통과했다.
+표 페이지네이션 회귀도 해소되었다. 이후 CI에서 드러난 `2025 donations`
+HWPX page_count 회귀도 line0 TAC fit 기준을 line_height로 좁혀 해소했다.
+WASM 빌드와 작업지시자 시각 판정도 통과했다.
 
 남은 게이트:
 

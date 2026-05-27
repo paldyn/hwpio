@@ -234,7 +234,7 @@ line1: "□ 지역별 동향" post-text
 src/renderer/typeset.rs
   - raw attr bit0 없이 common.treat_as_char=true 인 표도 LINE_SEG line0
     높이와 표 높이가 일치하면 effective TAC 로 취급
-  - line0 TAC 표는 표 줄 높이만 fit 판단에 사용
+  - line0 TAC 표는 표 line_height만 fit 판단에 사용
   - 뒤따르는 post-text 는 필요 시 다음 페이지로 분리
   - line0 TAC 에만 적용하여 복학원서 pi=16 PUA filler 표/도장 회귀 방지
 ```
@@ -254,6 +254,30 @@ cargo test --lib: 1405 passed, 0 failed, 6 ignored
 cargo clippy -- -D warnings: success
 docker compose --env-file .env.docker run --rm wasm: success
 작업지시자 시각 판정: 통과
+```
+
+CI 후속 확인:
+
+```text
+devel push 후 CI run 26487958667:
+  tests/issue_554.rs::task554_no_regression_2025_donations_hwpx 실패
+  expected page_count=30, actual=31
+
+원인:
+  samples/2025년 기부·답례품 실적 지자체 보고서_양식.hwpx 의 3페이지 pi=25는
+  HWPX lineSeg상 line0=표줄, line1=post-text 구조다.
+  line0 TAC 표가 남은 영역에 들어가지만 line_advance(0)
+  (=line_height + line_spacing)를 fit 판단에 사용해 표가 다음 페이지로 밀렸다.
+
+조치:
+  line0 TAC 표 단독 fit 판단은 line_height만 사용하도록 좁힘.
+
+재검증:
+  cargo test --test issue_554: 12 passed
+  cargo test --test svg_snapshot: 8 passed
+  cargo test: success
+  cargo fmt --all -- --check: success
+  cargo clippy -- -D warnings: success
 ```
 
 남은 절차는 다음과 같다.
