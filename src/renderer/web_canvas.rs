@@ -16,6 +16,9 @@ use super::layer_renderer::{LayerRenderResult, LayerRenderer};
 use super::pua_oldhangul::map_pua_old_hangul;
 use super::render_tree::{
     BoundingBox, FormObjectNode, PageRenderTree, RenderNode, RenderNodeType, ShapeTransform,
+    LEGACY_IMAGE_WATERMARK_OPACITY, REAL_PICTURE_WATERMARK_BRIGHTNESS,
+    REAL_PICTURE_WATERMARK_CONTRAST, REAL_PICTURE_WATERMARK_FILL_OPACITY,
+    REAL_PICTURE_WATERMARK_PAGE_OPACITY, REAL_PICTURE_WATERMARK_SATURATION,
 };
 use super::{
     clamp_tab_leader_end_x, GradientFillInfo, LineStyle, PathCommand, PatternFillInfo, Renderer,
@@ -135,6 +138,16 @@ fn compose_image_filter(
     } else {
         Some(parts.join(" "))
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn real_picture_watermark_tone_filter() -> String {
+    format!(
+        "saturate({:.6}%) contrast({:.6}%) brightness({:.6}%)",
+        REAL_PICTURE_WATERMARK_SATURATION * 100.0,
+        REAL_PICTURE_WATERMARK_CONTRAST * 100.0,
+        REAL_PICTURE_WATERMARK_BRIGHTNESS * 100.0
+    )
 }
 
 /// 이미지 데이터에서 픽셀 크기(width, height)를 파싱한다.
@@ -359,13 +372,61 @@ impl WebCanvasRenderer {
                 }
                 // 이미지 배경
                 if let Some(img) = &bg.image {
-                    self.draw_image(
-                        &img.data,
-                        node.bbox.x,
-                        node.bbox.y,
-                        node.bbox.width,
-                        node.bbox.height,
+                    // PageBackground RealPic 워터마크 프리셋은 한컴의 색상 있는 배경 워터마크에 맞춰
+                    // 색감을 살린 뒤 반투명으로 합성한다.
+                    let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
+                    let is_watermark_image =
+                        !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
+                            && (img.brightness != 0 || img.contrast != 0);
+                    let mut baked_color_watermark = false;
+                    let render_data: std::borrow::Cow<[u8]> = if preserve_color_watermark {
+                        match crate::renderer::image_resolver::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
+                            &img.data,
+                        ) {
+                            Some(png) => {
+                                baked_color_watermark = true;
+                                std::borrow::Cow::Owned(png)
+                            }
+                            None => std::borrow::Cow::Borrowed(img.data.as_slice()),
+                        }
+                    } else {
+                        std::borrow::Cow::Borrowed(img.data.as_slice())
+                    };
+                    let filter_str = if preserve_color_watermark {
+                        if baked_color_watermark {
+                            None
+                        } else {
+                            Some(real_picture_watermark_tone_filter())
+                        }
+                    } else {
+                        compose_image_filter(img.effect, img.brightness, img.contrast)
+                    };
+                    if let Some(ref f) = filter_str {
+                        self.ctx.set_filter(f);
+                    }
+                    let needs_watermark_opacity = preserve_color_watermark || is_watermark_image;
+                    if needs_watermark_opacity {
+                        let opacity = if preserve_color_watermark {
+                            REAL_PICTURE_WATERMARK_PAGE_OPACITY
+                        } else {
+                            LEGACY_IMAGE_WATERMARK_OPACITY
+                        };
+                        self.ctx.set_global_alpha(opacity);
+                    }
+                    self.draw_image_with_fill_mode(
+                        render_data.as_ref(),
+                        &node.bbox,
+                        Some(img.fill_mode),
+                        None,
+                        None,
+                        None,
                     );
+                    if needs_watermark_opacity {
+                        self.ctx.set_global_alpha(1.0);
+                    }
+                    if filter_str.is_some() {
+                        self.ctx.set_filter("none");
+                    }
                 }
             }
             RenderNodeType::TextRun(run) => {
@@ -556,17 +617,29 @@ impl WebCanvasRenderer {
                 if let Some(ref data) = img.data {
                     // Task #516: 그림 효과 / 밝기 / 대비 / 워터마크를 CSS filter 로 적용
                     // [Issue #677] 한컴 워터마크 모드 (effect != RealPic + brightness/contrast 비-zero) 는
-                    // 저장값 그대로 brightness/contrast 적용 + opacity 0.5 반투명 영역.
+                    // 저장값 그대로 brightness/contrast 적용 + legacy opacity 반투명 영역.
                     // PDF 정답지 영역의 시각 — 진한 회색 워터마크 + 본문 텍스트가 워터마크
                     // 위로 가독 정합. SVG 영역과 동기.
+                    let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
                     let is_watermark_image =
                         !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
                             && (img.brightness != 0 || img.contrast != 0);
                     let mut baked_watermark = false;
-                    let render_data: std::borrow::Cow<[u8]> = if is_watermark_image
-                        && crate::renderer::svg::detect_image_mime_type(data) == "image/jpeg"
+                    let render_data: std::borrow::Cow<[u8]> = if preserve_color_watermark {
+                        match crate::renderer::image_resolver::real_picture_watermark_fill_bytes_to_hancom_tone_png_bytes(
+                            data,
+                        ) {
+                            Some(png) => {
+                                baked_watermark = true;
+                                std::borrow::Cow::Owned(png)
+                            }
+                            None => std::borrow::Cow::Borrowed(data.as_slice()),
+                        }
+                    } else if is_watermark_image
+                        && crate::renderer::image_resolver::detect_image_mime_type(data)
+                            == "image/jpeg"
                     {
-                        match crate::renderer::svg::watermark_jpeg_bytes_to_hancom_baked_png_bytes(
+                        match crate::renderer::image_resolver::watermark_jpeg_bytes_to_hancom_baked_png_bytes(
                             data,
                         ) {
                             Some(png) => {
@@ -580,14 +653,23 @@ impl WebCanvasRenderer {
                     };
                     let filter_str = if baked_watermark {
                         None
+                    } else if preserve_color_watermark {
+                        Some(real_picture_watermark_tone_filter())
                     } else {
                         compose_image_filter(img.effect, img.brightness, img.contrast)
                     };
                     if let Some(ref f) = filter_str {
                         self.ctx.set_filter(f);
                     }
-                    if is_watermark_image && !baked_watermark {
-                        self.ctx.set_global_alpha(0.17);
+                    let needs_watermark_opacity =
+                        preserve_color_watermark || (is_watermark_image && !baked_watermark);
+                    if needs_watermark_opacity {
+                        let opacity = if preserve_color_watermark {
+                            REAL_PICTURE_WATERMARK_FILL_OPACITY
+                        } else {
+                            LEGACY_IMAGE_WATERMARK_OPACITY
+                        };
+                        self.ctx.set_global_alpha(opacity);
                     }
                     self.draw_image_with_fill_mode(
                         render_data.as_ref(),
@@ -598,7 +680,7 @@ impl WebCanvasRenderer {
                         img.original_size_hu,
                     );
                     // 다음 그리기 작업에 영향 없도록 reset
-                    if is_watermark_image && !baked_watermark {
+                    if needs_watermark_opacity {
                         self.ctx.set_global_alpha(1.0);
                     }
                     if filter_str.is_some() {
@@ -2453,7 +2535,7 @@ impl Renderer for WebCanvasRenderer {
                     None => (std::borrow::Cow::Borrowed(data), mime_type),
                 }
             } else if mime_type == "image/x-pcx" {
-                match crate::renderer::svg::pcx_bytes_to_png_bytes(data) {
+                match crate::renderer::image_resolver::pcx_bytes_to_png_bytes(data) {
                     Some(png_bytes) => (std::borrow::Cow::Owned(png_bytes), "image/png"),
                     None => (std::borrow::Cow::Borrowed(data), mime_type),
                 }
