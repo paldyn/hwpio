@@ -6307,4 +6307,133 @@ mod issue_1151_v2_tac_toggle_tests {
         let seg = LineSeg::default();
         assert_eq!(seg.line_height, 0);
     }
+
+    // ═══════════════════════════════════════════════════════════════════
+    //  통합 검증 (Stage 2): 한컴 산출물 정합
+    //
+    //  samples/tac-verify/scenario-{a,b,c,d}-before.hwp 를 rhwp 가 파싱한 후
+    //  set_picture_properties_native 로 tac false→true 토글한 결과가
+    //  scenario-{a,b,c,d}-after.hwp 의 model 과 dump 동치인지 검증한다.
+    //  v2 fix 가 만든 model 이 한컴이 만든 model 과 양방향 정합임을 보장.
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// 양방향 정합 검증의 공통 단언 — paragraph 0.0 의 picture / line_segs 비교.
+    fn assert_toggle_matches_hancom(scenario: &str) {
+        let before_bytes =
+            std::fs::read(format!("samples/tac-verify/scenario-{scenario}-before.hwp"))
+                .expect("read before.hwp");
+        let after_bytes =
+            std::fs::read(format!("samples/tac-verify/scenario-{scenario}-after.hwp"))
+                .expect("read after.hwp");
+
+        let before_doc = crate::parser::parse_hwp(&before_bytes).expect("parse before");
+        let after_doc = crate::parser::parse_hwp(&after_bytes).expect("parse after");
+
+        let mut core = DocumentCore::new_empty();
+        core.set_document(before_doc);
+
+        // picture 위치 찾기 (paragraph 0.0 의 첫 Picture control)
+        let pic_ctrl_idx = core.document.sections[0].paragraphs[0]
+            .controls
+            .iter()
+            .position(|c| matches!(c, Control::Picture(_)))
+            .unwrap_or_else(|| panic!("scenario-{scenario}-before: no Picture control"));
+
+        core.set_picture_properties_native(0, 0, pic_ctrl_idx, r#"{"treatAsChar":true}"#)
+            .expect("toggle");
+
+        // 토글된 picture
+        let toggled_para = &core.document.sections[0].paragraphs[0];
+        let toggled_pic = match &toggled_para.controls[pic_ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!("not Picture after toggle"),
+        };
+
+        // 한컴 after 의 picture
+        let after_para = &after_doc.sections[0].paragraphs[0];
+        let after_pic_ctrl_idx = after_para
+            .controls
+            .iter()
+            .position(|c| matches!(c, Control::Picture(_)))
+            .unwrap_or_else(|| panic!("scenario-{scenario}-after: no Picture control"));
+        let after_pic = match &after_para.controls[after_pic_ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!(),
+        };
+
+        // (a) picture 4 필드 비교
+        assert_eq!(
+            toggled_pic.common.treat_as_char, after_pic.common.treat_as_char,
+            "scenario-{scenario}: treat_as_char mismatch"
+        );
+        assert_eq!(
+            toggled_pic.common.horizontal_offset, after_pic.common.horizontal_offset,
+            "scenario-{scenario}: horizontal_offset mismatch"
+        );
+        assert_eq!(
+            toggled_pic.common.vertical_offset, after_pic.common.vertical_offset,
+            "scenario-{scenario}: vertical_offset mismatch"
+        );
+        assert_eq!(
+            toggled_pic.common.horz_rel_to as u8, after_pic.common.horz_rel_to as u8,
+            "scenario-{scenario}: horz_rel_to mismatch"
+        );
+        assert_eq!(
+            toggled_pic.common.vert_rel_to as u8, after_pic.common.vert_rel_to as u8,
+            "scenario-{scenario}: vert_rel_to mismatch"
+        );
+
+        // (b) line_segs[0] 비교
+        let toggled_seg = &toggled_para.line_segs[0];
+        let after_seg = &after_para.line_segs[0];
+        assert_eq!(
+            toggled_seg.line_height, after_seg.line_height,
+            "scenario-{scenario}: line_height mismatch"
+        );
+        assert_eq!(
+            toggled_seg.text_height, after_seg.text_height,
+            "scenario-{scenario}: text_height mismatch"
+        );
+        assert_eq!(
+            toggled_seg.baseline_distance, after_seg.baseline_distance,
+            "scenario-{scenario}: baseline_distance mismatch (round(lh*0.85) 정합)"
+        );
+
+        // (c) paragraph 수 / picture 위치 불변
+        assert_eq!(
+            core.document.sections[0].paragraphs.len(),
+            after_doc.sections[0].paragraphs.len(),
+            "scenario-{scenario}: paragraph count mismatch"
+        );
+        assert_eq!(
+            pic_ctrl_idx, after_pic_ctrl_idx,
+            "scenario-{scenario}: picture control_idx mismatch"
+        );
+
+        // (d) paragraph.text 불변
+        assert_eq!(
+            toggled_para.text, after_para.text,
+            "scenario-{scenario}: paragraph.text mismatch"
+        );
+    }
+
+    #[test]
+    fn integration_tac_toggle_matches_hancom_scenario_a() {
+        assert_toggle_matches_hancom("a");
+    }
+
+    #[test]
+    fn integration_tac_toggle_matches_hancom_scenario_b() {
+        assert_toggle_matches_hancom("b");
+    }
+
+    #[test]
+    fn integration_tac_toggle_matches_hancom_scenario_c() {
+        assert_toggle_matches_hancom("c");
+    }
+
+    #[test]
+    fn integration_tac_toggle_matches_hancom_scenario_d() {
+        assert_toggle_matches_hancom("d");
+    }
 }
