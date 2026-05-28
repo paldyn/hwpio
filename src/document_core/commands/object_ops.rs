@@ -1386,11 +1386,18 @@ impl DocumentCore {
     }
 
     /// 커서 위치에 그림을 삽입한다 (네이티브).
+    ///
+    /// - `cell_path` 가 비어있으면 본문 paragraph 에 inline (treat_as_char=true) 삽입.
+    /// - `cell_path` 가 있으면 표 셀 영역에 floating picture (tac=false, wrap=Square,
+    ///   Page-relative offset) 로 삽입한다. 셀 자체는 비어있는 채로 유지되어 cursor
+    ///   클릭이 정상 동작 (#1151). 한컴 2022 의 셀 이미지 삽입 패턴과 동일
+    ///   (incellpicture.hwp 검증).
     pub fn insert_picture_native(
         &mut self,
         section_idx: usize,
         para_idx: usize,
         char_offset: usize,
+        cell_path: &[(usize, usize, usize)],
         image_data: &[u8],
         width: u32,
         height: u32,
@@ -1424,6 +1431,10 @@ impl DocumentCore {
                 "이미지 데이터가 비어 있습니다".to_string(),
             ));
         }
+        // cell_path 가 있으면 경로가 유효한지 사전 검증.
+        if !cell_path.is_empty() {
+            self.resolve_cell_by_path(section_idx, para_idx, cell_path)?;
+        }
 
         // --- 1. BinDataContent 추가 ---
         let next_id = self.document.bin_data_content.len() as u16 + 1;
@@ -1449,6 +1460,101 @@ impl DocumentCore {
         });
         self.document.doc_info.raw_stream = None; // DocInfo 재직렬화
 
+        // --- 공통 자원 ---
+        let shape_attr = ShapeComponentAttr {
+            original_width: width,
+            original_height: height,
+            current_width: width,
+            current_height: height,
+            local_file_version: 1,
+            render_sx: 1.0,
+            render_sy: 1.0,
+            ..Default::default()
+        };
+        let bx = [0i32, 0, width as i32, 0];
+        let by = [width as i32, height as i32, 0, height as i32];
+        let crop = CropInfo {
+            left: 0,
+            top: 0,
+            right: (natural_width_px * 75) as i32,
+            bottom: (natural_height_px * 75) as i32,
+        };
+        let image_attr = ImageAttr {
+            bin_data_id: next_id,
+            brightness: 0,
+            contrast: 0,
+            effect: ImageEffect::RealPic,
+            external_path: None,
+        };
+
+        if !cell_path.is_empty() {
+            // === 셀 floating picture 분기 (#1151 v2 — 한컴 패턴 정합) ===
+            // Picture 는 표가 들어있는 paragraph 의 sibling control 로 append 된다.
+            // tac=false, wrap=Square (어울림), horz/vert_rel_to=Page, offset 은 셀의 page bbox 좌상단.
+            let (offset_x_hu, offset_y_hu) =
+                self.compute_cell_page_offset(section_idx, para_idx, cell_path);
+
+            // CommonObjAttr (floating):
+            //   bits 3-4=vert_rel_to(1=Page), bits 8-10=horz_rel_to(1=Page),
+            //   bits 15-17=width_criterion(4=Absolute), bits 18-20=height_criterion(2=Absolute),
+            //   bits 21-23=text_wrap(0=Square)
+            let common_attr: u32 = (1 << 3) | (1 << 8) | (4 << 15) | (2 << 18);
+            let common = CommonObjAttr {
+                ctrl_id: 0x67736F20,
+                attr: common_attr,
+                treat_as_char: false,
+                vert_rel_to: VertRelTo::Page,
+                horz_rel_to: HorzRelTo::Page,
+                text_wrap: crate::model::shape::TextWrap::Square,
+                horizontal_offset: offset_x_hu.max(0) as u32,
+                vertical_offset: offset_y_hu.max(0) as u32,
+                width,
+                height,
+                z_order: 1,
+                description: description.to_string(),
+                ..Default::default()
+            };
+            let pic = Picture {
+                common,
+                shape_attr,
+                border_x: bx,
+                border_y: by,
+                crop,
+                image_attr,
+                ..Default::default()
+            };
+
+            // table 같은 paragraph 의 sibling control 로 append.
+            self.document.sections[section_idx].raw_stream = None;
+            let parent = &mut self.document.sections[section_idx].paragraphs[para_idx];
+            let new_ctrl_idx = parent.controls.len();
+            parent.controls.push(Control::Picture(Box::new(pic)));
+            parent.ctrl_data_records.push(None);
+
+            // outer table dirty 마킹 (재측정 유도)
+            let outer_ctrl = cell_path[0].0;
+            if let Some(Control::Table(t)) = self.document.sections[section_idx].paragraphs
+                [para_idx]
+                .controls
+                .get_mut(outer_ctrl)
+            {
+                t.dirty = true;
+            }
+            self.mark_section_dirty(section_idx);
+            self.paginate_if_needed();
+
+            self.event_log.push(DocumentEvent::PictureInserted {
+                section: section_idx,
+                para: para_idx,
+            });
+            return Ok(super::super::helpers::json_ok_with(&format!(
+                "\"paraIdx\":{},\"controlIdx\":{}",
+                para_idx, new_ctrl_idx
+            )));
+        }
+
+        // === 본문 inline picture 분기 (기존 동작 유지) ===
+
         // --- 3. Picture 컨트롤 생성 ---
         // CommonObjAttr: treat_as_char, vert_rel_to=Para, horz_rel_to=Column,
         // width_criterion=absolute(4), height_criterion=absolute(2)
@@ -1466,44 +1572,13 @@ impl DocumentCore {
             ..Default::default()
         };
 
-        let shape_attr = ShapeComponentAttr {
-            original_width: width,
-            original_height: height,
-            current_width: width,
-            current_height: height,
-            local_file_version: 1,
-            render_sx: 1.0,
-            render_sy: 1.0,
-            ..Default::default()
-        };
-
-        // border_x/border_y: 4 꼭짓점 좌표 (x,y 쌍으로 연속 저장)
-        // [tl.x, tl.y, tr.x, tr.y], [br.x, br.y, bl.x, bl.y]
-        let bx = [0i32, 0, width as i32, 0];
-        let by = [width as i32, height as i32, 0, height as i32];
-
-        // crop: 비크롭 시 이미지 원본 범위 (원본 크기 = 디스플레이 크기일 때)
-        // crop: 이미지 원본 픽셀 크기 × 75 (HWPUNIT/pixel at 96DPI)
-        let crop = CropInfo {
-            left: 0,
-            top: 0,
-            right: (natural_width_px * 75) as i32,
-            bottom: (natural_height_px * 75) as i32,
-        };
-
         let pic = Picture {
             common,
             shape_attr,
             border_x: bx,
             border_y: by,
             crop,
-            image_attr: ImageAttr {
-                bin_data_id: next_id,
-                brightness: 0,
-                contrast: 0,
-                effect: ImageEffect::RealPic,
-                external_path: None,
-            },
+            image_attr,
             ..Default::default()
         };
 
@@ -1568,23 +1643,21 @@ impl DocumentCore {
                 .paragraphs
                 .insert(para_idx, pic_para);
             insert_para_idx = para_idx;
+        } else if char_offset > 0 && !para.text.is_empty() {
+            let new_para =
+                self.document.sections[section_idx].paragraphs[para_idx].split_at(char_offset);
+            self.document.sections[section_idx]
+                .paragraphs
+                .insert(para_idx + 1, new_para);
+            self.document.sections[section_idx]
+                .paragraphs
+                .insert(para_idx + 1, pic_para);
+            insert_para_idx = para_idx + 1;
         } else {
-            if char_offset > 0 && !para.text.is_empty() {
-                let new_para =
-                    self.document.sections[section_idx].paragraphs[para_idx].split_at(char_offset);
-                self.document.sections[section_idx]
-                    .paragraphs
-                    .insert(para_idx + 1, new_para);
-                self.document.sections[section_idx]
-                    .paragraphs
-                    .insert(para_idx + 1, pic_para);
-                insert_para_idx = para_idx + 1;
-            } else {
-                self.document.sections[section_idx]
-                    .paragraphs
-                    .insert(para_idx + 1, pic_para);
-                insert_para_idx = para_idx + 1;
-            }
+            self.document.sections[section_idx]
+                .paragraphs
+                .insert(para_idx + 1, pic_para);
+            insert_para_idx = para_idx + 1;
         }
 
         // 그림 아래에 빈 문단 추가
@@ -1632,6 +1705,92 @@ impl DocumentCore {
             "\"paraIdx\":{},\"controlIdx\":0",
             insert_para_idx
         )))
+    }
+
+    /// 표 셀의 page-relative 좌상단 좌표를 HWPUNIT 단위로 계산 (#1151 floating).
+    ///
+    /// render tree 를 순회하여 cell_path 와 매칭되는 TableCell 노드를 찾고
+    /// bbox.x / bbox.y (px) 를 HWPUNIT 으로 환산 (× 75).
+    ///
+    /// 매칭 실패 / 페이지 미빌드 시 (0, 0) fallback — picture 가 페이지 좌상단에
+    /// 떠도 사용자가 드래그로 위치 조정 가능.
+    pub(crate) fn compute_cell_page_offset(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
+    ) -> (i32, i32) {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+
+        if cell_path.is_empty() {
+            return (0, 0);
+        }
+
+        fn matches_cell_run(
+            node: &RenderNode,
+            parent_para: usize,
+            path: &[(usize, usize, usize)],
+        ) -> bool {
+            if let RenderNodeType::TextRun(ref tr) = node.node_type {
+                return tr.cell_context.as_ref().is_some_and(|ctx| {
+                    ctx.parent_para_index == parent_para
+                        && ctx.path.len() == path.len()
+                        && ctx
+                            .path
+                            .iter()
+                            .zip(path.iter())
+                            .all(|(a, b)| a.control_index == b.0 && a.cell_index == b.1)
+                });
+            }
+            for child in &node.children {
+                if matches!(child.node_type, RenderNodeType::Table(_)) {
+                    continue;
+                }
+                if matches_cell_run(child, parent_para, path) {
+                    return true;
+                }
+            }
+            false
+        }
+
+        fn find_cell(
+            node: &RenderNode,
+            parent_para: usize,
+            path: &[(usize, usize, usize)],
+        ) -> Option<(f64, f64)> {
+            if let RenderNodeType::Table(_) = node.node_type {
+                if matches_cell_run(node, parent_para, path) {
+                    let target_cell = path.last().unwrap().1;
+                    for child in node.children.iter() {
+                        if let RenderNodeType::TableCell(ref tc) = child.node_type {
+                            if tc.model_cell_index == Some(target_cell as u32) {
+                                return Some((child.bbox.x, child.bbox.y));
+                            }
+                        }
+                    }
+                }
+            }
+            for child in &node.children {
+                if let Some(found) = find_cell(child, parent_para, path) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+
+        let total_pages = self.page_count();
+        for p in 0..total_pages {
+            if let Ok(tree) = self.build_page_tree(p) {
+                if let Some((px, py)) = find_cell(&tree.root, parent_para_idx, cell_path) {
+                    // px → HWPUNIT (1px = 75 HWPUNIT at 96 DPI 가정).
+                    // 단, section_idx 가 의미 있는 단위 정합을 위해 section 자체의
+                    // 보정은 호출 측 (Picture.horz/vert_rel_to=Page) 가 처리.
+                    let _ = section_idx;
+                    return ((px * 75.0) as i32, (py * 75.0) as i32);
+                }
+            }
+        }
+        (0, 0)
     }
 
     /// 표의 모든 셀 bbox를 반환한다 (네이티브).
@@ -5502,5 +5661,181 @@ impl crate::document_core::DocumentCore {
             "\"controlIdx\":{}",
             insert_idx
         )))
+    }
+}
+
+#[cfg(test)]
+mod issue_1151_cell_picture_insert_tests {
+    //! Issue #1151: 표 셀 안 이미지 삽입이 항상 표 밖 본문 문단에 들어가는 결함.
+    //!
+    //! v2 설계 — 한컴 정합 floating picture 접근:
+    //! 셀 안 삽입 (cell_path 비어있지 않음) 시 picture 는 셀 내부 paragraph 에
+    //! inline 삽입되지 않고, 표가 있는 같은 paragraph 의 sibling control 로
+    //! floating (tac=false) 삽입된다. 셀 자체는 비어있는 채로 유지되어 사용자가
+    //! 클릭으로 cursor 를 셀에 위치시킬 수 있다.
+
+    use super::*;
+    use crate::model::document::{Document, Section, SectionDef};
+    use crate::model::page::PageDef;
+
+    fn make_test_core() -> DocumentCore {
+        let mut doc = Document::default();
+        doc.sections.push(Section {
+            section_def: SectionDef {
+                page_def: PageDef {
+                    width: 59528,
+                    height: 84188,
+                    margin_left: 8504,
+                    margin_right: 8504,
+                    margin_top: 5668,
+                    margin_bottom: 4252,
+                    margin_header: 4252,
+                    margin_footer: 4252,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            paragraphs: vec![Paragraph::default()],
+            raw_stream: None,
+        });
+        let mut core = DocumentCore::new_empty();
+        core.set_document(doc);
+        core
+    }
+
+    fn minimal_png() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x00, 0x00, 0x00,
+            0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]
+    }
+
+    fn parse_idx(res: &str, key: &str) -> usize {
+        res.split(&format!("\"{}\":", key))
+            .nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("missing {key} in {res}"))
+    }
+
+    #[test]
+    fn issue1151_insert_picture_into_table_cell_is_floating_sibling() {
+        let mut core = make_test_core();
+
+        // 1×1 표 생성
+        let table_res = core
+            .create_table_native(0, 0, 0, 1, 1)
+            .expect("create 1x1 table");
+        let table_para_idx = parse_idx(&table_res, "paraIdx");
+        let table_ctrl_idx = parse_idx(&table_res, "controlIdx");
+
+        let cell_path: Vec<(usize, usize, usize)> = vec![(table_ctrl_idx, 0, 0)];
+        let image = minimal_png();
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            5000,
+            5000,
+            1,
+            1,
+            "png",
+            "test",
+        )
+        .expect("insert picture (floating)");
+
+        // 셀 안은 그대로 비어있어야 한다 (floating 은 셀에 들어가지 않음).
+        let table_ctrl =
+            &core.document.sections[0].paragraphs[table_para_idx].controls[table_ctrl_idx];
+        let table = match table_ctrl {
+            Control::Table(t) => t,
+            _ => panic!("expected Control::Table"),
+        };
+        let cell0_para0 = &table.cells[0].paragraphs[0];
+        assert!(
+            cell0_para0
+                .controls
+                .iter()
+                .all(|c| !matches!(c, Control::Picture(_))),
+            "cell 안에 picture 가 들어가면 안 된다 (floating 방식). got: {:?}",
+            cell0_para0.controls
+        );
+
+        // table 같은 paragraph 의 sibling control 로 Picture 가 존재해야 한다.
+        let parent_para = &core.document.sections[0].paragraphs[table_para_idx];
+        let picture = parent_para
+            .controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Picture(p) => Some(p.as_ref()),
+                _ => None,
+            })
+            .expect("expected sibling Picture in parent paragraph");
+
+        // floating 속성 검증
+        assert!(
+            !picture.common.treat_as_char,
+            "floating picture 는 treat_as_char=false 여야 한다"
+        );
+        assert!(
+            matches!(
+                picture.common.text_wrap,
+                crate::model::shape::TextWrap::Square
+            ),
+            "floating picture wrap=Square (어울림) 이어야 한다. got: {:?}",
+            picture.common.text_wrap
+        );
+    }
+
+    #[test]
+    fn issue1151_insert_picture_body_keeps_existing_inline_behavior() {
+        let mut core = make_test_core();
+        let image = minimal_png();
+        core.insert_picture_native(
+            0,
+            0,
+            0,
+            &[], // 빈 cell_path → 본문 inline (기존)
+            &image,
+            5000,
+            5000,
+            1,
+            1,
+            "png",
+            "test",
+        )
+        .expect("insert picture body");
+
+        let body_para = &core.document.sections[0].paragraphs[0];
+        let pic_in_body = body_para.controls.iter().find_map(|c| match c {
+            Control::Picture(p) => Some(p.as_ref()),
+            _ => None,
+        });
+        let picture = pic_in_body.expect("expected Picture in body paragraph");
+        assert!(
+            picture.common.treat_as_char,
+            "본문 picture 는 기존대로 inline (treat_as_char=true)"
+        );
+    }
+
+    #[test]
+    fn issue1151_invalid_cell_path_returns_error() {
+        let mut core = make_test_core();
+        let _ = core
+            .create_table_native(0, 0, 0, 1, 1)
+            .expect("create table");
+        let bad_path: Vec<(usize, usize, usize)> = vec![(0, 5, 0)]; // cell 5 는 1×1 표에 없음
+        let image = minimal_png();
+        let res =
+            core.insert_picture_native(0, 0, 0, &bad_path, &image, 5000, 5000, 1, 1, "png", "test");
+        assert!(
+            res.is_err(),
+            "out-of-range cell path → Err 기대, got {res:?}"
+        );
     }
 }

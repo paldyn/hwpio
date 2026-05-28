@@ -2186,13 +2186,20 @@ impl HwpDocument {
     /// width, height: HWPUNIT 단위 크기
     /// extension: 파일 확장자 (jpg, png 등)
     ///
-    /// 반환: JSON `{"ok":true,"paraIdx":<N>,"controlIdx":0}`
+    /// 반환:
+    /// - 본문 inline: `{"ok":true,"paraIdx":<N>,"controlIdx":0}`
+    /// - 셀 floating (#1151): `{"ok":true,"paraIdx":<table_para>,"controlIdx":<new_sibling_idx>}`
+    ///
+    /// `cell_path_json` 이 빈 문자열 또는 `"[]"` 면 본문 inline 삽입. 그 외에는
+    /// 표 셀 영역에 floating picture (한컴 정합) 로 삽입한다.
+    /// 예: `[{"controlIndex":0,"cellIndex":2,"cellParaIndex":0}]`
     #[wasm_bindgen(js_name = insertPicture)]
     pub fn insert_picture(
         &mut self,
         section_idx: u32,
         para_idx: u32,
         char_offset: u32,
+        cell_path_json: &str,
         image_data: &[u8],
         width: u32,
         height: u32,
@@ -2201,10 +2208,17 @@ impl HwpDocument {
         extension: &str,
         description: &str,
     ) -> Result<String, JsValue> {
+        let cell_path: Vec<(usize, usize, usize)> =
+            if cell_path_json.is_empty() || cell_path_json == "[]" {
+                Vec::new()
+            } else {
+                DocumentCore::parse_cell_path(cell_path_json).map_err(JsValue::from)?
+            };
         self.insert_picture_native(
             section_idx as usize,
             para_idx as usize,
             char_offset as usize,
+            &cell_path,
             image_data,
             width,
             height,
