@@ -245,8 +245,32 @@ impl DocumentCore {
                 ))
             }
         };
+        // [Task #1151 v2] tac false→true migration 검출용 snapshot.
+        let was_tac = pic.common.treat_as_char;
         // [Task #825] 픽쳐 속성 mutation 은 helper 로 분리 (머리말/꼬리말 path 와 공유).
         let caption_created = Self::apply_picture_props_inner(pic, props_json);
+        let now_tac = pic.common.treat_as_char;
+
+        // [Task #1151 v2] floating → inline migration (H1 정합, samples/tac-verify/).
+        // 한컴 산출물 Scenario A~D 분석: tac false→true 시 picture 의 control 위치는
+        // 불변이고, 4 필드만 갱신 (treat_as_char / h/v_rel_to=Para / h/v_offset=0 /
+        // parent line_segs[0]). text/char_offsets/paragraph 수 변화 없음.
+        if !was_tac && now_tac {
+            let para = section
+                .paragraphs
+                .get_mut(parent_para_idx)
+                .expect("paragraph snapshot 직후, 인덱스 유효");
+            let crate::model::paragraph::Paragraph {
+                line_segs,
+                controls,
+                ..
+            } = &mut *para;
+            if let Some(crate::model::control::Control::Picture(pic_box)) =
+                controls.get_mut(control_idx)
+            {
+                Self::migrate_picture_floating_to_inline(line_segs, pic_box.as_mut());
+            }
+        }
         // 캡션 생성 시 AutoNumber 재할당 + 텍스트 생성 (본문 path 만 — 머리말/꼬리말은 별도).
         if caption_created {
             crate::parser::assign_auto_numbers(&mut self.document);
@@ -366,6 +390,51 @@ impl DocumentCore {
             ctrl: outer_control_idx,
         });
         Ok("{\"ok\":true}".to_string())
+    }
+
+    /// [Task #1151 v2] Floating picture → inline 마이그레이션 (H1 정합).
+    ///
+    /// 한컴 2022 산출물 (`samples/tac-verify/scenario-{a,b,c,d}-after.hwp`) 분석
+    /// 결과: floating picture 의 `treat_as_char` 가 false→true 로 토글될 때
+    /// 한컴은 다음만 갱신한다 (자세한 분석: `mydocs/tech/hancom_picture_tac_toggle.md`).
+    ///
+    /// Picture 자체: `horz_rel_to = Para`, `vert_rel_to = Para`,
+    /// `horizontal_offset = 0`, `vertical_offset = 0`. (`treat_as_char = true` 와 attr
+    /// 비트는 `apply_picture_props_inner` 가 이미 처리.)
+    ///
+    /// Parent paragraph 의 `line_segs[0]`: `line_height = picture.common.height`,
+    /// `text_height = picture.common.height`, `baseline_distance = round(line_height × 0.85)`.
+    /// 비율 0.85 는 한컴 산출물 4 시나리오 (5331/16038/4847/19019) 모두 정확 관찰.
+    /// `line_segs` 가 비어있으면 신설 (line_spacing=600 기본).
+    ///
+    /// 변경 없음: paragraph.text / char_offsets / char_shapes / paragraph 수, picture
+    /// control 의 paragraph 위치 (sentinel char 추가하지 않음, 셀 안 이동 / 새 paragraph
+    /// 분리 모두 없음 — H1 정합).
+    pub(crate) fn migrate_picture_floating_to_inline(
+        line_segs: &mut Vec<crate::model::paragraph::LineSeg>,
+        pic: &mut crate::model::image::Picture,
+    ) {
+        use crate::model::shape::{HorzRelTo, VertRelTo};
+        pic.common.horz_rel_to = HorzRelTo::Para;
+        pic.common.vert_rel_to = VertRelTo::Para;
+        pic.common.horizontal_offset = 0;
+        pic.common.vertical_offset = 0;
+
+        let picture_height_hu = pic.common.height as i32;
+        let baseline = (picture_height_hu as f64 * 0.85).round() as i32;
+        if let Some(seg) = line_segs.first_mut() {
+            seg.line_height = picture_height_hu;
+            seg.text_height = picture_height_hu;
+            seg.baseline_distance = baseline;
+        } else {
+            line_segs.push(crate::model::paragraph::LineSeg {
+                line_height: picture_height_hu,
+                text_height: picture_height_hu,
+                baseline_distance: baseline,
+                line_spacing: 600,
+                ..Default::default()
+            });
+        }
     }
 
     /// [Task #825] Picture 속성 JSON 적용 (mutation only). 후처리 (AutoNumber /
@@ -5837,5 +5906,405 @@ mod issue_1151_cell_picture_insert_tests {
             res.is_err(),
             "out-of-range cell path → Err 기대, got {res:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod issue_1151_v2_tac_toggle_tests {
+    //! Issue #1151 v2: floating picture → "글자처럼 취급" 토글 시 한컴 정합 (H1).
+    //!
+    //! 한컴 산출물 분석 (samples/tac-verify/scenario-{a,b,c,d}-after.hwp) 결과:
+    //! tac false→true 토글 시 picture 의 control 위치는 불변이고, 4 가지 필드만
+    //! 갱신된다. (a) treat_as_char=true, (b) horz/vert_rel_to=Para, (c) h/v_offset=0,
+    //! (d) parent paragraph 의 line_segs[0] 의 line_height = picture height,
+    //!     text_height = picture height, baseline_distance = round(lh*0.85).
+    //! paragraph.text / char_offsets / paragraph 수 변화 없음.
+
+    use super::*;
+    use crate::model::document::{Document, Section, SectionDef};
+    use crate::model::image::{ImageAttr, Picture};
+    use crate::model::page::PageDef;
+    use crate::model::paragraph::LineSeg;
+    use crate::model::shape::{CommonObjAttr, HorzRelTo, ShapeComponentAttr, TextWrap, VertRelTo};
+
+    fn make_test_core() -> DocumentCore {
+        let mut doc = Document::default();
+        doc.sections.push(Section {
+            section_def: SectionDef {
+                page_def: PageDef {
+                    width: 59528,
+                    height: 84188,
+                    margin_left: 8504,
+                    margin_right: 8504,
+                    margin_top: 5668,
+                    margin_bottom: 4252,
+                    margin_header: 4252,
+                    margin_footer: 4252,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            paragraphs: vec![Paragraph::default()],
+            raw_stream: None,
+        });
+        let mut core = DocumentCore::new_empty();
+        core.set_document(doc);
+        core
+    }
+
+    fn minimal_png() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x00, 0x00, 0x00,
+            0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]
+    }
+
+    fn parse_idx(res: &str, key: &str) -> usize {
+        res.split(&format!("\"{}\":", key))
+            .nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("missing {key} in {res}"))
+    }
+
+    /// 본문 (또는 임의 paragraph) 에 floating picture 를 직접 push 한다.
+    /// 한컴이 만든 floating picture 의 model 상태 (tac=false, Paper-relative, offset 있음)
+    /// 와 동등.
+    fn push_body_floating_picture(
+        para: &mut Paragraph,
+        width_hu: u32,
+        height_hu: u32,
+        offset_h: u32,
+        offset_v: u32,
+        bin_id: u16,
+    ) -> usize {
+        let common_attr: u32 = (1 << 3) | (1 << 8) | (4 << 15) | (2 << 18);
+        let pic = Picture {
+            common: CommonObjAttr {
+                ctrl_id: 0x67736F20,
+                attr: common_attr,
+                treat_as_char: false,
+                vert_rel_to: VertRelTo::Paper,
+                horz_rel_to: HorzRelTo::Paper,
+                text_wrap: TextWrap::Square,
+                horizontal_offset: offset_h,
+                vertical_offset: offset_v,
+                width: width_hu,
+                height: height_hu,
+                z_order: 0,
+                ..Default::default()
+            },
+            shape_attr: ShapeComponentAttr {
+                original_width: width_hu,
+                original_height: height_hu,
+                current_width: width_hu,
+                current_height: height_hu,
+                ..Default::default()
+            },
+            border_x: [0i32, 0, width_hu as i32, 0],
+            border_y: [width_hu as i32, height_hu as i32, 0, height_hu as i32],
+            image_attr: ImageAttr {
+                bin_data_id: bin_id,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let idx = para.controls.len();
+        para.controls.push(Control::Picture(Box::new(pic)));
+        para.ctrl_data_records.push(None);
+        idx
+    }
+
+    /// 한컴 산출물에서 관찰된 baseline 비율: lh × 0.85 (round).
+    fn expected_baseline(lh: i32) -> i32 {
+        (lh as f64 * 0.85).round() as i32
+    }
+
+    // ─── Scenario A 등가 ───────────────────────────────────────────────
+    #[test]
+    fn tac_toggle_table_sibling_floating_to_inline() {
+        let mut core = make_test_core();
+
+        // 1×1 표 생성
+        let table_res = core
+            .create_table_native(0, 0, 0, 1, 1)
+            .expect("create 1x1 table");
+        let table_para_idx = parse_idx(&table_res, "paraIdx");
+        let table_ctrl_idx = parse_idx(&table_res, "controlIdx");
+
+        // 셀 안 floating picture 삽입 (v1 path, h=5331 HU)
+        let cell_path: Vec<(usize, usize, usize)> = vec![(table_ctrl_idx, 0, 0)];
+        let image = minimal_png();
+        let pic_w = 5977u32;
+        let pic_h = 5331u32;
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            pic_w,
+            pic_h,
+            1,
+            1,
+            "png",
+            "test",
+        )
+        .expect("insert floating picture in cell");
+
+        // picture 는 표 sibling 위치 (= 마지막 control)
+        let pic_ctrl_idx = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+        let before_paragraph_count = core.document.sections[0].paragraphs.len();
+        let before_controls_count = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len();
+
+        // tac false→true 토글
+        let res = core.set_picture_properties_native(
+            0,
+            table_para_idx,
+            pic_ctrl_idx,
+            r#"{"treatAsChar":true}"#,
+        );
+        assert!(res.is_ok(), "set_picture_properties_native failed: {res:?}");
+
+        let para = &core.document.sections[0].paragraphs[table_para_idx];
+        let pic = match &para.controls[pic_ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!("picture not at expected ctrl_idx"),
+        };
+
+        // (1) picture 위치 / paragraph 수 불변
+        assert_eq!(para.controls.len(), before_controls_count);
+        assert_eq!(
+            core.document.sections[0].paragraphs.len(),
+            before_paragraph_count
+        );
+
+        // (2) 4 필드 갱신
+        assert!(pic.common.treat_as_char, "treat_as_char true");
+        assert_eq!(pic.common.attr & 0x01, 0x01, "attr 비트 0 셋");
+        assert!(
+            matches!(pic.common.horz_rel_to, HorzRelTo::Para),
+            "horz_rel_to=Para, got {:?}",
+            pic.common.horz_rel_to
+        );
+        assert!(
+            matches!(pic.common.vert_rel_to, VertRelTo::Para),
+            "vert_rel_to=Para, got {:?}",
+            pic.common.vert_rel_to
+        );
+        assert_eq!(pic.common.horizontal_offset, 0, "h_offset=0");
+        assert_eq!(pic.common.vertical_offset, 0, "v_offset=0");
+
+        // (3) LINE_SEG[0] 갱신
+        let seg = &para.line_segs[0];
+        assert_eq!(
+            seg.line_height, pic_h as i32,
+            "line_segs[0].line_height = picture height"
+        );
+        assert_eq!(
+            seg.text_height, pic_h as i32,
+            "line_segs[0].text_height = picture height"
+        );
+        assert_eq!(
+            seg.baseline_distance,
+            expected_baseline(pic_h as i32),
+            "line_segs[0].baseline_distance = round(lh*0.85)"
+        );
+
+        // (4) text / char_offsets 불변 (sentinel char 추가하지 않음)
+        assert_eq!(para.text, "");
+        assert_eq!(para.char_offsets.len(), 0);
+    }
+
+    // ─── Scenario D 등가 ───────────────────────────────────────────────
+    #[test]
+    fn tac_toggle_body_floating_to_inline() {
+        let mut core = make_test_core();
+        let pic_h = 19019u32;
+        let pic_w = 20863u32;
+        let ctrl_idx = {
+            let para = &mut core.document.sections[0].paragraphs[0];
+            push_body_floating_picture(para, pic_w, pic_h, 13428, 13568, 1)
+        };
+
+        let res = core.set_picture_properties_native(0, 0, ctrl_idx, r#"{"treatAsChar":true}"#);
+        assert!(res.is_ok(), "set_picture_properties_native failed: {res:?}");
+
+        let para = &core.document.sections[0].paragraphs[0];
+        let pic = match &para.controls[ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!("picture not at expected ctrl_idx"),
+        };
+
+        assert!(pic.common.treat_as_char);
+        assert!(matches!(pic.common.horz_rel_to, HorzRelTo::Para));
+        assert!(matches!(pic.common.vert_rel_to, VertRelTo::Para));
+        assert_eq!(pic.common.horizontal_offset, 0);
+        assert_eq!(pic.common.vertical_offset, 0);
+
+        let seg = &para.line_segs[0];
+        assert_eq!(seg.line_height, pic_h as i32);
+        assert_eq!(seg.text_height, pic_h as i32);
+        assert_eq!(seg.baseline_distance, expected_baseline(pic_h as i32));
+
+        assert_eq!(para.text, "");
+        assert_eq!(para.char_offsets.len(), 0);
+    }
+
+    // ─── Scenario C 등가 ───────────────────────────────────────────────
+    #[test]
+    fn tac_toggle_3x3_center_cell_floating_to_inline() {
+        let mut core = make_test_core();
+
+        let table_res = core
+            .create_table_native(0, 0, 0, 3, 3)
+            .expect("create 3x3 table");
+        let table_para_idx = parse_idx(&table_res, "paraIdx");
+        let table_ctrl_idx = parse_idx(&table_res, "controlIdx");
+
+        // (1,1) 중앙 셀의 cell_path: (outer_ctrl_idx, row, col)
+        let cell_path: Vec<(usize, usize, usize)> = vec![(table_ctrl_idx, 1, 1)];
+        let image = minimal_png();
+        let pic_w = 5434u32;
+        let pic_h = 4847u32;
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            pic_w,
+            pic_h,
+            1,
+            1,
+            "png",
+            "test",
+        )
+        .expect("insert floating picture in center cell");
+
+        let pic_ctrl_idx = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+        let res = core.set_picture_properties_native(
+            0,
+            table_para_idx,
+            pic_ctrl_idx,
+            r#"{"treatAsChar":true}"#,
+        );
+        assert!(res.is_ok(), "set_picture_properties_native failed: {res:?}");
+
+        let para = &core.document.sections[0].paragraphs[table_para_idx];
+        let pic = match &para.controls[pic_ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!("picture not at expected ctrl_idx"),
+        };
+        assert!(pic.common.treat_as_char);
+        assert_eq!(pic.common.horizontal_offset, 0);
+        assert_eq!(pic.common.vertical_offset, 0);
+        assert_eq!(para.line_segs[0].line_height, pic_h as i32);
+        assert_eq!(
+            para.line_segs[0].baseline_distance,
+            expected_baseline(pic_h as i32)
+        );
+    }
+
+    // ─── 이미 tac=true 인 picture 의 다른 속성 변경 — migration 미진입 ─────
+    #[test]
+    fn tac_toggle_when_already_tac_true_no_migration() {
+        let mut core = make_test_core();
+        let pic_h = 5000u32;
+        let ctrl_idx = {
+            let para = &mut core.document.sections[0].paragraphs[0];
+            push_body_floating_picture(para, 5000, pic_h, 1000, 1000, 1)
+        };
+
+        // 먼저 tac=true 로 마이그레이션
+        core.set_picture_properties_native(0, 0, ctrl_idx, r#"{"treatAsChar":true}"#)
+            .expect("first migration");
+        let lh_after_first = core.document.sections[0].paragraphs[0].line_segs[0].line_height;
+
+        // 두 번째 호출: tac 변경 없이 다른 속성 변경 — migration 미진입
+        core.set_picture_properties_native(0, 0, ctrl_idx, r#"{"brightness":50}"#)
+            .expect("second call no-op for migration");
+
+        let para = &core.document.sections[0].paragraphs[0];
+        // line_height 가 더 자라지 않아야 함 (이미 picture height 인 채로 유지)
+        assert_eq!(para.line_segs[0].line_height, lh_after_first);
+        // brightness 는 적용됨
+        let pic = match &para.controls[ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!(),
+        };
+        assert_eq!(pic.image_attr.brightness, 50);
+    }
+
+    // ─── tac=true → false 토글 — migration 미진입 (한 방향만) ──────────
+    #[test]
+    fn tac_toggle_true_to_false_no_migration_this_pr() {
+        let mut core = make_test_core();
+        let pic_h = 5000u32;
+        let ctrl_idx = {
+            let para = &mut core.document.sections[0].paragraphs[0];
+            push_body_floating_picture(para, 5000, pic_h, 1000, 1000, 1)
+        };
+        // 먼저 tac=true 로
+        core.set_picture_properties_native(0, 0, ctrl_idx, r#"{"treatAsChar":true}"#)
+            .expect("forward migration");
+        let lh_after_forward = core.document.sections[0].paragraphs[0].line_segs[0].line_height;
+
+        // tac=false 로 — 역방향. line_height 추가 변동 없어야 함 (한 방향만 fix).
+        core.set_picture_properties_native(0, 0, ctrl_idx, r#"{"treatAsChar":false}"#)
+            .expect("reverse toggle");
+        let para = &core.document.sections[0].paragraphs[0];
+        assert_eq!(
+            para.line_segs[0].line_height, lh_after_forward,
+            "역방향 토글은 line_height 영향 없음"
+        );
+        let pic = match &para.controls[ctrl_idx] {
+            Control::Picture(p) => p.as_ref(),
+            _ => panic!(),
+        };
+        assert!(!pic.common.treat_as_char, "tac 비트는 false 로 토글");
+    }
+
+    // ─── 빈 line_segs paragraph 의 토글 — line_seg 신설 ────────────────
+    #[test]
+    fn tac_toggle_with_empty_line_segs_creates_new_seg() {
+        let mut core = make_test_core();
+        let pic_h = 7000u32;
+        let ctrl_idx = {
+            let para = &mut core.document.sections[0].paragraphs[0];
+            para.line_segs.clear(); // 빈 line_segs 강제
+            push_body_floating_picture(para, 7000, pic_h, 1000, 1000, 1)
+        };
+        core.set_picture_properties_native(0, 0, ctrl_idx, r#"{"treatAsChar":true}"#)
+            .expect("migration");
+
+        let para = &core.document.sections[0].paragraphs[0];
+        assert!(
+            !para.line_segs.is_empty(),
+            "빈 line_segs 였다면 신설되어야 한다"
+        );
+        let seg = &para.line_segs[0];
+        assert_eq!(seg.line_height, pic_h as i32);
+        assert_eq!(seg.text_height, pic_h as i32);
+        assert_eq!(seg.baseline_distance, expected_baseline(pic_h as i32));
+    }
+
+    // LineSeg 빈 케이스 직접 검증용 (별도 helper 미사용 check)
+    #[test]
+    #[allow(dead_code)]
+    fn _lineseg_default_for_test() {
+        let seg = LineSeg::default();
+        assert_eq!(seg.line_height, 0);
     }
 }
