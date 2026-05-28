@@ -125,11 +125,7 @@ pub(crate) fn right_tab_block_width(
                     12.0
                 }
             };
-            w += if crate::renderer::composer::decode_pua_overlap_number(&chars).is_some() {
-                fs
-            } else {
-                fs * chars.len() as f64
-            };
+            w += fs * crate::renderer::composer::char_overlap_advance_units(&chars) as f64;
             continue;
         }
         let mut ts = resolved_to_text_style(styles, r.char_style_id, r.lang_index);
@@ -1427,11 +1423,7 @@ impl LayoutEngine {
             for (run_idx_est, run) in comp_line.runs.iter().enumerate() {
                 let run_char_count_est = if run.char_overlap.is_some() {
                     let chars: Vec<char> = run.text.chars().collect();
-                    if crate::renderer::composer::decode_pua_overlap_number(&chars).is_some() {
-                        1
-                    } else {
-                        chars.len()
-                    }
+                    crate::renderer::composer::char_overlap_advance_units(&chars)
                 } else {
                     run.text.chars().count()
                 };
@@ -1528,11 +1520,7 @@ impl LayoutEngine {
                     };
                     let chars: Vec<char> = run.text.chars().collect();
                     let w =
-                        if crate::renderer::composer::decode_pua_overlap_number(&chars).is_some() {
-                            fs // 다자리 PUA 숫자는 하나의 원/사각형 = 1글자 폭
-                        } else {
-                            fs * run_char_count_est as f64
-                        };
+                        fs * crate::renderer::composer::char_overlap_advance_units(&chars) as f64;
                     est_x += w;
                     run_char_pos_est = run_char_end_est;
                     inline_tab_cursor_est += run.text.chars().filter(|c| *c == '\t').count();
@@ -2226,18 +2214,14 @@ impl LayoutEngine {
                     .map(|cs| cs.border_fill_id)
                     .unwrap_or(0);
                 let full_width = if run.char_overlap.is_some() {
-                    // 글자겹침: PUA 다자리 숫자는 1글자 폭, 그 외는 font_size * char_count
+                    // 글자겹침: 한 컨트롤은 payload 글자 수와 무관하게 1글자 폭.
                     let fs = if text_style.font_size > 0.0 {
                         text_style.font_size
                     } else {
                         12.0
                     };
                     let chars: Vec<char> = run.text.chars().collect();
-                    if crate::renderer::composer::decode_pua_overlap_number(&chars).is_some() {
-                        fs
-                    } else {
-                        fs * run.text.chars().count() as f64
-                    }
+                    fs * crate::renderer::composer::char_overlap_advance_units(&chars) as f64
                 } else {
                     estimate_text_width(effective_text_for_metrics(run), &text_style)
                 };
@@ -2293,11 +2277,7 @@ impl LayoutEngine {
                 let run_char_count = if run.char_overlap.is_some() {
                     // 글자겹침(CharOverlap)은 HWP char_offset 공간에서 1개 위치만 차지
                     let chars: Vec<char> = run.text.chars().collect();
-                    if crate::renderer::composer::decode_pua_overlap_number(&chars).is_some() {
-                        1
-                    } else {
-                        chars.len()
-                    }
+                    crate::renderer::composer::char_overlap_advance_units(&chars)
                 } else {
                     run.text.chars().count()
                 };

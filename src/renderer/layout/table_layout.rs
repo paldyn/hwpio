@@ -1272,6 +1272,17 @@ impl LayoutEngine {
                 let mut w = 0.0;
                 for run in &line.runs {
                     let mut ts = resolved_to_text_style(styles, run.char_style_id, run.lang_index);
+                    if run.char_overlap.is_some() {
+                        let fs = if ts.font_size > 0.0 {
+                            ts.font_size
+                        } else {
+                            12.0
+                        };
+                        let chars: Vec<char> = run.text.chars().collect();
+                        w += fs
+                            * crate::renderer::composer::char_overlap_advance_units(&chars) as f64;
+                        continue;
+                    }
                     // 자연 폭 측정: 음수 자간을 제거하여 글리프가 서로 겹치지 않는 최소 폭을 얻음
                     if ts.letter_spacing < 0.0 {
                         ts.letter_spacing = 0.0;

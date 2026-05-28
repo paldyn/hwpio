@@ -11,13 +11,14 @@ use crate::model::paragraph::Paragraph;
 use crate::model::path::PathSegment;
 use crate::renderer::render_tree::TextRunNode;
 
-/// PUA 다자리 글자겹침 TextRun의 논리적 char_count (1) 반환, 아니면 실제 글자 수 반환
+/// 글자겹침 TextRun의 논리적 char_count (1) 반환, 아니면 실제 글자 수 반환.
+///
+/// `table-vpos-01.hwp`의 boxed 10/11/12처럼 CharOverlap payload가 여러
+/// PUA 구성 글자를 갖더라도 편집 커서는 한 글자 단위로 이동해야 한다.
 fn effective_char_count(text_run: &TextRunNode) -> usize {
     if text_run.char_overlap.is_some() {
         let chars: Vec<char> = text_run.text.chars().collect();
-        if crate::renderer::composer::decode_pua_overlap_number(&chars).is_some() {
-            return 1;
-        }
+        return crate::renderer::composer::char_overlap_advance_units(&chars);
     }
     text_run.text.chars().count()
 }
@@ -2113,9 +2114,13 @@ impl DocumentCore {
                 let cell_context = effective_cell_context(&tr.cell_context, &current_cell_ctx);
                 if cell_context_matches(&cell_context, parent_para, path) {
                     let cs = tr.char_start.unwrap_or(0);
-                    let cc = tr.text.chars().count();
+                    let cc = effective_char_count(tr);
                     if offset >= cs && offset <= cs + cc {
-                        let positions = compute_char_positions(&tr.text, &tr.style);
+                        let positions = if tr.char_overlap.is_some() && cc == 1 {
+                            vec![0.0, node.bbox.width]
+                        } else {
+                            compute_char_positions(&tr.text, &tr.style)
+                        };
                         let lo = offset - cs;
                         let xr = if lo < positions.len() {
                             positions[lo]

@@ -2673,12 +2673,10 @@ impl WebCanvasRenderer {
         // Canvas 상태 보존
         self.ctx.save();
 
+        // 일반 CharOverlap 처리. 디코딩되지 않는 다중 PUA 조합도 한 컨트롤 안에서
+        // 같은 중심에 겹쳐 그린다. table-vpos-01의 10/11/12 마커는
+        // U+F02BA + U+F02C3/C4/C5 조합으로 저장된다.
         let box_size = font_size;
-        let char_advance = if chars.len() > 1 {
-            bbox_w / chars.len() as f64
-        } else {
-            box_size
-        };
 
         let is_reversed = overlap.border_type == 2 || overlap.border_type == 4;
         let is_circle = overlap.border_type == 1 || overlap.border_type == 2;
@@ -2720,6 +2718,59 @@ impl WebCanvasRenderer {
             font_style_str, font_weight, inner_font_size, font_family
         );
 
+        if chars.len() > 1 {
+            let cx = bbox_x + bbox_w / 2.0;
+            let cy = bbox_y + bbox_h - box_size / 2.0;
+
+            if is_circle {
+                let ry = box_size / 2.0;
+                let rx = ry * 0.85;
+                self.ctx.begin_path();
+                let _ = self
+                    .ctx
+                    .ellipse(cx, cy, rx, ry, 0.0, 0.0, std::f64::consts::TAU);
+                if is_reversed {
+                    self.ctx.set_fill_style_str(fill_color);
+                    self.ctx.fill();
+                }
+                self.ctx.set_stroke_style_str(stroke_color);
+                self.ctx.set_line_width(0.8);
+                self.ctx.stroke();
+            } else if is_rect {
+                let rx = cx - box_size / 2.0;
+                let ry = cy - box_size / 2.0;
+                if is_reversed {
+                    self.ctx.set_fill_style_str(fill_color);
+                    self.ctx.fill_rect(rx, ry, box_size, box_size);
+                }
+                self.ctx.set_stroke_style_str(stroke_color);
+                self.ctx.set_line_width(0.8);
+                self.ctx.stroke_rect(rx, ry, box_size, box_size);
+            }
+
+            self.ctx.set_font(&font);
+            self.ctx.set_fill_style_str(&text_color);
+            self.ctx.set_text_align("center");
+            self.ctx.set_text_baseline("middle");
+
+            for ch in chars.iter() {
+                let display_str = {
+                    let cp = *ch as u32;
+                    if (0x2460..=0x2473).contains(&cp) {
+                        format!("{}", cp - 0x2460 + 1)
+                    } else if let Some(s) = pua_to_display_text(*ch) {
+                        s
+                    } else {
+                        ch.to_string()
+                    }
+                };
+                let _ = self.ctx.fill_text(&display_str, cx, cy);
+            }
+
+            self.ctx.restore();
+            return;
+        }
+
         for (i, ch) in chars.iter().enumerate() {
             let display_str = {
                 let cp = *ch as u32;
@@ -2732,7 +2783,7 @@ impl WebCanvasRenderer {
                 }
             };
 
-            let cx = bbox_x + i as f64 * char_advance + box_size / 2.0;
+            let cx = bbox_x + i as f64 * box_size + box_size / 2.0;
             let cy = bbox_y + bbox_h - box_size / 2.0;
 
             if is_circle {

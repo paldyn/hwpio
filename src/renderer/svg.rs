@@ -1726,13 +1726,11 @@ impl SvgRenderer {
             return;
         }
 
-        // 기존 단일 문자 처리
+        // 일반 CharOverlap 처리. 디코딩되지 않는 다중 PUA 조합도 한 컨트롤 안에서
+        // 같은 중심에 겹쳐 그린다. table-vpos-01의 10/11/12 마커는
+        // U+F02BA + U+F02C3/C4/C5 조합으로 저장되며, 나란히 그리면 숫자가
+        // 사각형 밖으로 밀린다.
         let box_size = font_size;
-        let char_advance = if chars.len() > 1 {
-            bbox_w / chars.len() as f64
-        } else {
-            box_size
-        };
 
         let is_reversed = overlap.border_type == 2 || overlap.border_type == 4;
         let is_circle = overlap.border_type == 1 || overlap.border_type == 2;
@@ -1778,6 +1776,45 @@ impl SvgRenderer {
             font_attrs.push_str(" font-style=\"italic\"");
         }
 
+        if chars.len() > 1 {
+            let cx = bbox_x + bbox_w / 2.0;
+            let cy = bbox_y + bbox_h / 2.0;
+
+            if is_circle {
+                let ry = box_size / 2.0;
+                let rx = ry * 0.85;
+                self.output.push_str(&format!(
+                    "<ellipse cx=\"{:.2}\" cy=\"{:.2}\" rx=\"{:.2}\" ry=\"{:.2}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"0.8\"/>\n",
+                    cx, cy, rx, ry, fill_color, stroke_color,
+                ));
+            } else if is_rect {
+                let rx = cx - box_size / 2.0;
+                let ry = cy - box_size / 2.0;
+                self.output.push_str(&format!(
+                    "<rect x=\"{:.2}\" y=\"{:.2}\" width=\"{:.2}\" height=\"{:.2}\" fill=\"{}\" stroke=\"{}\" stroke-width=\"0.8\"/>\n",
+                    rx, ry, box_size, box_size, fill_color, stroke_color,
+                ));
+            }
+
+            for ch in chars.iter() {
+                let display_str = {
+                    let cp = *ch as u32;
+                    if (0x2460..=0x2473).contains(&cp) {
+                        format!("{}", cp - 0x2460 + 1)
+                    } else if let Some(s) = pua_to_display_text(*ch) {
+                        s
+                    } else {
+                        ch.to_string()
+                    }
+                };
+                self.output.push_str(&format!(
+                    "<text x=\"{:.2}\" y=\"{:.2}\" fill=\"{}\" {} text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
+                    cx, cy, text_color, font_attrs, escape_xml(&display_str),
+                ));
+            }
+            return;
+        }
+
         for (i, ch) in chars.iter().enumerate() {
             let display_str = {
                 let cp = *ch as u32;
@@ -1790,7 +1827,7 @@ impl SvgRenderer {
                 }
             };
 
-            let cx = bbox_x + i as f64 * char_advance + box_size / 2.0;
+            let cx = bbox_x + i as f64 * box_size + box_size / 2.0;
             let cy = bbox_y + bbox_h / 2.0;
 
             if is_circle {
