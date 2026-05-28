@@ -2533,6 +2533,24 @@ export class InputHandler {
     this.applyCharFormat({ fontSize: newSize });
   }
 
+  /** 장평 증감 (커맨드 시스템용, delta: percent point) */
+  adjustCharRatio(delta: number): void {
+    if (!this.cursor.hasSelection()) return;
+    const current = this.getCharPropertiesAtCursor();
+    const currentRatio = current.ratios?.[0] ?? 100;
+    const nextRatio = Math.max(50, Math.min(200, Math.round(currentRatio + delta)));
+    this.applyCharFormat({ ratios: Array(7).fill(nextRatio) });
+  }
+
+  /** 자간 증감 (커맨드 시스템용, delta: percent point) */
+  adjustCharSpacing(delta: number): void {
+    if (!this.cursor.hasSelection()) return;
+    const current = this.getCharPropertiesAtCursor();
+    const currentSpacing = current.spacings?.[0] ?? 0;
+    const nextSpacing = Math.max(-50, Math.min(50, Math.round(currentSpacing + delta)));
+    this.applyCharFormat({ spacings: Array(7).fill(nextSpacing) });
+  }
+
   /** 스타일 적용 (커맨드 시스템용) */
   applyStyle(styleId: number): void {
     const pos = this.cursor.getPosition();

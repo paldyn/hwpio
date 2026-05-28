@@ -141,6 +141,46 @@ export const formatCommands: CommandDef[] = [
       services.getInputHandler()?.adjustFontSize(-100); // -1pt
     },
   },
+  // 장평 줄이기 (Shift+Alt+J)
+  {
+    id: 'format:char-ratio-decrease',
+    label: '장평 줄이기',
+    shortcutLabel: 'Shift+Alt+J',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharRatio(-1);
+    },
+  },
+  // 장평 늘리기 (Shift+Alt+K)
+  {
+    id: 'format:char-ratio-increase',
+    label: '장평 늘리기',
+    shortcutLabel: 'Shift+Alt+K',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharRatio(1);
+    },
+  },
+  // 자간 줄이기 (Shift+Alt+N)
+  {
+    id: 'format:char-spacing-decrease',
+    label: '자간 줄이기',
+    shortcutLabel: 'Shift+Alt+N',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharSpacing(-1);
+    },
+  },
+  // 자간 늘리기 (Shift+Alt+W)
+  {
+    id: 'format:char-spacing-increase',
+    label: '자간 늘리기',
+    shortcutLabel: 'Shift+Alt+W',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharSpacing(1);
+    },
+  },
   // 문단 정렬
   {
     id: 'format:align-left',

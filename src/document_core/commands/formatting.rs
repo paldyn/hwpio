@@ -13,6 +13,15 @@ use crate::renderer::composer::reflow_line_segs;
 use crate::renderer::page_layout::PageLayoutInfo;
 use crate::renderer::style_resolver::resolve_styles;
 
+fn char_shape_mods_affect_text_flow(mods: &crate::model::style::CharShapeMods) -> bool {
+    mods.base_size.is_some()
+        || mods.font_ids.is_some()
+        || mods.ratios.is_some()
+        || mods.spacings.is_some()
+        || mods.relative_sizes.is_some()
+        || mods.char_offsets.is_some()
+}
+
 impl DocumentCore {
     pub fn get_char_properties_at_native(
         &self,
@@ -915,8 +924,9 @@ impl DocumentCore {
         }
         self.apply_char_mods_to_paragraph(sec_idx, para_idx, start_offset, end_offset, &mods);
 
-        // 글꼴 크기 변경 시 LineSeg 재계산 (line_height, baseline_distance 갱신)
-        if mods.base_size.is_some() {
+        // 텍스트 폭/높이에 영향을 주는 글자 모양 변경 시 LineSeg 재계산.
+        // 장평/자간은 글꼴 크기처럼 줄나눔과 페이지네이션을 바꾼다.
+        if char_shape_mods_affect_text_flow(&mods) {
             let styles = resolve_styles(&self.document.doc_info, self.dpi);
             let section = &self.document.sections[sec_idx];
             let page_def = &section.section_def.page_def;
@@ -998,8 +1008,8 @@ impl DocumentCore {
             cell_para.apply_char_shape_range(start_offset, end_offset, new_id);
         }
 
-        // 글꼴 크기 변경 시 셀 내 LineSeg 재계산
-        if mods.base_size.is_some() {
+        // 텍스트 폭/높이에 영향을 주는 글자 모양 변경 시 셀 내 LineSeg 재계산.
+        if char_shape_mods_affect_text_flow(&mods) {
             let dpi = self.dpi;
             let styles = resolve_styles(&self.document.doc_info, dpi);
             let section = &self.document.sections[sec_idx];
@@ -1665,5 +1675,35 @@ impl DocumentCore {
             }
         }
         Ok("{\"ok\":true,\"exists\":false}".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::char_shape_mods_affect_text_flow;
+    use crate::model::style::CharShapeMods;
+
+    #[test]
+    fn char_ratio_and_spacing_changes_require_text_reflow() {
+        let mods = CharShapeMods {
+            ratios: Some([99; 7]),
+            ..Default::default()
+        };
+        assert!(char_shape_mods_affect_text_flow(&mods));
+
+        let mods = CharShapeMods {
+            spacings: Some([-1; 7]),
+            ..Default::default()
+        };
+        assert!(char_shape_mods_affect_text_flow(&mods));
+    }
+
+    #[test]
+    fn paint_only_char_shape_changes_do_not_require_text_reflow() {
+        let mods = CharShapeMods {
+            underline: Some(true),
+            ..Default::default()
+        };
+        assert!(!char_shape_mods_affect_text_flow(&mods));
     }
 }
