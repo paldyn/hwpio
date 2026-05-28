@@ -407,6 +407,40 @@ fn test_page_background_image_realpic_watermark_preserves_color_with_opacity() {
 }
 
 #[test]
+fn test_page_background_image_non_realpic_watermark_uses_legacy_opacity() {
+    let png = bmp_bytes_to_png_bytes(&make_minimal_bmp_2x2()).expect("BMP->PNG 변환 실패");
+    let image = PageBackgroundImage {
+        data: png,
+        fill_mode: ImageFillMode::FitToSize,
+        brightness: -50,
+        contrast: 70,
+        effect: crate::model::image::ImageEffect::GrayScale,
+    };
+    let bbox = BoundingBox::new(10.0, 20.0, 100.0, 50.0);
+    let mut renderer = SvgRenderer::new();
+    renderer.begin_page(200.0, 100.0);
+
+    renderer.render_page_background_image(&image, &bbox);
+
+    let output = renderer.output();
+    assert!(
+        output.contains(&format!(
+            "<g opacity=\"{}\">",
+            LEGACY_IMAGE_WATERMARK_OPACITY
+        )),
+        "non-RealPic PageBackground watermark should apply legacy watermark opacity: {output}"
+    );
+    assert!(
+        output.contains("rhwp-img-grayscale"),
+        "non-RealPic PageBackground watermark should keep the image effect filter: {output}"
+    );
+    assert!(
+        output.contains("rhwp-img-bc-b-50c70"),
+        "non-RealPic PageBackground watermark should keep the brightness/contrast filter: {output}"
+    );
+}
+
+#[test]
 fn test_background_image_realpic_watermark_fill_preserves_color_with_opacity() {
     let png = bmp_bytes_to_png_bytes(&make_minimal_bmp_2x2()).expect("BMP->PNG 변환 실패");
     let mut image = ImageNode::new(1, Some(png));

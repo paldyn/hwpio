@@ -17,8 +17,8 @@ use super::pua_oldhangul::map_pua_old_hangul;
 use super::render_tree::{
     BoundingBox, FormObjectNode, PageRenderTree, RenderNode, RenderNodeType, ShapeTransform,
     LEGACY_IMAGE_WATERMARK_OPACITY, REAL_PICTURE_WATERMARK_BRIGHTNESS,
-    REAL_PICTURE_WATERMARK_CONTRAST, REAL_PICTURE_WATERMARK_OPACITY,
-    REAL_PICTURE_WATERMARK_SATURATION,
+    REAL_PICTURE_WATERMARK_CONTRAST, REAL_PICTURE_WATERMARK_FILL_OPACITY,
+    REAL_PICTURE_WATERMARK_PAGE_OPACITY, REAL_PICTURE_WATERMARK_SATURATION,
 };
 use super::{
     clamp_tab_leader_end_x, GradientFillInfo, LineStyle, PathCommand, PatternFillInfo, Renderer,
@@ -375,6 +375,9 @@ impl WebCanvasRenderer {
                     // PageBackground RealPic 워터마크 프리셋은 한컴의 색상 있는 배경 워터마크에 맞춰
                     // 색감을 살린 뒤 반투명으로 합성한다.
                     let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
+                    let is_watermark_image =
+                        !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
+                            && (img.brightness != 0 || img.contrast != 0);
                     let mut baked_color_watermark = false;
                     let render_data: std::borrow::Cow<[u8]> = if preserve_color_watermark {
                         match crate::renderer::image_resolver::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
@@ -401,9 +404,10 @@ impl WebCanvasRenderer {
                     if let Some(ref f) = filter_str {
                         self.ctx.set_filter(f);
                     }
-                    if img.is_watermark_tone_preset() {
+                    let needs_watermark_opacity = preserve_color_watermark || is_watermark_image;
+                    if needs_watermark_opacity {
                         let opacity = if preserve_color_watermark {
-                            REAL_PICTURE_WATERMARK_OPACITY
+                            REAL_PICTURE_WATERMARK_PAGE_OPACITY
                         } else {
                             LEGACY_IMAGE_WATERMARK_OPACITY
                         };
@@ -417,7 +421,7 @@ impl WebCanvasRenderer {
                         None,
                         None,
                     );
-                    if img.is_watermark_tone_preset() {
+                    if needs_watermark_opacity {
                         self.ctx.set_global_alpha(1.0);
                     }
                     if filter_str.is_some() {
@@ -622,7 +626,7 @@ impl WebCanvasRenderer {
                             && (img.brightness != 0 || img.contrast != 0);
                     let mut baked_watermark = false;
                     let render_data: std::borrow::Cow<[u8]> = if preserve_color_watermark {
-                        match crate::renderer::image_resolver::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
+                        match crate::renderer::image_resolver::real_picture_watermark_fill_bytes_to_hancom_tone_png_bytes(
                             data,
                         ) {
                             Some(png) => {
@@ -661,7 +665,7 @@ impl WebCanvasRenderer {
                         preserve_color_watermark || (is_watermark_image && !baked_watermark);
                     if needs_watermark_opacity {
                         let opacity = if preserve_color_watermark {
-                            REAL_PICTURE_WATERMARK_OPACITY
+                            REAL_PICTURE_WATERMARK_FILL_OPACITY
                         } else {
                             LEGACY_IMAGE_WATERMARK_OPACITY
                         };

@@ -1259,6 +1259,8 @@ impl SvgRenderer {
         // PageBackground RealPic 워터마크 프리셋은 한컴의 색상 있는 배경 워터마크에 맞춰
         // 색감 보정을 PNG 픽셀에 bake한 뒤 반투명으로 합성한다.
         let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
+        let is_watermark_image = !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
+            && (img.brightness != 0 || img.contrast != 0);
         let detected_mime = detect_image_mime_type(&img.data);
         // BMP/PCX → PNG 재인코딩 (브라우저 호환성과 PCX white transparency 정합)
         let (render_bytes, render_mime): (std::borrow::Cow<[u8]>, &str) =
@@ -1313,7 +1315,8 @@ impl SvgRenderer {
             self.output
                 .push_str(&format!("<g filter=\"url(#{})\">\n", fid));
         }
-        if img.is_watermark_tone_preset() {
+        let needs_watermark_opacity = preserve_color_watermark || is_watermark_image;
+        if needs_watermark_opacity {
             let opacity = if preserve_color_watermark {
                 REAL_PICTURE_WATERMARK_PAGE_OPACITY
             } else {
@@ -1344,7 +1347,7 @@ impl SvgRenderer {
             }
         }
 
-        if img.is_watermark_tone_preset() {
+        if needs_watermark_opacity {
             self.output.push_str("</g>\n");
         }
         if bc_filter_id.is_some() {
