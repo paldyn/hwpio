@@ -130,21 +130,48 @@ output/poc/pr1019-page-background/253-empty/253E164F57A1BC6934-empty_002.svg
 3. 최종 수용 전 rhwp-studio WASM 빌드 후 메인테이너 시각 판정이 필요하다.
 ```
 
-## 6. 권장 처리
+## 6. 메인테이너 시각 판정
+
+```text
+2026-05-28 통과
+```
+
+판정 대상:
+
+```text
+output/poc/pr1019-page-background/143/143E433F503322BD33.svg
+output/poc/pr1019-page-background/253-empty/253E164F57A1BC6934-empty_001.svg
+output/poc/pr1019-page-background/253-empty/253E164F57A1BC6934-empty_002.svg
+rhwp-studio WASM bundle
+```
+
+후속 관찰:
+
+```text
+이번 샘플은 2단 구성 문서이며, 아직 미구현된 차트 컨트롤의 페이지 내 레이아웃이
+한컴 에디터와 다르다.
+
+표 다음 차트가 현재 단 영역에 들어가지 못할 때 한컴은 오른쪽 단으로 넘겨 배치한다.
+rhwp-studio는 차트 컨트롤 조판이 아직 구현되지 않아 이 동작을 재현하지 못한다.
+
+이 문제는 #1019의 PageBackground fill_mode/RealPic watermark tone 범위와 독립적인
+차트 컨트롤/다단 레이아웃 후속 이슈로 분리한다.
+```
+
+## 7. 권장 처리
 
 권장안:
 
 ```text
-조건부 수용
+수용
 ```
 
 절차:
 
 ```text
-1. 현재 merge-test 상태를 커밋하지 않고 유지한다.
-2. 메인테이너 승인 후 merge commit 또는 cherry-pick 방식으로 PR 변경을 수용한다.
-3. WASM 빌드를 수행한다.
-4. 위 SVG 후보와 rhwp-studio에서 메인테이너 시각 판정을 진행한다.
-5. 통과 시 local/devel -> devel 절차로 반영하고 PR #1019와 관련 이슈 #975를 close한다.
+1. merge-test 브랜치의 수용 커밋을 local/devel에 병합한다.
+2. local/devel을 devel에 병합한다.
+3. devel에서 compile/test/WASM 빌드를 확인한다.
+4. 통과 시 원격 devel에 push한다.
+5. PR #1019와 관련 이슈 #975를 close한다.
 ```
-
