@@ -1260,7 +1260,7 @@ impl SvgRenderer {
         // 색감 보정을 PNG 픽셀에 bake한 뒤 반투명으로 합성한다.
         let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
         let detected_mime = detect_image_mime_type(&img.data);
-        // BMP → PNG 재인코딩 (브라우저 호환성)
+        // BMP/PCX → PNG 재인코딩 (브라우저 호환성과 PCX white transparency 정합)
         let (render_bytes, render_mime): (std::borrow::Cow<[u8]>, &str) =
             if preserve_color_watermark {
                 match real_picture_watermark_bytes_to_hancom_tone_png_bytes(&img.data) {
@@ -1272,6 +1272,14 @@ impl SvgRenderer {
                 }
             } else if detected_mime == "image/bmp" {
                 match bmp_bytes_to_png_bytes(&img.data) {
+                    Some(png) => (std::borrow::Cow::Owned(png), "image/png"),
+                    None => (
+                        std::borrow::Cow::Borrowed(img.data.as_slice()),
+                        detected_mime,
+                    ),
+                }
+            } else if detected_mime == "image/x-pcx" {
+                match pcx_bytes_to_png_bytes(&img.data) {
                     Some(png) => (std::borrow::Cow::Owned(png), "image/png"),
                     None => (
                         std::borrow::Cow::Borrowed(img.data.as_slice()),

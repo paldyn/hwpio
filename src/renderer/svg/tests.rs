@@ -248,6 +248,64 @@ fn test_bmp_to_png_invalid_returns_none() {
     assert!(bmp_bytes_to_png_bytes(&junk).is_none());
 }
 
+/// 최소 2x1 8-bit paletted PCX를 생성한다 (테스트용).
+fn make_minimal_pcx_2x1() -> Vec<u8> {
+    let mut header = [0u8; 128];
+    header[0] = 0x0A; // PCX manufacturer
+    header[1] = 0x05; // version 3.0+
+    header[2] = 0x01; // RLE
+    header[3] = 0x08; // bits per pixel per plane
+    header[4..6].copy_from_slice(&0u16.to_le_bytes()); // xmin
+    header[6..8].copy_from_slice(&0u16.to_le_bytes()); // ymin
+    header[8..10].copy_from_slice(&1u16.to_le_bytes()); // xmax = width - 1
+    header[10..12].copy_from_slice(&0u16.to_le_bytes()); // ymax = height - 1
+    header[65] = 1; // color planes
+    header[66..68].copy_from_slice(&2u16.to_le_bytes()); // bytes per line
+    header[68..70].copy_from_slice(&1u16.to_le_bytes()); // color palette type
+
+    let mut pcx = Vec::from(header);
+    pcx.extend_from_slice(&[0, 1]); // white pixel, black pixel
+    pcx.push(0x0C); // 256-color palette marker
+    let mut palette = vec![0u8; 256 * 3];
+    palette[0..3].copy_from_slice(&[255, 255, 255]);
+    palette[3..6].copy_from_slice(&[0, 0, 0]);
+    pcx.extend_from_slice(&palette);
+    pcx
+}
+
+#[test]
+fn test_pcx_to_png_maps_white_to_transparent() {
+    let pcx = make_minimal_pcx_2x1();
+    let png = pcx_bytes_to_png_bytes(&pcx).expect("PCX->PNG 변환 실패");
+    let img = image::load_from_memory(&png)
+        .expect("PNG decode")
+        .to_rgba8();
+
+    assert_eq!(img.dimensions(), (2, 1));
+    assert_eq!(img.get_pixel(0, 0).0, [255, 255, 255, 0]);
+    assert_eq!(img.get_pixel(1, 0).0, [0, 0, 0, 255]);
+}
+
+#[test]
+fn test_page_background_image_pcx_converts_to_png() {
+    let image = PageBackgroundImage {
+        data: make_minimal_pcx_2x1(),
+        fill_mode: ImageFillMode::FitToSize,
+        brightness: 0,
+        contrast: 0,
+        effect: crate::model::image::ImageEffect::RealPic,
+    };
+    let bbox = BoundingBox::new(10.0, 20.0, 100.0, 50.0);
+    let mut renderer = SvgRenderer::new();
+    renderer.begin_page(200.0, 100.0);
+
+    renderer.render_page_background_image(&image, &bbox);
+
+    let output = renderer.output();
+    assert!(output.contains("data:image/png;base64,iVBORw0KGgo"));
+    assert!(!output.contains("data:image/x-pcx"));
+}
+
 #[test]
 fn test_page_background_image_fit_to_size_preserves_bbox_output() {
     let png = bmp_bytes_to_png_bytes(&make_minimal_bmp_2x2()).expect("BMP->PNG 변환 실패");

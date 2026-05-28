@@ -377,7 +377,7 @@ impl WebCanvasRenderer {
                     let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
                     let mut baked_color_watermark = false;
                     let render_data: std::borrow::Cow<[u8]> = if preserve_color_watermark {
-                        match crate::renderer::svg::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
+                        match crate::renderer::image_resolver::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
                             &img.data,
                         ) {
                             Some(png) => {
@@ -622,7 +622,7 @@ impl WebCanvasRenderer {
                             && (img.brightness != 0 || img.contrast != 0);
                     let mut baked_watermark = false;
                     let render_data: std::borrow::Cow<[u8]> = if preserve_color_watermark {
-                        match crate::renderer::svg::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
+                        match crate::renderer::image_resolver::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
                             data,
                         ) {
                             Some(png) => {
@@ -632,9 +632,10 @@ impl WebCanvasRenderer {
                             None => std::borrow::Cow::Borrowed(data.as_slice()),
                         }
                     } else if is_watermark_image
-                        && crate::renderer::svg::detect_image_mime_type(data) == "image/jpeg"
+                        && crate::renderer::image_resolver::detect_image_mime_type(data)
+                            == "image/jpeg"
                     {
-                        match crate::renderer::svg::watermark_jpeg_bytes_to_hancom_baked_png_bytes(
+                        match crate::renderer::image_resolver::watermark_jpeg_bytes_to_hancom_baked_png_bytes(
                             data,
                         ) {
                             Some(png) => {
@@ -2530,7 +2531,7 @@ impl Renderer for WebCanvasRenderer {
                     None => (std::borrow::Cow::Borrowed(data), mime_type),
                 }
             } else if mime_type == "image/x-pcx" {
-                match crate::renderer::svg::pcx_bytes_to_png_bytes(data) {
+                match crate::renderer::image_resolver::pcx_bytes_to_png_bytes(data) {
                     Some(png_bytes) => (std::borrow::Cow::Owned(png_bytes), "image/png"),
                     None => (std::borrow::Cow::Borrowed(data), mime_type),
                 }
