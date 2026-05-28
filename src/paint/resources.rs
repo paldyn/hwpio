@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::paint::font::FontResourceTable;
+use crate::paint::font::{BinaryResourceKind, BinaryResourceRef, FontResourceTable};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ImageResourceId(pub usize);
@@ -69,6 +69,19 @@ impl ResourceArena {
             .map(|(index, bytes)| (FontBlobResourceId(index), bytes.as_slice()))
     }
 
+    pub fn font_blob_bytes_for_ref(&self, data_ref: &BinaryResourceRef) -> Option<&[u8]> {
+        if data_ref.kind != BinaryResourceKind::FontBlob {
+            return None;
+        }
+        self.font_blob_bytes
+            .iter()
+            .find(|bytes| {
+                let digest = resource_digest_hex(bytes.as_slice());
+                font_blob_resource_key(bytes.len(), &digest) == data_ref.id
+            })
+            .map(Vec::as_slice)
+    }
+
     pub fn font_resources(&self) -> &FontResourceTable {
         &self.font_resources
     }
@@ -121,7 +134,7 @@ fn resource_key(kind: &str, byte_len: usize, digest: &str) -> String {
 mod tests {
     use super::{
         font_blob_resource_key, image_resource_key, resource_digest_hex, resource_fingerprint,
-        svg_resource_key, FontBlobResourceId, ResourceArena,
+        svg_resource_key, BinaryResourceKind, BinaryResourceRef, FontBlobResourceId, ResourceArena,
     };
 
     #[test]
@@ -143,6 +156,30 @@ mod tests {
         assert_eq!(
             arena.font_blob_resources().collect::<Vec<_>>(),
             vec![(FontBlobResourceId(0), &[5, 6, 7, 8][..])]
+        );
+    }
+
+    #[test]
+    fn resolves_font_blob_bytes_by_versioned_resource_ref() {
+        let mut arena = ResourceArena::default();
+        let font_id = arena.intern_font_blob_bytes(&[9, 8, 7, 6]);
+        let digest = resource_digest_hex([9, 8, 7, 6]);
+        let data_ref = BinaryResourceRef {
+            kind: BinaryResourceKind::FontBlob,
+            id: font_blob_resource_key(4, &digest),
+        };
+
+        assert_eq!(font_id, FontBlobResourceId(0));
+        assert_eq!(
+            arena.font_blob_bytes_for_ref(&data_ref),
+            Some(&[9, 8, 7, 6][..])
+        );
+        assert_eq!(
+            arena.font_blob_bytes_for_ref(&BinaryResourceRef {
+                kind: BinaryResourceKind::ExternalFont,
+                id: font_blob_resource_key(4, &digest),
+            }),
+            None
         );
     }
 
