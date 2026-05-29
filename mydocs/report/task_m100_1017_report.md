@@ -86,4 +86,8 @@ Cannot find module '@wasm/rhwp.js'
 - CanvasKit replay plan에서 baked watermark item이 `replayPlane="behindText"`로 노출된다.
 - #516 / #938 watermark 관련 회귀 테스트가 유지된다.
 
-이슈 클로즈, commit, PR 생성은 작업지시자 승인 후 진행한다.
+후속 처리:
+
+- 구현 커밋: `06f0029e`
+- Draft PR: https://github.com/edwardkim/rhwp/pull/1163
+- 이슈 클로즈는 merge/작업지시자 승인 후 진행한다.
