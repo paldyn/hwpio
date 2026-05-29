@@ -1492,10 +1492,20 @@ impl DocumentCore {
                         }
                         None => String::new(),
                     };
+                    // [Task #1151 v4] 셀 안 inline picture 의 cellIdx/cellParaIdx 전달.
+                    // RectangleNode 처리 (라인 1524-1530 근방) 와 동일 패턴. 셀 외부
+                    // picture 는 cell_index/cell_para_index 가 None → 빈 문자열 →
+                    // 기존 JSON 출력 그대로 (회귀 0).
+                    let cell_str = match (image_node.cell_index, image_node.cell_para_index) {
+                        (Some(cei), Some(cpi)) => {
+                            format!(",\"cellIdx\":{},\"cellParaIdx\":{}", cei, cpi)
+                        }
+                        _ => String::new(),
+                    };
                     controls.push(format!(
-                        "{{\"type\":\"image\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}}}",
+                        "{{\"type\":\"image\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}{}}}",
                         node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                        doc_coords, wrap_str, hf_str
+                        doc_coords, wrap_str, hf_str, cell_str
                     ));
                     return;
                 }

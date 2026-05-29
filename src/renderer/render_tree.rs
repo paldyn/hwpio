@@ -872,6 +872,16 @@ pub struct ImageNode {
     /// `None` 일 때 본문 그림 (현행 동작).
     #[serde(default)]
     pub header_footer_ref: Option<HeaderFooterImageRef>,
+    /// [Task #1151 v4] 표 셀 안 inline picture (tac=true) 인 경우: 셀 인덱스.
+    /// Rectangle/Ellipse/Path 의 [Task #1138] 패턴 정합. `None` 이면 셀 외부 picture.
+    #[serde(default)]
+    pub cell_index: Option<usize>,
+    /// [Task #1151 v4] 표 셀 안 inline picture 인 경우: 셀 내 문단 인덱스.
+    #[serde(default)]
+    pub cell_para_index: Option<usize>,
+    /// [Task #1151 v4] 표 셀 안 inline picture 인 경우: outer paragraph 의 표 control 인덱스.
+    #[serde(default)]
+    pub outer_table_control_index: Option<usize>,
 }
 
 /// [Task #825] 머리말/꼬리말 안 그림의 outer 위치 + 종류.
@@ -919,6 +929,9 @@ impl ImageNode {
             text_wrap: None,
             external_path: None,
             header_footer_ref: None,
+            cell_index: None,
+            cell_para_index: None,
+            outer_table_control_index: None,
         }
     }
 }

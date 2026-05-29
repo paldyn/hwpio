@@ -726,13 +726,18 @@ impl LayoutEngine {
                             let img_data =
                                 find_bin_data(bin_data_content, bin_id).map(|bd| bd.data.clone());
                             let img_node_id = tree.next_id();
+                            // [Task #1151 v4] 셀 안 inline picture 의 cell context + outer
+                            // 정보 보존. rendering.rs:1495 의 Image JSON 직렬화 에 cellIdx/
+                            // cellParaIdx 노출 → studio findPictureAtClick / cursor_rect hit-test
+                            // 가 인식. enclosing_ctx 에서 section / outer paragraph / outer table
+                            // control 인덱스 추출. ctrl_idx 는 셀 paragraph 안의 picture 인덱스.
                             let img_node = RenderNode::new(
                                 img_node_id,
                                 RenderNodeType::Image(ImageNode {
                                     bin_data_id: bin_id,
                                     data: img_data,
-                                    section_index: None,
-                                    para_index: None,
+                                    section_index: enclosing_ctx.map(|(s, _, _, _)| s),
+                                    para_index: enclosing_ctx.map(|(_, p, _, _)| p),
                                     control_index: Some(ctrl_idx),
                                     fill_mode: None,
                                     original_size: None,
@@ -745,6 +750,10 @@ impl LayoutEngine {
                                     text_wrap: None,
                                     external_path: pic.image_attr.external_path.clone(),
                                     header_footer_ref: None,
+                                    cell_index: Some(cell_idx),
+                                    cell_para_index: Some(pidx),
+                                    outer_table_control_index: enclosing_ctx
+                                        .map(|(_, _, _, table_ci)| table_ci),
                                 }),
                                 BoundingBox::new(pic_x, pic_y, fit_w, fit_h),
                             );

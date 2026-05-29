@@ -2689,6 +2689,14 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            // [Task #1151 v4] 셀 안 inline picture 의 cell context
+                                            // 보존. cell_ctx 가 None 이면 None → 회귀 0.
+                                            cell_index: cell_ctx
+                                                .as_ref()
+                                                .and_then(|c| c.path.last().map(|e| e.cell_index)),
+                                            cell_para_index: cell_ctx.as_ref().and_then(|c| {
+                                                c.path.last().map(|e| e.cell_para_index)
+                                            }),
                                             crop,
                                             original_size_hu,
                                             effect: pic.image_attr.effect,
@@ -3068,6 +3076,13 @@ impl LayoutEngine {
                                         section_index: Some(section_index),
                                         para_index: Some(para_index),
                                         control_index: Some(tac_ci),
+                                        // [Task #1151 v4] 셀 안 inline picture 의 cell context 보존.
+                                        cell_index: cell_ctx
+                                            .as_ref()
+                                            .and_then(|c| c.path.last().map(|e| e.cell_index)),
+                                        cell_para_index: cell_ctx
+                                            .as_ref()
+                                            .and_then(|c| c.path.last().map(|e| e.cell_para_index)),
                                         crop,
                                         original_size_hu,
                                         effect: pic.image_attr.effect,
@@ -3216,6 +3231,15 @@ impl LayoutEngine {
                                             section_index: Some(section_index),
                                             para_index: Some(para_index),
                                             control_index: Some(tac_ci),
+                                            // [Task #1151 v4] 셀 안 inline picture 의 cell context
+                                            // 보존 — rendering.rs JSON 출력의 cellIdx/cellParaIdx
+                                            // 로 노출되어 cursor_rect hit-test 가 인식.
+                                            cell_index: cell_ctx
+                                                .as_ref()
+                                                .and_then(|c| c.path.last().map(|e| e.cell_index)),
+                                            cell_para_index: cell_ctx.as_ref().and_then(|c| {
+                                                c.path.last().map(|e| e.cell_para_index)
+                                            }),
                                             crop,
                                             original_size_hu,
                                             effect: pic.image_attr.effect,
