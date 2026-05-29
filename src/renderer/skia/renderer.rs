@@ -524,14 +524,30 @@ impl SkiaLayerRenderer {
                                 canvas.draw_rect(rect, &paint);
                             }
                             if let Some(image) = &background.image {
+                                // [Issue #1156] 페이지 배경 이미지는 워터마크 — 반투명 합성.
+                                // svg.rs/web_canvas.rs render_page_background_image 와 동일
+                                // (렌더러 경로 정합). RealPic 톤 프리셋은 PAGE_OPACITY(0.26),
+                                // 그 외 배경 워터마크는 LEGACY_IMAGE_WATERMARK_OPACITY(0.17).
+                                use crate::renderer::render_tree::{
+                                    LEGACY_IMAGE_WATERMARK_OPACITY,
+                                    REAL_PICTURE_WATERMARK_PAGE_OPACITY,
+                                };
+                                let wm_opacity = if image.is_real_picture_watermark_tone_preset() {
+                                    REAL_PICTURE_WATERMARK_PAGE_OPACITY
+                                } else {
+                                    LEGACY_IMAGE_WATERMARK_OPACITY
+                                };
+                                let alpha = (255.0 * wm_opacity).round() as u32;
+                                canvas.save_layer_alpha(Some(rect), alpha);
                                 draw_image(
                                     &image.data,
                                     *bbox,
                                     Some(image.fill_mode),
                                     None,
                                     None,
-                                    ImageEffect::RealPic,
+                                    image.effect,
                                 );
+                                canvas.restore();
                             }
                             if let Some(color) = background.border_color {
                                 let mut paint = Paint::default();

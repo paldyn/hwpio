@@ -1259,8 +1259,17 @@ impl SvgRenderer {
         // PageBackground RealPic 워터마크 프리셋은 한컴의 색상 있는 배경 워터마크에 맞춰
         // 색감 보정을 PNG 픽셀에 bake한 뒤 반투명으로 합성한다.
         let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
-        let is_watermark_image = !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
-            && (img.brightness != 0 || img.contrast != 0);
+        // [Issue #1156] 페이지 배경 이미지는 본질적으로 워터마크다. PR #1019(#975)
+        // 가 RealPic 톤 프리셋 경로를 추가하면서, effect=RealPic 이지만 톤 프리셋
+        // (brightness=-50, contrast=70)이 아닌 배경 워터마크(brightness=contrast=0)는
+        // is_real_picture_watermark_tone_preset / is_watermark_image 둘 다 false 가 되어
+        // opacity 가 빠지는 사각지대가 생겼다. 정답지(한컴)는 배경 워터마크를 반투명
+        // 으로 합성하므로, PageBackground 이미지는 톤 프리셋이 아니어도 워터마크 opacity
+        // 를 적용한다.
+        let is_watermark_image = (!matches!(img.effect, crate::model::image::ImageEffect::RealPic)
+            && (img.brightness != 0 || img.contrast != 0))
+            || (!preserve_color_watermark
+                && matches!(img.effect, crate::model::image::ImageEffect::RealPic));
         let detected_mime = detect_image_mime_type(&img.data);
         // BMP/PCX → PNG 재인코딩 (브라우저 호환성과 PCX white transparency 정합)
         let (render_bytes, render_mime): (std::borrow::Cow<[u8]>, &str) =
