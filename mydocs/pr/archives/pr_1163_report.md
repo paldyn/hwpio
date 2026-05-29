@@ -62,3 +62,13 @@ PageLayerTree paint op 를 `background → behindText → flow → inFrontOfText
 ## 8. 판단
 
 PNG/CanvasKit z-order 정정 + 회귀 테스트 충실. **merge 권장** (orders union 해결). SVG 후속 별도 타스크 등록.
+
+---
+
+## 9. 처리 결과 (보고)
+
+- **MERGED**: devel `832497a4` (close #1017)
+- orders union 해결, skia 테스트 회귀 정정(_v2 기준 불투명), z-order 테스트 유지
+- 검증: cargo test --tests 92 스위트 + native-skia skia 32 + issue_1017 2 통과, fmt
+- PR 코멘트 등록: 머지·정정·SVG 한계 안내
+- **SVG 후속 이슈 등록: #1167** (BehindText 워터마크 z-order, v1.0.0)
