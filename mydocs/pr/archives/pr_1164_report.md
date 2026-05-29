@@ -62,3 +62,13 @@ PR 자체 검증: 379 페이지 중 exam_eng page 2 한 장만 변경(나머지 
 - 작업지시자 시각 판정 권장: rhwp-studio overlay crop + flow large PNG 는 web 경로라 자동 테스트 밖 — 시각 게이트 유효.
 
 > 승인 시 검증 마무리(native-skia) + 시각 판정 → merge → `pr_1164_report.md`.
+
+---
+
+## 8. 처리 결과 (보고)
+
+- **MERGED**: devel `969cd022` (이슈 #1154 close)
+- orders union 해결, render_tree.rs auto-merge clean (#1167 plane 과 다른 영역)
+- 검증: cargo test --tests 전수 + render_tree::tests 15 (clip 11) + native-skia 32 + fmt 통과
+- PR 코멘트 등록 + 이슈 #1154 close
+- 원인 #2(overlay crop)·#3(flow prefetch)는 rhwp-studio web 경로 — CI Canvas visual diff pass + PR 첨부 한컴 PDF 시각 일치로 검증
