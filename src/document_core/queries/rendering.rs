@@ -613,6 +613,14 @@ impl DocumentCore {
             );
             write_json_str(buf, wrap_str(wrap));
 
+            if let Some((left, top, right, bottom)) = image.crop {
+                let _ = write!(
+                    buf,
+                    ",\"crop\":{{\"left\":{},\"top\":{},\"right\":{},\"bottom\":{}}}",
+                    left, top, right, bottom
+                );
+            }
+
             let attr = crate::model::image::ImageAttr {
                 brightness: image.brightness,
                 contrast: image.contrast,
