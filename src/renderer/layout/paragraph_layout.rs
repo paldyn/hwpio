@@ -2646,7 +2646,15 @@ impl LayoutEngine {
                             if let Some(ctrl) = p.controls.get(tac_ci) {
                                 if let Control::Picture(pic) = ctrl {
                                     let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
-                                    let img_y = (y + baseline - pic_h).max(y);
+                                    // [Task #1151 v3] sibling wrap=TopAndBottom 표 (tac=false) 가
+                                    // 차지하는 vertical 영역만큼 picture y 보정. 한컴 정합
+                                    // (samples/tac-verify/scenario-{a..d}-after.hwp).
+                                    let sibling_table_reserved_hu =
+                                        calc_sibling_topandbottom_table_reserved_hu(&p.controls);
+                                    let sibling_table_reserved_px =
+                                        hwpunit_to_px(sibling_table_reserved_hu, self.dpi);
+                                    let img_y =
+                                        (y + baseline - pic_h).max(y) + sibling_table_reserved_px;
                                     let bin_data_id = pic.image_attr.bin_data_id;
                                     let image_data =
                                         find_bin_data(bdc, bin_data_id).map(|c| c.data.clone());
@@ -3163,7 +3171,17 @@ impl LayoutEngine {
                                 }
                                 if let Control::Picture(pic) = ctrl {
                                     let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
-                                    let img_y = (y + baseline - pic_h).max(y);
+                                    // [Task #1151 v3] 같은 paragraph 의 sibling wrap=TopAndBottom
+                                    // 표 (tac=false) 가 차지하는 vertical 영역만큼 picture y 보정.
+                                    // 한컴 정합 (samples/tac-verify/scenario-{a..d}-after.hwp): picture
+                                    // 가 표 아래에 그려져 오버랩 차단. sibling 표가 없으면 reserved=0
+                                    // → 기존 동작 보존 (회귀 0).
+                                    let sibling_table_reserved_hu =
+                                        calc_sibling_topandbottom_table_reserved_hu(&p.controls);
+                                    let sibling_table_reserved_px =
+                                        hwpunit_to_px(sibling_table_reserved_hu, self.dpi);
+                                    let img_y =
+                                        (y + baseline - pic_h).max(y) + sibling_table_reserved_px;
                                     let bin_data_id = pic.image_attr.bin_data_id;
                                     let image_data =
                                         find_bin_data(bdc, bin_data_id).map(|c| c.data.clone());
@@ -4117,6 +4135,119 @@ impl LayoutEngine {
                 }
             }
         }
+    }
+}
+
+/// [Task #1151 v3] paragraph 의 sibling controls 중 `wrap=TopAndBottom` +
+/// `treat_as_char=false` 인 표가 차지하는 vertical 영역 (HWPUNIT) 합산.
+///
+/// 한컴 layout 정합 (`mydocs/tech/topandbottom_table_inline_picture_layout.md` H1):
+/// 같은 paragraph 의 sibling tac picture 가 표 아래 영역에 그려지도록 picture
+/// 의 y 위치 보정값을 계산한다. 표가 없으면 0 반환 (회귀 0 보장).
+///
+/// 합산 공식: `table.common.height + outer_margin_top + outer_margin_bottom`
+/// (한컴 산출물 `samples/tac-verify/scenario-a-after.hwp` 의 표 outer_margin
+/// 1.0mm 정합).
+pub(crate) fn calc_sibling_topandbottom_table_reserved_hu(
+    controls: &[crate::model::control::Control],
+) -> i32 {
+    use crate::model::control::Control;
+    use crate::model::shape::TextWrap;
+    controls
+        .iter()
+        .map(|c| match c {
+            Control::Table(t)
+                if matches!(t.common.text_wrap, TextWrap::TopAndBottom)
+                    && !t.common.treat_as_char =>
+            {
+                t.common.height as i32 + t.outer_margin_top as i32 + t.outer_margin_bottom as i32
+            }
+            _ => 0,
+        })
+        .sum()
+}
+
+#[cfg(test)]
+mod issue_1151_v3_helper_tests {
+    //! Issue #1151 v3: calc_sibling_topandbottom_table_reserved_hu helper 단위 검증.
+    //!
+    //! 한컴 정합 (samples/tac-verify/scenario-{a..d}-after.hwp): wrap=TopAndBottom +
+    //! tac=false 인 표만 vertical 영역 reservation 으로 합산. 그 외 (TAC 표 / Square
+    //! wrap / picture 등) 은 0.
+
+    use super::calc_sibling_topandbottom_table_reserved_hu;
+    use crate::model::control::Control;
+    use crate::model::image::Picture;
+    use crate::model::shape::{CommonObjAttr, TextWrap};
+    use crate::model::table::Table;
+
+    fn make_table(width: u32, height: u32, wrap: TextWrap, tac: bool) -> Table {
+        Table {
+            common: CommonObjAttr {
+                width,
+                height,
+                text_wrap: wrap,
+                treat_as_char: tac,
+                ..Default::default()
+            },
+            outer_margin_left: 283,
+            outer_margin_right: 283,
+            outer_margin_top: 283,
+            outer_margin_bottom: 283,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_single() {
+        // scenario-a-after.hwp 의 표: 13630×12498, outer_margin (top=283, bottom=283).
+        // 합산 = 12498 + 283 + 283 = 13064 HU.
+        let table = make_table(13630, 12498, TextWrap::TopAndBottom, false);
+        let controls = vec![Control::Table(Box::new(table))];
+        assert_eq!(
+            calc_sibling_topandbottom_table_reserved_hu(&controls),
+            13064
+        );
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_none_when_no_table() {
+        let controls: Vec<Control> = vec![];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_excludes_tac_table() {
+        let table = make_table(13630, 12498, TextWrap::TopAndBottom, true); // tac=true 제외
+        let controls = vec![Control::Table(Box::new(table))];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_excludes_square_wrap() {
+        let table = make_table(13630, 12498, TextWrap::Square, false); // wrap=Square 제외
+        let controls = vec![Control::Table(Box::new(table))];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_ignores_picture_control() {
+        // Picture 는 합산 대상 아님 (sibling Picture 자체는 inline 글리프).
+        let pic = Picture::default();
+        let controls = vec![Control::Picture(Box::new(pic))];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_sums_multiple_tables() {
+        let t1 = make_table(13630, 10000, TextWrap::TopAndBottom, false);
+        let t2 = make_table(13630, 5000, TextWrap::TopAndBottom, false);
+        let controls = vec![Control::Table(Box::new(t1)), Control::Table(Box::new(t2))];
+        // (10000 + 283 + 283) + (5000 + 283 + 283) = 10566 + 5566 = 16132
+        assert_eq!(
+            calc_sibling_topandbottom_table_reserved_hu(&controls),
+            16132
+        );
     }
 }
 

@@ -4515,7 +4515,19 @@ impl LayoutEngine {
                     if pic.common.treat_as_char {
                         let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
                         let pic_w = hwpunit_to_px(pic.common.width as i32, self.dpi);
-                        let pic_y = para_start_y.get(&para_index).copied().unwrap_or(y_offset);
+                        // [Task #1151 v3] 같은 paragraph 의 sibling wrap=TopAndBottom 표
+                        // (tac=false) 가 차지하는 vertical 영역만큼 picture y 보정.
+                        // 한컴 정합 (samples/tac-verify/scenario-{a..d}-after.hwp):
+                        // picture 가 표 아래에 그려져 오버랩 차단. sibling 표가 없으면
+                        // reserved=0 → 기존 동작 보존 (회귀 0).
+                        let sibling_table_reserved_hu =
+                            super::layout::paragraph_layout::calc_sibling_topandbottom_table_reserved_hu(
+                                &para.controls,
+                            );
+                        let sibling_table_reserved_px =
+                            hwpunit_to_px(sibling_table_reserved_hu, self.dpi);
+                        let pic_y = para_start_y.get(&para_index).copied().unwrap_or(y_offset)
+                            + sibling_table_reserved_px;
                         let comp = composed.get(para_index);
                         let para_style_id = comp
                             .map(|c| c.para_style_id as usize)
