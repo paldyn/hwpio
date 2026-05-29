@@ -1259,8 +1259,11 @@ impl SvgRenderer {
         // PageBackground RealPic 워터마크 프리셋은 한컴의 색상 있는 배경 워터마크에 맞춰
         // 색감 보정을 PNG 픽셀에 bake한 뒤 반투명으로 합성한다.
         let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
-        let is_watermark_image = !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
-            && (img.brightness != 0 || img.contrast != 0);
+        // [Issue #1156] 워터마크 판정 = 밝기·대비가 둘 다 0 이 아님 (effect 무관).
+        // 한컴은 워터마크 효과 해제 시 밝기·대비를 0/0 으로 되돌린다. 종전의
+        // `!RealPic && ...` 조건은 effect=RealPic 배경 워터마크(143E: 70/-50)를
+        // 놓쳐 opacity 가 빠지는 회귀를 냈다.
+        let is_watermark_image = img.is_watermark();
         let detected_mime = detect_image_mime_type(&img.data);
         // BMP/PCX → PNG 재인코딩 (브라우저 호환성과 PCX white transparency 정합)
         let (render_bytes, render_mime): (std::borrow::Cow<[u8]>, &str) =
@@ -1391,8 +1394,8 @@ impl SvgRenderer {
         // 색감을 살린 뒤 반투명으로 합성한다. 표/셀 배경 fill은 쪽 배경보다
         // 더 투명하게 합성되는 샘플이 있어 opacity만 별도 프로파일을 사용한다.
         let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
-        let is_watermark_image = !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
-            && (img.brightness != 0 || img.contrast != 0);
+        // [Issue #1156] 워터마크 판정 = 밝기·대비가 둘 다 0 이 아님 (effect 무관).
+        let is_watermark_image = img.is_watermark();
         let mime_type = detect_image_mime_type(data);
 
         // WMF → SVG 변환 (브라우저는 WMF를 렌더링할 수 없으므로 SVG로 변환)
