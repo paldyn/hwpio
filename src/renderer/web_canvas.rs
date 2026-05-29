@@ -375,9 +375,14 @@ impl WebCanvasRenderer {
                     // PageBackground RealPic 워터마크 프리셋은 한컴의 색상 있는 배경 워터마크에 맞춰
                     // 색감을 살린 뒤 반투명으로 합성한다.
                     let preserve_color_watermark = img.is_real_picture_watermark_tone_preset();
+                    // [Issue #1156] 페이지 배경 이미지는 본질적으로 워터마크. effect=RealPic
+                    // 이지만 톤 프리셋이 아닌 배경(brightness=contrast=0)도 워터마크 opacity
+                    // 적용 (svg.rs render_page_background_image 와 동일 — 렌더러 경로 정합).
                     let is_watermark_image =
-                        !matches!(img.effect, crate::model::image::ImageEffect::RealPic)
-                            && (img.brightness != 0 || img.contrast != 0);
+                        (!matches!(img.effect, crate::model::image::ImageEffect::RealPic)
+                            && (img.brightness != 0 || img.contrast != 0))
+                            || (!preserve_color_watermark
+                                && matches!(img.effect, crate::model::image::ImageEffect::RealPic));
                     let mut baked_color_watermark = false;
                     let render_data: std::borrow::Cow<[u8]> = if preserve_color_watermark {
                         match crate::renderer::image_resolver::real_picture_watermark_bytes_to_hancom_tone_png_bytes(
