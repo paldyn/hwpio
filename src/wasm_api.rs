@@ -2508,6 +2508,24 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// [Task #1151 v4] 표 셀 내 Picture 속성 조회 (by_path). Shape 패턴 정합.
+    #[wasm_bindgen(js_name = getCellPicturePropertiesByPath)]
+    pub fn get_cell_picture_properties_by_path(
+        &self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        inner_control_idx: u32,
+    ) -> Result<String, JsValue> {
+        self.get_cell_picture_properties_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            cell_path_json,
+            inner_control_idx as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// [Task #1138] 표 셀 내 Shape 속성 변경 (by_path).
     #[wasm_bindgen(js_name = setCellShapePropertiesByPath)]
     pub fn set_cell_shape_properties_by_path(
@@ -2519,6 +2537,26 @@ impl HwpDocument {
         props_json: &str,
     ) -> Result<String, JsValue> {
         self.set_cell_shape_properties_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            cell_path_json,
+            inner_control_idx as usize,
+            props_json,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// [Task #1151 v4] 표 셀 내 Picture 속성 변경 (by_path). Shape 패턴 정합.
+    #[wasm_bindgen(js_name = setCellPicturePropertiesByPath)]
+    pub fn set_cell_picture_properties_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        cell_path_json: &str,
+        inner_control_idx: u32,
+        props_json: &str,
+    ) -> Result<String, JsValue> {
+        self.set_cell_picture_properties_by_path_native(
             section_idx as usize,
             parent_para_idx as usize,
             cell_path_json,

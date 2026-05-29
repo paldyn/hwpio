@@ -23,6 +23,7 @@ use crate::model::shape::{
 use crate::model::style::Alignment;
 
 impl LayoutEngine {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_picture(
         &self,
         tree: &mut PageRenderTree,
@@ -34,6 +35,7 @@ impl LayoutEngine {
         section_index: Option<usize>,
         para_index: Option<usize>,
         control_index: Option<usize>,
+        cell_ctx: Option<&crate::renderer::layout::CellContext>,
     ) {
         // [Task #825] 본문 picture 경로 — header_footer_ref = None
         self.layout_picture_full(
@@ -47,12 +49,17 @@ impl LayoutEngine {
             para_index,
             control_index,
             None,
+            cell_ctx,
         );
     }
 
     /// [Task #825] 머리말/꼬리말 picture 전용 — outer Header/Footer 위치 marker 전달.
     /// `header_footer_ref` 가 `Some` 일 때 ImageNode 에 마커 설정 → rhwp-studio
     /// 머리말/꼬리말 그림 클릭 hit-test + 개체 속성 dialog dispatch 활성화.
+    ///
+    /// [Task #1151 v4] `cell_ctx` 가 `Some` 일 때 ImageNode 의 cell_index 설정 +
+    /// tac=true 인 경우 `inline_shape_positions` 등록. studio findPictureAtClick 가
+    /// cellIdx 인식하여 셀 안 picture 의 클릭 hit-test 정상 동작.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn layout_picture_full(
         &self,
@@ -66,6 +73,7 @@ impl LayoutEngine {
         para_index: Option<usize>,
         control_index: Option<usize>,
         header_footer_ref: Option<crate::renderer::render_tree::HeaderFooterImageRef>,
+        cell_ctx: Option<&crate::renderer::layout::CellContext>,
     ) {
         // 그림 크기 (HWPUNIT → 픽셀)
         // CommonObjAttr의 width/height가 개체의 실제 표시 크기
@@ -145,6 +153,11 @@ impl LayoutEngine {
             };
 
         // 이미지 노드 생성
+        // [Task #1151 v4] 셀 안 picture 인 경우 cell context 보존.
+        let cell_index_v4 = cell_ctx.and_then(|c| c.path.last().map(|e| e.cell_index));
+        let cell_para_index_v4 = cell_ctx.and_then(|c| c.path.last().map(|e| e.cell_para_index));
+        let outer_table_control_index_v4 =
+            cell_ctx.and_then(|c| c.path.last().map(|e| e.control_index));
         let img_id = tree.next_id();
         let img_node = RenderNode::new(
             img_id,
@@ -161,12 +174,27 @@ impl LayoutEngine {
                 transform: extract_shape_transform(&picture.shape_attr),
                 external_path: picture.image_attr.external_path.clone(),
                 header_footer_ref: header_footer_ref.clone(),
+                cell_index: cell_index_v4,
+                cell_para_index: cell_para_index_v4,
+                outer_table_control_index: outer_table_control_index_v4,
                 ..ImageNode::new(bin_data_id, image_data)
             }),
             BoundingBox::new(pic_x, pic_y, pic_width, pic_height),
         );
 
         parent_node.children.push(img_node);
+
+        // [Task #1151 v4] tac=true 셀 안 picture 의 위치를 inline_shape_positions 에 등록 →
+        // cursor_rect 의 hit-test 루프가 picture 클릭 인식. 셀 외부 / 본문 picture 는
+        // 기존 register path (paragraph_layout) 가 처리하므로 cell_ctx Some + tac=true
+        // 인 경우만.
+        if picture.common.treat_as_char {
+            if let (Some(sec), Some(para_for_layout), Some(ctrl)) =
+                (section_index, para_index, control_index)
+            {
+                tree.set_inline_shape_position(sec, para_for_layout, ctrl, cell_ctx, pic_x, pic_y);
+            }
+        }
 
         // 그림 테두리(선) 렌더링
         self.render_picture_border(

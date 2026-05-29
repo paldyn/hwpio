@@ -2687,7 +2687,13 @@ impl LayoutEngine {
                                         img_id,
                                         RenderNodeType::Image(ImageNode {
                                             section_index: Some(section_index),
-                                            para_index: Some(para_index),
+                                            // [Task #1151 v4] 셀 안 picture 는 outer paragraph idx 노출.
+                                            para_index: Some(
+                                                cell_ctx
+                                                    .as_ref()
+                                                    .map(|c| c.parent_para_index)
+                                                    .unwrap_or(para_index),
+                                            ),
                                             control_index: Some(tac_ci),
                                             // [Task #1151 v4] 셀 안 inline picture 의 cell context
                                             // 보존. cell_ctx 가 None 이면 None → 회귀 0.
@@ -2697,6 +2703,9 @@ impl LayoutEngine {
                                             cell_para_index: cell_ctx.as_ref().and_then(|c| {
                                                 c.path.last().map(|e| e.cell_para_index)
                                             }),
+                                            outer_table_control_index: cell_ctx.as_ref().and_then(
+                                                |c| c.path.last().map(|e| e.control_index),
+                                            ),
                                             crop,
                                             original_size_hu,
                                             effect: pic.image_attr.effect,
@@ -3074,12 +3083,21 @@ impl LayoutEngine {
                                     img_id,
                                     RenderNodeType::Image(ImageNode {
                                         section_index: Some(section_index),
-                                        para_index: Some(para_index),
+                                        // [Task #1151 v4] 셀 안 picture 는 outer paragraph idx 노출.
+                                        para_index: Some(
+                                            cell_ctx
+                                                .as_ref()
+                                                .map(|c| c.parent_para_index)
+                                                .unwrap_or(para_index),
+                                        ),
                                         control_index: Some(tac_ci),
                                         // [Task #1151 v4] 셀 안 inline picture 의 cell context 보존.
                                         cell_index: cell_ctx
                                             .as_ref()
                                             .and_then(|c| c.path.last().map(|e| e.cell_index)),
+                                        outer_table_control_index: cell_ctx
+                                            .as_ref()
+                                            .and_then(|c| c.path.last().map(|e| e.control_index)),
                                         cell_para_index: cell_ctx
                                             .as_ref()
                                             .and_then(|c| c.path.last().map(|e| e.cell_para_index)),
@@ -3229,7 +3247,13 @@ impl LayoutEngine {
                                         img_id,
                                         RenderNodeType::Image(ImageNode {
                                             section_index: Some(section_index),
-                                            para_index: Some(para_index),
+                                            // [Task #1151 v4] 셀 안 picture 는 outer paragraph idx 노출.
+                                            para_index: Some(
+                                                cell_ctx
+                                                    .as_ref()
+                                                    .map(|c| c.parent_para_index)
+                                                    .unwrap_or(para_index),
+                                            ),
                                             control_index: Some(tac_ci),
                                             // [Task #1151 v4] 셀 안 inline picture 의 cell context
                                             // 보존 — rendering.rs JSON 출력의 cellIdx/cellParaIdx
@@ -3237,6 +3261,9 @@ impl LayoutEngine {
                                             cell_index: cell_ctx
                                                 .as_ref()
                                                 .and_then(|c| c.path.last().map(|e| e.cell_index)),
+                                            outer_table_control_index: cell_ctx.as_ref().and_then(
+                                                |c| c.path.last().map(|e| e.control_index),
+                                            ),
                                             cell_para_index: cell_ctx.as_ref().and_then(|c| {
                                                 c.path.last().map(|e| e.cell_para_index)
                                             }),

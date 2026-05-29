@@ -897,6 +897,21 @@ export class WasmBridge {
     );
   }
 
+  /** [Task #1151 v4] 표 셀 내 Picture 속성 조회 (by_path). Shape 패턴 정합. */
+  getCellPicturePropertiesByPath(
+    sec: number,
+    parentPara: number,
+    cellPath: import('./types').CellPath,
+    innerControlIdx: number,
+  ): import('./types').PictureProperties {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse(
+      (this.doc as any).getCellPicturePropertiesByPath(
+        sec, parentPara, JSON.stringify(cellPath), innerControlIdx,
+      )
+    );
+  }
+
   /** [Task #1138] 표 셀 내 Shape 속성 변경 (by_path). */
   setCellShapePropertiesByPath(
     sec: number,
@@ -916,6 +931,22 @@ export class WasmBridge {
   setPictureProperties(sec: number, para: number, ci: number, props: Record<string, unknown>): { ok: boolean } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.setPictureProperties(sec, para, ci, JSON.stringify(props)));
+  }
+
+  /** [Task #1151 v4] 표 셀 내 Picture 속성 변경 (by_path). Shape 패턴 정합. */
+  setCellPicturePropertiesByPath(
+    sec: number,
+    parentPara: number,
+    cellPath: import('./types').CellPath,
+    innerControlIdx: number,
+    props: Record<string, unknown>,
+  ): { ok: boolean } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse(
+      (this.doc as any).setCellPicturePropertiesByPath(
+        sec, parentPara, JSON.stringify(cellPath), innerControlIdx, JSON.stringify(props),
+      )
+    );
   }
 
   // ── 수식 속성 API ─────────────────────────────────────

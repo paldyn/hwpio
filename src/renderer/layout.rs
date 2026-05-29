@@ -879,6 +879,7 @@ impl LayoutEngine {
                                 Some(i),
                                 Some(ci),
                                 outer_hf_ref.clone(),
+                                None, // [Task #1151 v4] cell_ctx: 머리말/꼬리말 path
                             );
                             let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
                             y_offset += pic_h;
@@ -1452,6 +1453,7 @@ impl LayoutEngine {
                                         Some(section_index),
                                         None,
                                         None,
+                                        None, // [Task #1151 v4] cell_ctx: 바탕쪽
                                     );
                                 }
                                 Control::Table(t) => {

@@ -2179,6 +2179,8 @@ impl LayoutEngine {
                                 width: clamped_w,
                                 height: clamped_h,
                             };
+                            // [Task #1151 v4] 글상자 내부 picture (inline) — section/para/control
+                            // 전달하여 findPictureAtClick 의 secIdx undefined skip 차단.
                             self.layout_picture(
                                 tree,
                                 shape_node,
@@ -2186,9 +2188,10 @@ impl LayoutEngine {
                                 &pic_container,
                                 bin_data_content,
                                 Alignment::Left,
-                                None,
-                                None,
-                                None,
+                                Some(section_index),
+                                Some(para_index),
+                                Some(ctrl_idx_in_para),
+                                None, // 글상자 내부는 cell_ctx 미적용 (TODO: 셀 안 글상자는 후속)
                             );
                             inline_x += clamped_w;
                         } else {
@@ -2199,6 +2202,7 @@ impl LayoutEngine {
                                 width: inner_area.width,
                                 height: (inner_area.height - (inline_y - inner_area.y)).max(0.0),
                             };
+                            // [Task #1151 v4] 글상자 내부 picture (absolute) — section/para/control 전달.
                             self.layout_picture(
                                 tree,
                                 shape_node,
@@ -2206,8 +2210,9 @@ impl LayoutEngine {
                                 &pic_container,
                                 bin_data_content,
                                 para_alignment,
-                                None,
-                                None,
+                                Some(section_index),
+                                Some(para_index),
+                                Some(ctrl_idx_in_para),
                                 None,
                             );
                             let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);

@@ -2867,6 +2867,50 @@ impl DocumentCore {
     }
 
     /// [Task #1138] 표 셀 내 Shape 속성 조회 (by_path).
+    /// [Task #1151 v4] 셀 안 picture 속성 조회 (cell_path 기반).
+    /// `get_cell_shape_properties_by_path_native` Picture 버전.
+    pub fn get_cell_picture_properties_by_path_native(
+        &self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        cell_path_json: &str,
+        inner_control_idx: usize,
+    ) -> Result<String, HwpError> {
+        let path: Vec<(usize, usize, usize)> =
+            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
+                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
+                .iter()
+                .map(|v| {
+                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    (c, ci, cpi)
+                })
+                .collect();
+        if path.is_empty() {
+            return Err(HwpError::RenderError(
+                "cell_path 가 비어있습니다".to_string(),
+            ));
+        }
+        let cell = self.resolve_cell_by_path(section_idx, parent_para_idx, &path)?;
+        let last_cell_para_idx = path.last().unwrap().2;
+        let cell_para = cell.paragraphs.get(last_cell_para_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("셀 내 문단 {} 범위 초과", last_cell_para_idx))
+        })?;
+        let ctrl = cell_para.controls.get(inner_control_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("셀 내 컨트롤 {} 범위 초과", inner_control_idx))
+        })?;
+        let pic = match ctrl {
+            Control::Picture(p) => p,
+            _ => {
+                return Err(HwpError::RenderError(
+                    "지정된 셀 내 컨트롤이 그림이 아닙니다".to_string(),
+                ))
+            }
+        };
+        Self::format_picture_properties_json(pic)
+    }
+
     pub fn get_cell_shape_properties_by_path_native(
         &self,
         section_idx: usize,
@@ -2910,6 +2954,98 @@ impl DocumentCore {
     }
 
     /// [Task #1138] 표 셀 내 Shape 속성 변경 (by_path).
+    /// [Task #1151 v4] 셀 안 picture 속성 변경 (cell_path 기반).
+    ///
+    /// `set_cell_shape_properties_by_path_native` 와 동일 패턴 — 셀 path 순회 후
+    /// inner_control_idx 의 Picture 에 대해 `apply_picture_props_inner` 적용.
+    /// v2 의 tac 토글 마이그레이션 path 는 본 셀 안 picture path 에서는 적용되지
+    /// 않는다 (셀 안 inline picture 는 이미 셀 안 위치에 있고, 한컴은 inline→floating
+    /// 자동 변환을 별도 path 로 처리. 본 PR 의 v2 scope 는 floating→inline 만).
+    pub fn set_cell_picture_properties_by_path_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        cell_path_json: &str,
+        inner_control_idx: usize,
+        props_json: &str,
+    ) -> Result<String, HwpError> {
+        let path: Vec<(usize, usize, usize)> =
+            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
+                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
+                .iter()
+                .map(|v| {
+                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                    (c, ci, cpi)
+                })
+                .collect();
+        if path.is_empty() {
+            return Err(HwpError::RenderError(
+                "cell_path 가 비어있습니다".to_string(),
+            ));
+        }
+        {
+            let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+            })?;
+            let mut current_para =
+                section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
+                    HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+                })?;
+            for (i, &(ctrl_idx, cell_idx, cell_para_idx)) in path.iter().enumerate() {
+                let ctrl = current_para.controls.get_mut(ctrl_idx).ok_or_else(|| {
+                    HwpError::RenderError(format!("경로[{}]: controls[{}] 범위 초과", i, ctrl_idx))
+                })?;
+                let table = match ctrl {
+                    Control::Table(t) => t,
+                    _ => {
+                        return Err(HwpError::RenderError(format!(
+                            "경로[{}]: controls[{}] 가 표가 아닙니다",
+                            i, ctrl_idx
+                        )))
+                    }
+                };
+                let cell = table.cells.get_mut(cell_idx).ok_or_else(|| {
+                    HwpError::RenderError(format!("경로[{}]: cells[{}] 범위 초과", i, cell_idx))
+                })?;
+                current_para = cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
+                    HwpError::RenderError(format!(
+                        "경로[{}]: paragraphs[{}] 범위 초과",
+                        i, cell_para_idx
+                    ))
+                })?;
+            }
+            let ctrl = current_para
+                .controls
+                .get_mut(inner_control_idx)
+                .ok_or_else(|| {
+                    HwpError::RenderError(format!("셀 내 컨트롤 {} 범위 초과", inner_control_idx))
+                })?;
+            let pic = match ctrl {
+                Control::Picture(p) => p,
+                _ => {
+                    return Err(HwpError::RenderError(
+                        "지정된 셀 내 컨트롤이 그림이 아닙니다".to_string(),
+                    ))
+                }
+            };
+            Self::apply_picture_props_inner(pic, props_json);
+        }
+        let section = &mut self.document.sections[section_idx];
+        section.raw_stream = None;
+        self.recompose_section(section_idx);
+        self.paginate_if_needed();
+        self.invalidate_page_tree_cache();
+        let outer_table_ctrl = path.first().unwrap().0;
+        self.event_log.push(DocumentEvent::PictureResized {
+            section: section_idx,
+            para: parent_para_idx,
+            ctrl: outer_table_ctrl,
+        });
+        Ok("{\"ok\":true}".to_string())
+    }
+
     pub fn set_cell_shape_properties_by_path_native(
         &mut self,
         section_idx: usize,

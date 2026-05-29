@@ -758,6 +758,32 @@ impl LayoutEngine {
                                 BoundingBox::new(pic_x, pic_y, fit_w, fit_h),
                             );
                             cell_node.children.push(img_node);
+                            // [Task #1151 v4] 셀 안 inline picture 의 위치를 inline_shape_positions
+                            // 에 등록. cursor_rect.rs 의 hit-test 루프가 이 등록 없이는 picture 클릭을
+                            // 인식하지 못해 (키보드 입력으로 paragraph_layout 의 다른 path 가 등록할
+                            // 때까지) 첫 클릭 무반응. enclosing_ctx 가 Some 인 경우만 (셀 컨텍스트 있음).
+                            if let Some((sec_idx, outer_pi, parent_path, table_ci)) = enclosing_ctx
+                            {
+                                let mut path = parent_path.to_vec();
+                                path.push(CellPathEntry {
+                                    control_index: table_ci,
+                                    cell_index: cell_idx,
+                                    cell_para_index: pidx,
+                                    text_direction: cell.text_direction,
+                                });
+                                let cell_ctx_for_register = CellContext {
+                                    parent_para_index: outer_pi,
+                                    path,
+                                };
+                                tree.set_inline_shape_position(
+                                    sec_idx,
+                                    outer_pi,
+                                    ctrl_idx,
+                                    Some(&cell_ctx_for_register),
+                                    pic_x,
+                                    pic_y,
+                                );
+                            }
                         }
                         _ => {}
                     }
