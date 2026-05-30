@@ -2420,6 +2420,12 @@ impl LayoutEngine {
         let mut para_start_y: std::collections::HashMap<usize, f64> =
             std::collections::HashMap::new();
         let mut para_float_lanes: ParaFloatLanes = std::collections::HashMap::new();
+        // [Task #1151 v9 결함 D] paragraph 단위 inline picture 가로 분배 cursor state.
+        // 같은 paragraph 의 sibling tac=true picture 들이 가로로 inline 분배 (한컴 native 정합).
+        let mut para_inline_state: std::collections::HashMap<
+            usize,
+            super::layout::paragraph_layout::ParaInlineState,
+        > = std::collections::HashMap::new();
 
         let multi_col_width = if zone_layout.column_areas.len() > 1 {
             let widths: Vec<f64> = zone_layout.column_areas.iter().map(|a| a.width).collect();
@@ -2667,6 +2673,7 @@ impl LayoutEngine {
                 paper_images,
                 &mut para_start_y,
                 &mut para_float_lanes,
+                &mut para_inline_state,
                 item,
                 page_content,
                 paragraphs,
@@ -3139,6 +3146,11 @@ impl LayoutEngine {
         paper_images: &mut Vec<RenderNode>,
         para_start_y: &mut std::collections::HashMap<usize, f64>,
         para_float_lanes: &mut ParaFloatLanes,
+        // [Task #1151 v9 결함 D] sibling TAC picture 가로 분배 cursor state.
+        para_inline_state: &mut std::collections::HashMap<
+            usize,
+            super::layout::paragraph_layout::ParaInlineState,
+        >,
         item: &PageItem,
         page_content: &PageContent,
         paragraphs: &[Paragraph],
@@ -3565,6 +3577,7 @@ impl LayoutEngine {
                     col_node,
                     paper_images,
                     para_start_y,
+                    para_inline_state,
                     *para_index,
                     *control_index,
                     &ctx,
@@ -4476,12 +4489,18 @@ impl LayoutEngine {
 
     /// Shape PageItem 레이아웃 (layout_column_item에서 분리)
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn layout_shape_item(
         &self,
         tree: &mut PageRenderTree,
         col_node: &mut RenderNode,
         paper_images: &mut Vec<RenderNode>,
         para_start_y: &mut std::collections::HashMap<usize, f64>,
+        // [Task #1151 v9 결함 D] sibling TAC picture 가로 분배 cursor state.
+        para_inline_state: &mut std::collections::HashMap<
+            usize,
+            super::layout::paragraph_layout::ParaInlineState,
+        >,
         para_index: usize,
         control_index: usize,
         ctx: &ColumnItemCtx,
@@ -4502,18 +4521,31 @@ impl LayoutEngine {
         // 배치된 경우, 두 번째 이후의 그림은 paragraph 시작 y가 아니라 진행된 y_offset
         // (선행 TAC 후속 위치)에 그려져야 표와 겹치지 않는다. control_index 이전에 같은
         // paragraph의 TAC 컨트롤이 있고 y_offset이 기존 등록값보다 진행됐으면 갱신한다.
-        let has_prior_tac_in_para = paragraphs
+        //
+        // [Task #1151 v9 결함 D] sibling TAC picture 만 있는 경우 (= 가로 분배 시나리오) 는
+        // para_start_y 갱신 X — picture 의 y 는 line_top_y 로 동일 유지. has_prior_tac 의
+        // 종류를 Table/Shape vs Picture 로 분리하여 picture-only 시퀀스에서 y 진행을 차단.
+        let has_prior_non_picture_tac = paragraphs
             .get(para_index)
             .map(|p| {
                 p.controls.iter().take(control_index).any(|c| match c {
                     Control::Table(t) => t.common.treat_as_char,
-                    Control::Picture(p) => p.common.treat_as_char,
                     Control::Shape(s) => s.common().treat_as_char,
                     _ => false,
                 })
             })
             .unwrap_or(false);
-        if has_prior_tac_in_para {
+        let has_prior_tac_picture = paragraphs
+            .get(para_index)
+            .map(|p| {
+                p.controls.iter().take(control_index).any(|c| match c {
+                    Control::Picture(p) => p.common.treat_as_char,
+                    _ => false,
+                })
+            })
+            .unwrap_or(false);
+        if has_prior_non_picture_tac {
+            // 선행 TAC Table/Shape 가 있는 경우만 진행된 y_offset 으로 갱신.
             let needs_update = para_start_y
                 .get(&para_index)
                 .map(|&existing| y_offset > existing + 1.0)
@@ -4521,9 +4553,12 @@ impl LayoutEngine {
             if needs_update {
                 para_start_y.insert(para_index, y_offset);
             }
-        } else {
+        } else if !has_prior_tac_picture {
+            // 첫 picture (선행 TAC picture 도 Table/Shape 도 없음): paragraph 시작 y 등록.
             para_start_y.entry(para_index).or_insert(y_offset);
         }
+        // 선행 picture 만 있는 경우 (has_prior_tac_picture && !has_prior_non_picture_tac):
+        // para_start_y 의 기존 값 유지 — 가로 분배의 첫 picture y 와 동일.
         let mut result_y = y_offset;
         if let Some(para) = paragraphs.get(para_index) {
             if let Some(ctrl) = para.controls.get(control_index) {
@@ -4533,17 +4568,46 @@ impl LayoutEngine {
                         let pic_w = hwpunit_to_px(pic.common.width as i32, self.dpi);
                         // [Task #1151 v3] 같은 paragraph 의 sibling wrap=TopAndBottom 표
                         // (tac=false) 가 차지하는 vertical 영역만큼 picture y 보정.
-                        // 한컴 정합 (samples/tac-verify/scenario-{a..d}-after.hwp):
-                        // picture 가 표 아래에 그려져 오버랩 차단. sibling 표가 없으면
-                        // reserved=0 → 기존 동작 보존 (회귀 0).
                         let sibling_table_reserved_hu =
                             super::layout::paragraph_layout::calc_sibling_topandbottom_table_reserved_hu(
                                 &para.controls,
                             );
                         let sibling_table_reserved_px =
                             hwpunit_to_px(sibling_table_reserved_hu, self.dpi);
-                        let pic_y = para_start_y.get(&para_index).copied().unwrap_or(y_offset)
-                            + sibling_table_reserved_px;
+
+                        // [Task #1151 v9 결함 D] sibling TAC picture 시퀀스 위치 판별.
+                        // 한컴 native 정합: 동일 paragraph 안 sibling tac=true picture 들이
+                        // 가로로 inline 분배 (inline glyph 처럼).
+                        let tac_pic_seq =
+                            super::layout::paragraph_layout::collect_sibling_tac_picture_widths_px(
+                                &para.controls,
+                                self.dpi,
+                            );
+                        let position_in_seq =
+                            tac_pic_seq.iter().position(|(ci, _)| *ci == control_index);
+                        let is_single_pic = tac_pic_seq.len() == 1;
+                        let is_first_in_seq = position_in_seq == Some(0);
+                        let is_subsequent_in_seq = position_in_seq.map(|p| p > 0).unwrap_or(false);
+                        let is_last_in_seq = position_in_seq
+                            .map(|p| p == tac_pic_seq.len() - 1)
+                            .unwrap_or(false);
+
+                        // pic_y 결정:
+                        // - 단일 picture / 시퀀스 첫 picture: para_start_y + sibling_table_reserved
+                        // - 시퀀스 후속 picture: state.line_top_y (가로 분배 시 y 유지)
+                        let pic_y = if is_subsequent_in_seq {
+                            para_inline_state
+                                .get(&para_index)
+                                .map(|s| s.line_top_y)
+                                .unwrap_or_else(|| {
+                                    para_start_y.get(&para_index).copied().unwrap_or(y_offset)
+                                        + sibling_table_reserved_px
+                                })
+                        } else {
+                            para_start_y.get(&para_index).copied().unwrap_or(y_offset)
+                                + sibling_table_reserved_px
+                        };
+                        let _ = is_single_pic; // Stage 24-25 에서 alignment / wrap 시 사용
                         let comp = composed.get(para_index);
                         let para_style_id = comp
                             .map(|c| c.para_style_id as usize)
@@ -4611,16 +4675,52 @@ impl LayoutEngine {
                             para_style_ref.map(|s| s.margin_right).unwrap_or(0.0);
                         let avail_w =
                             (col_area.width - effective_margin_left - para_margin_right).max(pic_w);
-                        let pic_x = match para_alignment {
-                            Alignment::Center | Alignment::Distribute => {
-                                col_area.x
-                                    + effective_margin_left
-                                    + (avail_w - pic_w).max(0.0) / 2.0
+                        // [Task #1151 v9 결함 D] pic_x 결정:
+                        // - 단일 picture: 기존 alignment 그대로
+                        // - 시퀀스 첫 picture: total_tac_width 기반 alignment + state 초기화
+                        // - 시퀀스 후속 picture: state.cursor_x 사용 (가로 누적)
+                        let pic_x = if is_subsequent_in_seq {
+                            let cur = para_inline_state
+                                .get(&para_index)
+                                .map(|s| s.cursor_x)
+                                .unwrap_or(col_area.x + effective_margin_left);
+                            let line_right = col_area.x + effective_margin_left + avail_w;
+                            // [Task #1151 v9 Stage 24] line wrap: cursor_x + pic_w > avail 면
+                            // 다음 line 으로 wrap (cursor_x reset, line_top_y advance).
+                            if cur + pic_w > line_right + 0.5 {
+                                if let Some(state) = para_inline_state.get_mut(&para_index) {
+                                    state.cursor_x = col_area.x + effective_margin_left;
+                                    state.line_top_y += state.line_height;
+                                    state.line_height = 0.0;
+                                }
+                                col_area.x + effective_margin_left
+                            } else {
+                                cur
                             }
-                            Alignment::Right => {
-                                col_area.x + effective_margin_left + (avail_w - pic_w).max(0.0)
+                        } else if is_first_in_seq && !is_single_pic {
+                            // 시퀀스 첫 picture: 전체 시퀀스 폭 기반 alignment.
+                            let total_tac_width: f64 = tac_pic_seq.iter().map(|(_, w)| w).sum();
+                            let align_offset = match para_alignment {
+                                Alignment::Center | Alignment::Distribute => {
+                                    (avail_w - total_tac_width).max(0.0) / 2.0
+                                }
+                                Alignment::Right => (avail_w - total_tac_width).max(0.0),
+                                _ => 0.0,
+                            };
+                            col_area.x + effective_margin_left + align_offset
+                        } else {
+                            // 단일 picture (기존 경로): 기존 alignment 그대로.
+                            match para_alignment {
+                                Alignment::Center | Alignment::Distribute => {
+                                    col_area.x
+                                        + effective_margin_left
+                                        + (avail_w - pic_w).max(0.0) / 2.0
+                                }
+                                Alignment::Right => {
+                                    col_area.x + effective_margin_left + (avail_w - pic_w).max(0.0)
+                                }
+                                _ => col_area.x + effective_margin_left,
                             }
-                            _ => col_area.x + effective_margin_left,
                         };
 
                         // Task #347: paragraph_layout이 호출되지 않는 빈 문단(텍스트 없음 +
@@ -4642,6 +4742,27 @@ impl LayoutEngine {
                                 None,
                             )
                             .is_some();
+                        // [Task #1151 v9 결함 D] state 갱신 — 가로 분배 cursor 누적.
+                        // 첫 picture 시 line_top_y / cursor_x 초기화. 후속 picture 마다 cursor_x 가산.
+                        if !is_single_pic {
+                            let entry = para_inline_state.entry(para_index).or_insert(
+                                super::layout::paragraph_layout::ParaInlineState {
+                                    cursor_x: pic_x + pic_w,
+                                    line_top_y: pic_y,
+                                    line_height: pic_h,
+                                },
+                            );
+                            if is_subsequent_in_seq {
+                                entry.cursor_x = pic_x + pic_w;
+                                entry.line_height = entry.line_height.max(pic_h);
+                            } else {
+                                // 첫 picture: 초기화 (기존 값 덮어쓰기)
+                                entry.cursor_x = pic_x + pic_w;
+                                entry.line_top_y = pic_y;
+                                entry.line_height = pic_h;
+                            }
+                        }
+
                         if !has_real_text && !already_registered {
                             let bin_data_id = pic.image_attr.bin_data_id;
                             let image_data = find_bin_data(bin_data_content, bin_data_id)
@@ -4707,21 +4828,51 @@ impl LayoutEngine {
                             // 높이만 사용하면 leading + line_spacing 이 누락되어 다음 문단이
                             // 그림 바로 아래에 붙음. max(pic_h) 는 LINE_SEG 가 비정상적으로
                             // 작은 경우의 안전장치.
+                            // [Task #1151 v9 결함 D] 가로 분배 시퀀스의 중간 picture 는 result_y
+                            // 진행 안 함 (y_offset 유지). 시퀀스 마지막 picture 또는 단일 picture
+                            // 에서만 advance — 다음 paragraph 가 가로 분배 영역 아래로 진행.
                             let line_advance = para
                                 .line_segs
                                 .first()
                                 .map(|ls| hwpunit_to_px(ls.line_height + ls.line_spacing, self.dpi))
                                 .unwrap_or(pic_h);
-                            result_y = pic_y + line_advance.max(pic_h);
+                            if is_single_pic || is_last_in_seq {
+                                // 시퀀스 마지막: state 의 line_height (시퀀스 최대 height) 기반 advance
+                                let line_top_y = para_inline_state
+                                    .get(&para_index)
+                                    .map(|s| s.line_top_y)
+                                    .unwrap_or(pic_y);
+                                let line_height = para_inline_state
+                                    .get(&para_index)
+                                    .map(|s| s.line_height)
+                                    .unwrap_or(pic_h);
+                                result_y = line_top_y + line_advance.max(line_height);
+                            }
+                            // 중간 picture: result_y = y_offset (그대로 유지, line 4527 의 default)
                         } else if !has_real_text && already_registered {
                             // [Task #418/#376] paragraph_layout 가 이미 emit 함 — push 스킵, result_y 만 갱신
                             // [Task #462] 동일하게 LINE_SEG 기반 advance 사용
+                            // [Task #1151 v9 결함 D] 가로 분배 시퀀스의 중간 picture 는 result_y
+                            // 진행 안 함 (y_offset 유지). 시퀀스 마지막 picture 또는 단일 picture
+                            // 에서만 advance — 다음 paragraph 가 가로 분배 영역 아래로 진행.
                             let line_advance = para
                                 .line_segs
                                 .first()
                                 .map(|ls| hwpunit_to_px(ls.line_height + ls.line_spacing, self.dpi))
                                 .unwrap_or(pic_h);
-                            result_y = pic_y + line_advance.max(pic_h);
+                            if is_single_pic || is_last_in_seq {
+                                // 시퀀스 마지막: state 의 line_height (시퀀스 최대 height) 기반 advance
+                                let line_top_y = para_inline_state
+                                    .get(&para_index)
+                                    .map(|s| s.line_top_y)
+                                    .unwrap_or(pic_y);
+                                let line_height = para_inline_state
+                                    .get(&para_index)
+                                    .map(|s| s.line_height)
+                                    .unwrap_or(pic_h);
+                                result_y = line_top_y + line_advance.max(line_height);
+                            }
+                            // 중간 picture: result_y = y_offset (그대로 유지, line 4527 의 default)
                         }
 
                         if let Some(ref caption) = pic.caption {

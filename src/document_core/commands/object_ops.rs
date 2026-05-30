@@ -6300,6 +6300,112 @@ mod issue_1151_v2_tac_toggle_tests {
         ));
     }
 
+    // ─── [Task #1151 v9 결함 D regression] 동일 셀 2 picture 가로 분배 ───
+    //
+    // 사용자 한컴 native 시연 (2026-05-30 후속): 동일 셀 안 picture 2 장 + 글자처럼
+    // 토글 시 한컴 native 는 가로로 inline 분배. rhwp 는 세로 분리 또는 겹침.
+    // Stage 23 fix: layout_shape_item 의 가로 분배 cursor (ParaInlineState) 활성화.
+    // 검증: render tree 의 두 image bbox 가 x 다름 (가로 분배), y 동일 (한 line).
+    #[test]
+    fn v9_two_tac_pictures_horizontal_distribute() {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+        fn collect_image_bboxes(node: &RenderNode, out: &mut Vec<(f64, f64, f64, f64)>) {
+            if matches!(node.node_type, RenderNodeType::Image(_)) {
+                out.push((node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height));
+            }
+            for child in &node.children {
+                collect_image_bboxes(child, out);
+            }
+        }
+
+        let mut core = make_test_core();
+        let table_res = core.create_table_native(0, 0, 0, 1, 1).expect("table");
+        let table_para_idx = parse_idx(&table_res, "paraIdx");
+        let table_ctrl_idx = parse_idx(&table_res, "controlIdx");
+        let cell_path: Vec<(usize, usize, usize)> = vec![(table_ctrl_idx, 0, 0)];
+        let image = minimal_png();
+
+        // picture 1 삽입 + tac
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            5670,
+            5670,
+            1,
+            1,
+            "png",
+            "test1",
+            None,
+            None,
+        )
+        .expect("insert pic1");
+        let pic1_ctrl = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+        core.set_picture_properties_native(0, table_para_idx, pic1_ctrl, r#"{"treatAsChar":true}"#)
+            .expect("toggle pic1");
+
+        // picture 2 삽입 + tac
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            5670,
+            5670,
+            1,
+            1,
+            "png",
+            "test2",
+            None,
+            None,
+        )
+        .expect("insert pic2");
+        let pic2_ctrl = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+        core.set_picture_properties_native(0, table_para_idx, pic2_ctrl, r#"{"treatAsChar":true}"#)
+            .expect("toggle pic2");
+
+        // render tree 의 image bbox 검증
+        let tree = core.build_page_tree_cached(0).expect("build page 0");
+        let mut images = vec![];
+        collect_image_bboxes(&tree.root, &mut images);
+        assert_eq!(images.len(), 2, "두 picture 모두 render 되어야 함");
+
+        let (x1, y1, w1, _h1) = images[0];
+        let (x2, y2, _w2, _h2) = images[1];
+
+        // (A) y 동일 (한 line) — 가로 분배 정합
+        assert!(
+            (y1 - y2).abs() < 0.5,
+            "두 picture y 동일 (가로 분배) — got y1={}, y2={}",
+            y1,
+            y2
+        );
+
+        // (B) x 다름 (가로 누적) — pic2 x = pic1 x + pic1 width
+        assert!(
+            x2 > x1 + 0.5,
+            "두 picture x 다름 (가로 누적) — got x1={}, x2={}",
+            x1,
+            x2
+        );
+        assert!(
+            (x2 - (x1 + w1)).abs() < 0.5,
+            "pic2 x ≈ pic1 x + pic1 width — got x1={}, x2={}, w1={}",
+            x1,
+            x2,
+            w1
+        );
+    }
+
     // ─── Scenario D 등가 ───────────────────────────────────────────────
     #[test]
     fn tac_toggle_body_floating_to_inline() {
