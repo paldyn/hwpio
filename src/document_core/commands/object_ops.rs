@@ -1689,6 +1689,10 @@ impl DocumentCore {
             }
             self.mark_section_dirty(section_idx);
             self.paginate_if_needed();
+            // [Task #1151 v9 결함 F] page tree cache invalidate — v5 와 동일 결함 (다른
+            // setter 들은 모두 호출하나 본 insert path 의 셀 분기만 누락). 두 picture
+            // 연속 insert + toggle 시 cache stale → studio 화면 불일치.
+            self.invalidate_page_tree_cache();
 
             self.event_log.push(DocumentEvent::PictureInserted {
                 section: section_idx,
@@ -1843,6 +1847,8 @@ impl DocumentCore {
         // --- 5. 리플로우 + 페이지네이션 ---
         self.recompose_section(section_idx);
         self.paginate_if_needed();
+        // [Task #1151 v9 결함 F] page tree cache invalidate (셀 분기와 동일 누락 — v5 패턴).
+        self.invalidate_page_tree_cache();
 
         self.event_log.push(DocumentEvent::PictureInserted {
             section: section_idx,
