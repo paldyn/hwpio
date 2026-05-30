@@ -4594,20 +4594,13 @@ impl LayoutEngine {
 
                         // pic_y 결정:
                         // - 단일 picture / 시퀀스 첫 picture: para_start_y + sibling_table_reserved
-                        // - 시퀀스 후속 picture: state.line_top_y (가로 분배 시 y 유지)
-                        let pic_y = if is_subsequent_in_seq {
-                            para_inline_state
-                                .get(&para_index)
-                                .map(|s| s.line_top_y)
-                                .unwrap_or_else(|| {
-                                    para_start_y.get(&para_index).copied().unwrap_or(y_offset)
-                                        + sibling_table_reserved_px
-                                })
-                        } else {
+                        // - 시퀀스 후속 picture: state.line_top_y (pic_x wrap 처리 후 결정 — 아래)
+                        // [Task #1151 v9 결함 D fix] pic_y 의 시퀀스 후속 picture 결정은 pic_x
+                        // (wrap 처리 포함) 뒤로 옮김. 그 전에는 placeholder 로 default 값 사용.
+                        let _ = is_single_pic;
+                        let default_pic_y =
                             para_start_y.get(&para_index).copied().unwrap_or(y_offset)
-                                + sibling_table_reserved_px
-                        };
-                        let _ = is_single_pic; // Stage 24-25 에서 alignment / wrap 시 사용
+                                + sibling_table_reserved_px;
                         let comp = composed.get(para_index);
                         let para_style_id = comp
                             .map(|c| c.para_style_id as usize)
@@ -4721,6 +4714,17 @@ impl LayoutEngine {
                                 }
                                 _ => col_area.x + effective_margin_left,
                             }
+                        };
+
+                        // [Task #1151 v9 결함 D fix] pic_y 의 시퀀스 후속 picture 결정 —
+                        // pic_x wrap 처리 후 갱신된 state.line_top_y 사용 (wrap 시 진행됨).
+                        let pic_y = if is_subsequent_in_seq {
+                            para_inline_state
+                                .get(&para_index)
+                                .map(|s| s.line_top_y)
+                                .unwrap_or(default_pic_y)
+                        } else {
+                            default_pic_y
                         };
 
                         // Task #347: paragraph_layout이 호출되지 않는 빈 문단(텍스트 없음 +

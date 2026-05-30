@@ -6306,12 +6306,111 @@ mod issue_1151_v2_tac_toggle_tests {
         ));
     }
 
-    // ─── [Task #1151 v9 결함 D regression] 동일 셀 2 picture 가로 분배 ───
+    // ─── [Task #1151 v9 결함 D regression v2] 큰 picture 2 장 wrap 시나리오 ───
     //
-    // 사용자 한컴 native 시연 (2026-05-30 후속): 동일 셀 안 picture 2 장 + 글자처럼
-    // 토글 시 한컴 native 는 가로로 inline 분배. rhwp 는 세로 분리 또는 겹침.
-    // Stage 23 fix: layout_shape_item 의 가로 분배 cursor (ParaInlineState) 활성화.
-    // 검증: render tree 의 두 image bbox 가 x 다름 (가로 분배), y 동일 (한 line).
+    // 사용자 시연 (2026-05-30 후속): 큰 picture 2 장 (page 폭 초과) 글자처럼 토글 시
+    // 한컴 native 는 wrap (다음 line). Stage 23 fix 첫 버전은 pic_y 결정이 pic_x wrap
+    // 처리 전이라 wrap 후 line_top_y 가 갱신됐어도 pic_y 가 wrap 전 값 → 두 picture
+    // 같은 위치 겹침. Fix: pic_y 결정을 pic_x 뒤로 옮김 (wrap 후 state 반영).
+    #[test]
+    fn v9_two_large_pictures_wrap_to_next_line() {
+        use crate::renderer::render_tree::{RenderNode, RenderNodeType};
+        fn collect_image_bboxes(node: &RenderNode, out: &mut Vec<(f64, f64, f64, f64)>) {
+            if matches!(node.node_type, RenderNodeType::Image(_)) {
+                out.push((node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height));
+            }
+            for child in &node.children {
+                collect_image_bboxes(child, out);
+            }
+        }
+
+        let mut core = make_test_core();
+        let table_res = core.create_table_native(0, 0, 0, 1, 1).expect("table");
+        let table_para_idx = parse_idx(&table_res, "paraIdx");
+        let table_ctrl_idx = parse_idx(&table_res, "controlIdx");
+        let cell_path: Vec<(usize, usize, usize)> = vec![(table_ctrl_idx, 0, 0)];
+        let image = minimal_png();
+
+        // 큰 picture 2 장 — 각 80mm × 60mm (22680 × 17010 HU)
+        // page 본문 폭 ≈ 150mm. 두 picture 합 160mm > 150mm → wrap 발생해야 함.
+        let pic_w = 22680u32;
+        let pic_h = 17010u32;
+
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            pic_w,
+            pic_h,
+            1,
+            1,
+            "png",
+            "p1",
+            None,
+            None,
+        )
+        .expect("insert pic1");
+        let pic1_ctrl = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+        core.set_picture_properties_native(0, table_para_idx, pic1_ctrl, r#"{"treatAsChar":true}"#)
+            .expect("toggle pic1");
+
+        core.insert_picture_native(
+            0,
+            table_para_idx,
+            0,
+            &cell_path,
+            &image,
+            pic_w,
+            pic_h,
+            1,
+            1,
+            "png",
+            "p2",
+            None,
+            None,
+        )
+        .expect("insert pic2");
+        let pic2_ctrl = core.document.sections[0].paragraphs[table_para_idx]
+            .controls
+            .len()
+            - 1;
+        core.set_picture_properties_native(0, table_para_idx, pic2_ctrl, r#"{"treatAsChar":true}"#)
+            .expect("toggle pic2");
+
+        let tree = core.build_page_tree_cached(0).expect("build");
+        let mut images = vec![];
+        collect_image_bboxes(&tree.root, &mut images);
+        let pic_h_px = pic_h as f64 * 96.0 / 7200.0;
+
+        assert_eq!(images.len(), 2, "두 picture 모두 render 되어야 함");
+        let (x1, y1, _, _) = images[0];
+        let (x2, y2, _, _) = images[1];
+
+        // (A) 둘째 picture y 가 첫 picture y + pic_h 만큼 진행 (wrap)
+        let y_diff = y2 - y1;
+        assert!(
+            (y_diff - pic_h_px).abs() < 1.0,
+            "wrap: y_diff {:.2} ≈ pic_h {:.2} (한 picture height 만큼 진행) — got y1={}, y2={}",
+            y_diff,
+            pic_h_px,
+            y1,
+            y2
+        );
+
+        // (B) x 동일 (wrap 후 둘째 picture 가 새 line 의 좌측에서 시작)
+        assert!(
+            (x1 - x2).abs() < 1.0,
+            "wrap: x 동일 (둘 다 새 line 의 좌측) — got x1={}, x2={}",
+            x1,
+            x2
+        );
+    }
+
     #[test]
     fn v9_two_tac_pictures_horizontal_distribute() {
         use crate::renderer::render_tree::{RenderNode, RenderNodeType};
