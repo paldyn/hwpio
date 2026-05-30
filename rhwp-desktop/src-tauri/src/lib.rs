@@ -24,6 +24,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
+// 네이티브 메뉴는 macOS 시스템 메뉴바 전용(이슈 #7). 비-macOS 는 메뉴 미부착.
+#[cfg(target_os = "macos")]
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 use tauri_plugin_dialog::DialogExt;
@@ -59,7 +61,8 @@ enum SaveOutcome {
 #[derive(Default)]
 struct PendingDocuments(Mutex<Vec<OpenedFile>>);
 
-/// 최근 문서 메뉴 항목.
+/// 최근 문서 메뉴 항목. 네이티브 메뉴(macOS) 표시 전용.
+#[cfg(target_os = "macos")]
 struct RecentEntry {
     path: String,
     name: String,
@@ -98,7 +101,8 @@ fn record_recent(app: &tauri::AppHandle, path: &str, name: &str) {
     let _ = store.save();
 }
 
-/// store 에서 최근 문서 목록을 읽는다(메뉴 구성용).
+/// store 에서 최근 문서 목록을 읽는다(메뉴 구성용). 네이티브 메뉴(macOS) 전용.
+#[cfg(target_os = "macos")]
 fn load_recent(app: &tauri::AppHandle) -> Vec<RecentEntry> {
     let Ok(store) = app.store(RECENT_STORE) else {
         return Vec::new();
@@ -150,6 +154,8 @@ fn handle_opened(app: &tauri::AppHandle, urls: &[tauri::Url]) {
 /// 앱 전역 메뉴를 만든다. 사용자 정의 항목 id 는 rhwp-studio 커맨드 id 와 동일하게 두어
 /// 클릭 시 그대로 dispatch 한다. 단축키는 스튜디오 키보드 핸들러가 소유하므로 가속기는
 /// 달지 않는다(문맥 인지 편집·입력 필드 복사/붙여넣기 보존).
+/// 네이티브 메뉴는 macOS 시스템 메뉴바 전용(이슈 #7).
+#[cfg(target_os = "macos")]
 fn build_app_menu(
     app: &tauri::AppHandle,
     recent: &[RecentEntry],
@@ -325,9 +331,14 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             app.manage(PendingDocuments::default());
-            let recent = load_recent(app.handle());
-            let menu = build_app_menu(app.handle(), &recent)?;
-            app.set_menu(menu)?;
+            // 네이티브 메뉴는 macOS 시스템 메뉴바 전용. Win/Linux 는 창 내부에 그려져
+            // 웹 UI 메뉴(#menu-bar)와 중복되므로 부착하지 않는다(이슈 #7).
+            #[cfg(target_os = "macos")]
+            {
+                let recent = load_recent(app.handle());
+                let menu = build_app_menu(app.handle(), &recent)?;
+                app.set_menu(menu)?;
+            }
             Ok(())
         })
         .on_menu_event(|app, event| {
