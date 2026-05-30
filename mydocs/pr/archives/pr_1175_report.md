@@ -50,3 +50,12 @@
 ## 비고 (검토 과정)
 
 초기 PR 번호로 주제를 추정하지 않고 실제 PR 정보 확인. (#1174 오추정 교훈 반영)
+
+---
+
+## 7. 처리 결과 (보고)
+
+- **MERGED**: devel `a19d8e8d` (이슈 #1142 close)
+- auto-merge clean (wasm_api.rs #1144 와 다른 영역, 충돌 0)
+- 검증: 빌드 + issue_1142 5 + cargo test --tests 전수 + fmt 통과
+- PR 코멘트 등록 + 이슈 #1142 close
