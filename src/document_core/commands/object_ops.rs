@@ -442,6 +442,65 @@ impl DocumentCore {
         }
     }
 
+    /// [Task #1151 v7] cell_path JSON → Vec<(controlIdx, cellIdx, cellParaIdx)>.
+    /// 4 개 by_path setter/getter (cell picture/shape × set/get) 의 공통 파싱.
+    /// 빈 path 면 Err 반환.
+    fn parse_cell_path_json(json: &str) -> Result<Vec<(usize, usize, usize)>, HwpError> {
+        let path: Vec<(usize, usize, usize)> = serde_json::from_str::<Vec<serde_json::Value>>(json)
+            .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
+            .iter()
+            .map(|v| {
+                let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
+                (c, ci, cpi)
+            })
+            .collect();
+        if path.is_empty() {
+            return Err(HwpError::RenderError(
+                "cell_path 가 비어있습니다".to_string(),
+            ));
+        }
+        Ok(path)
+    }
+
+    /// [Task #1151 v7] section + parent_para_idx + path → target paragraph (mut).
+    /// 2 개 set_cell_*_by_path_native (Picture / Shape) 의 공통 traversal.
+    /// immutable 버전은 cursor_nav.rs 의 `resolve_paragraph_by_path` 가 담당.
+    fn resolve_cell_paragraph_mut<'a>(
+        section: &'a mut crate::model::document::Section,
+        parent_para_idx: usize,
+        path: &[(usize, usize, usize)],
+    ) -> Result<&'a mut crate::model::paragraph::Paragraph, HwpError> {
+        let mut current_para = section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+        })?;
+        for (i, &(ctrl_idx, cell_idx, cell_para_idx)) in path.iter().enumerate() {
+            let ctrl = current_para.controls.get_mut(ctrl_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("경로[{}]: controls[{}] 범위 초과", i, ctrl_idx))
+            })?;
+            let table = match ctrl {
+                crate::model::control::Control::Table(t) => t,
+                _ => {
+                    return Err(HwpError::RenderError(format!(
+                        "경로[{}]: controls[{}] 가 표가 아닙니다",
+                        i, ctrl_idx
+                    )))
+                }
+            };
+            let cell = table.cells.get_mut(cell_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("경로[{}]: cells[{}] 범위 초과", i, cell_idx))
+            })?;
+            current_para = cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
+                HwpError::RenderError(format!(
+                    "경로[{}]: paragraphs[{}] 범위 초과",
+                    i, cell_para_idx
+                ))
+            })?;
+        }
+        Ok(current_para)
+    }
+
     /// [Task #825] Picture 속성 JSON 적용 (mutation only). 후처리 (AutoNumber /
     /// recompose / paginate / event log) 는 호출자 책임.
     /// 반환: caption_created (true 면 호출자가 AutoNumber 후처리 필요).
@@ -2881,22 +2940,7 @@ impl DocumentCore {
         cell_path_json: &str,
         inner_control_idx: usize,
     ) -> Result<String, HwpError> {
-        let path: Vec<(usize, usize, usize)> =
-            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
-                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
-                .iter()
-                .map(|v| {
-                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    (c, ci, cpi)
-                })
-                .collect();
-        if path.is_empty() {
-            return Err(HwpError::RenderError(
-                "cell_path 가 비어있습니다".to_string(),
-            ));
-        }
+        let path = Self::parse_cell_path_json(cell_path_json)?;
         let cell = self.resolve_cell_by_path(section_idx, parent_para_idx, &path)?;
         let last_cell_para_idx = path.last().unwrap().2;
         let cell_para = cell.paragraphs.get(last_cell_para_idx).ok_or_else(|| {
@@ -2923,22 +2967,7 @@ impl DocumentCore {
         cell_path_json: &str,
         inner_control_idx: usize,
     ) -> Result<String, HwpError> {
-        let path: Vec<(usize, usize, usize)> =
-            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
-                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
-                .iter()
-                .map(|v| {
-                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    (c, ci, cpi)
-                })
-                .collect();
-        if path.is_empty() {
-            return Err(HwpError::RenderError(
-                "cell_path 가 비어있습니다".to_string(),
-            ));
-        }
+        let path = Self::parse_cell_path_json(cell_path_json)?;
         let cell = self.resolve_cell_by_path(section_idx, parent_para_idx, &path)?;
         let last_cell_para_idx = path.last().unwrap().2;
         let cell_para = cell.paragraphs.get(last_cell_para_idx).ok_or_else(|| {
@@ -2974,53 +3003,12 @@ impl DocumentCore {
         inner_control_idx: usize,
         props_json: &str,
     ) -> Result<String, HwpError> {
-        let path: Vec<(usize, usize, usize)> =
-            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
-                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
-                .iter()
-                .map(|v| {
-                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    (c, ci, cpi)
-                })
-                .collect();
-        if path.is_empty() {
-            return Err(HwpError::RenderError(
-                "cell_path 가 비어있습니다".to_string(),
-            ));
-        }
+        let path = Self::parse_cell_path_json(cell_path_json)?;
         {
             let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
                 HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
             })?;
-            let mut current_para =
-                section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
-                })?;
-            for (i, &(ctrl_idx, cell_idx, cell_para_idx)) in path.iter().enumerate() {
-                let ctrl = current_para.controls.get_mut(ctrl_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!("경로[{}]: controls[{}] 범위 초과", i, ctrl_idx))
-                })?;
-                let table = match ctrl {
-                    Control::Table(t) => t,
-                    _ => {
-                        return Err(HwpError::RenderError(format!(
-                            "경로[{}]: controls[{}] 가 표가 아닙니다",
-                            i, ctrl_idx
-                        )))
-                    }
-                };
-                let cell = table.cells.get_mut(cell_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!("경로[{}]: cells[{}] 범위 초과", i, cell_idx))
-                })?;
-                current_para = cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!(
-                        "경로[{}]: paragraphs[{}] 범위 초과",
-                        i, cell_para_idx
-                    ))
-                })?;
-            }
+            let current_para = Self::resolve_cell_paragraph_mut(section, parent_para_idx, &path)?;
             let ctrl = current_para
                 .controls
                 .get_mut(inner_control_idx)
@@ -3059,53 +3047,12 @@ impl DocumentCore {
         inner_control_idx: usize,
         props_json: &str,
     ) -> Result<String, HwpError> {
-        let path: Vec<(usize, usize, usize)> =
-            serde_json::from_str::<Vec<serde_json::Value>>(cell_path_json)
-                .map_err(|e| HwpError::RenderError(format!("cell_path JSON 파싱 실패: {}", e)))?
-                .iter()
-                .map(|v| {
-                    let c = v.get("controlIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let ci = v.get("cellIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    let cpi = v.get("cellParaIdx").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
-                    (c, ci, cpi)
-                })
-                .collect();
-        if path.is_empty() {
-            return Err(HwpError::RenderError(
-                "cell_path 가 비어있습니다".to_string(),
-            ));
-        }
+        let path = Self::parse_cell_path_json(cell_path_json)?;
         {
             let section = self.document.sections.get_mut(section_idx).ok_or_else(|| {
                 HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
             })?;
-            let mut current_para =
-                section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
-                })?;
-            for (i, &(ctrl_idx, cell_idx, cell_para_idx)) in path.iter().enumerate() {
-                let ctrl = current_para.controls.get_mut(ctrl_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!("경로[{}]: controls[{}] 범위 초과", i, ctrl_idx))
-                })?;
-                let table = match ctrl {
-                    Control::Table(t) => t,
-                    _ => {
-                        return Err(HwpError::RenderError(format!(
-                            "경로[{}]: controls[{}] 가 표가 아닙니다",
-                            i, ctrl_idx
-                        )))
-                    }
-                };
-                let cell = table.cells.get_mut(cell_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!("경로[{}]: cells[{}] 범위 초과", i, cell_idx))
-                })?;
-                current_para = cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!(
-                        "경로[{}]: paragraphs[{}] 범위 초과",
-                        i, cell_para_idx
-                    ))
-                })?;
-            }
+            let current_para = Self::resolve_cell_paragraph_mut(section, parent_para_idx, &path)?;
             let ctrl = current_para
                 .controls
                 .get_mut(inner_control_idx)
