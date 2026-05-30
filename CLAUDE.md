@@ -415,7 +415,7 @@ git checkout -b feature/my-task
 git push origin feature/my-task
 
 # 3. 원본 저장소의 devel로 PR 생성
-gh pr create --repo edwardkim/rhwp --base devel --head {contributor}:feature/my-task --title "제목"
+gh pr create --repo paldyn/hwpio --base devel --head {contributor}:feature/my-task --title "제목"
 
 # 4. 메인테이너가 리뷰 + merge
 ```
@@ -424,7 +424,7 @@ gh pr create --repo edwardkim/rhwp --base devel --head {contributor}:feature/my-
 
 - **GitHub Issues**를 타스크 번호로 사용한다. 자동 채번으로 중복 방지.
 - **마일스톤 표기**: `M{버전}` (예: M100=v1.0.0, M05x=v0.5.x)
-- 새 타스크 등록: `gh issue create --repo edwardkim/rhwp --title "제목" --body "설명" --milestone "v1.0.0"`
+- 새 타스크 등록: `gh issue create --repo paldyn/hwpio --title "제목" --body "설명" --milestone "v1.0.0"`
 - 브랜치명: `local/task{issue번호}` (예: `local/task1`)
 - 커밋 메시지: `Task #1: 내용` (Issue 번호 참조)
 - `mydocs/orders/`에서 `M100 #1` 형식으로 마일스톤+이슈 참조

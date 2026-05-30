@@ -3,7 +3,7 @@
  */
 
 export interface EditorOptions {
-  /** rhwp-studio URL (기본: https://edwardkim.github.io/rhwp/) */
+  /** rhwp-studio URL (기본: https://hwpio.paldyn.com/) */
   studioUrl?: string;
   /** iframe 너비 (기본: '100%') */
   width?: string;

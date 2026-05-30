@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/edwardkim/rhwp/actions/workflows/ci.yml"><img src="https://github.com/edwardkim/rhwp/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://edwardkim.github.io/rhwp/"><img src="https://img.shields.io/badge/Demo-GitHub%20Pages-blue" alt="Demo" /></a>
+  <a href="https://github.com/paldyn/hwpio/actions/workflows/ci.yml"><img src="https://github.com/paldyn/hwpio/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://hwpio.paldyn.com/"><img src="https://img.shields.io/badge/Demo-hwpio.paldyn.com-blue" alt="Demo" /></a>
   <a href="https://www.npmjs.com/package/@rhwp/core"><img src="https://img.shields.io/npm/v/@rhwp/core?label=npm" alt="npm" /></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode"><img src="https://img.shields.io/badge/VS%20Code-Marketplace-007ACC" alt="VS Code" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
@@ -36,7 +36,7 @@ Open **HWP/HWPX files anywhere**. Free, no installation required.
 
 rhwp changes that. Built with Rust and compiled to WebAssembly, it renders HWP documents directly in the browser with accuracy that matches (and sometimes exceeds) the proprietary viewer. The goal: break the walls of a closed format so that every person, every AI, and every platform can read and write Korean documents freely.
 
-> **[Live Demo](https://edwardkim.github.io/rhwp/)** | **[VS Code Extension](https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode)** | **[Open VSX](https://open-vsx.org/extension/edwardkim/rhwp-vscode)**
+> **[Live Demo](https://hwpio.paldyn.com/)** | **[VS Code Extension](https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode)** | **[Open VSX](https://open-vsx.org/extension/edwardkim/rhwp-vscode)**
 
 <p align="center">
   <img src="assets/screenshots/render-example-1.png" alt="rhwp rendering example — KTX route map" width="700" />
@@ -606,13 +606,13 @@ graph TB
 Contributions are welcome. Please note the following first:
 
 - **Target branch for PRs is `devel`**, not `main`. Although the GitHub default branch is `main`, all contributor PRs go to `devel`.
-- **Check first**: Look at [open issues](https://github.com/edwardkim/rhwp/issues) and [open PRs](https://github.com/edwardkim/rhwp/pulls) to avoid duplicating in-progress work.
+- **Check first**: Look at [open issues](https://github.com/paldyn/hwpio/issues) and [open PRs](https://github.com/paldyn/hwpio/pulls) to avoid duplicating in-progress work.
 - **Issue close is by maintainer**: Submit only the PR for completed work. The maintainer will close the issue when the PR is merged.
 - **Hancom PDFs are not authoritative ground truth**: PDF output differs across Hancom tools (Editor / Viewer / Hancom Docs), versions (2010 / 2020 / 2022), and output paths (Hancom-native / OS print). See the [Hancom PDF Environment Dependency wiki](https://github.com/edwardkim/rhwp/wiki/한컴-PDF-환경-의존성) for environment-specific comparison data and PR review guidance.
 
 For the full contribution flow (fork → branch → commit → PR), see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Questions and ideas are welcome on [Discussions](https://github.com/edwardkim/rhwp/discussions).
+Questions and ideas are welcome on [Discussions](https://github.com/paldyn/hwpio/discussions).
 
 ### Wiki Resources
 
