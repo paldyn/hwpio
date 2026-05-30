@@ -91,7 +91,6 @@ fn scaled_canvas_extent(page_extent: f64, scale: f64) -> u32 {
     (page_extent * scale).max(1.0).min(MAX_CANVAS_DIMENSION) as u32
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ExternalImageReference {
@@ -2294,6 +2293,15 @@ impl HwpDocument {
             description,
         )
         .map_err(|e| e.into())
+    }
+
+    /// [Task #1142] 외부 file path 그림 reference 목록을 구조화된 JSON 배열로 반환한다.
+    ///
+    /// 반환: JSON 배열 `[{ key, binDataId, originalPath, basename, extension, loaded }, ...]`
+    #[wasm_bindgen(js_name = getExternalImageReferences)]
+    pub fn get_external_image_references(&self) -> String {
+        serde_json::to_string(&collect_external_image_references(self.document()))
+            .unwrap_or_else(|_| "[]".to_string())
     }
 
     /// [Task #741 후속] 외부 file path 그림 영역 영역 영역 영역 basename 목록 영역 반환.
