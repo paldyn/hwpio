@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/paldyn/HanPage/actions/workflows/ci.yml"><img src="https://github.com/paldyn/HanPage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
-  <a href="https://hwpio.paldyn.com/"><img src="https://img.shields.io/badge/Demo-hwpio.paldyn.com-blue" alt="Demo" /></a>
+  <a href="https://hanpage.paldyn.com/"><img src="https://img.shields.io/badge/Demo-hanpage.paldyn.com-blue" alt="Demo" /></a>
   <a href="https://www.npmjs.com/package/@rhwp/core"><img src="https://img.shields.io/npm/v/@rhwp/core?label=npm" alt="npm" /></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode"><img src="https://img.shields.io/badge/VS%20Code-Marketplace-007ACC" alt="VS Code" /></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
@@ -30,9 +30,9 @@
 
 ---
 
-**HanPage** 는 오픈소스 HWP/HWPX 뷰어·에디터 엔진 [rhwp](https://github.com/edwardkim/rhwp) 를 paldyn 이 [hwpio.paldyn.com](https://hwpio.paldyn.com/) 에서 호스팅·재배포하는 프로젝트입니다. 설치 없이 브라우저에서 한글 문서를 열어볼 수 있습니다.
+**HanPage** 는 오픈소스 HWP/HWPX 뷰어·에디터 엔진 [rhwp](https://github.com/edwardkim/rhwp) 를 paldyn 이 [hanpage.paldyn.com](https://hanpage.paldyn.com/) 에서 호스팅·재배포하는 프로젝트입니다. 설치 없이 브라우저에서 한글 문서를 열어볼 수 있습니다.
 
-> **[온라인 데모](https://hwpio.paldyn.com/)** | **[VS Code 확장](https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode)** | **[Open VSX](https://open-vsx.org/extension/edwardkim/rhwp-vscode)**
+> **[온라인 데모](https://hanpage.paldyn.com/)** | **[VS Code 확장](https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode)** | **[Open VSX](https://open-vsx.org/extension/edwardkim/rhwp-vscode)**
 
 <p align="center">
   <img src="assets/screenshots/render-example-1.png" alt="HanPage 렌더링 예시 — KTX 노선도" width="700" />
@@ -42,7 +42,7 @@
 
 HanPage 가 사용하는 파서·렌더·편집 엔진은 오픈소스 프로젝트 [rhwp](https://github.com/edwardkim/rhwp) 입니다. 현재 엔진 버전 **v0.7.13** (MIT License, © 2025-2026 Edward Kim 및 기여자 다수).
 
-엔진의 릴리스 사이클별 상세 변경 내역과 외부 기여자 인정은 upstream 의 [CHANGELOG](https://github.com/edwardkim/rhwp/blob/main/CHANGELOG.md) 와 [Releases](https://github.com/edwardkim/rhwp/releases) 를 참조하세요. paldyn 의 본 저장소는 엔진 자체를 fork 하여 hwpio.paldyn.com 호스팅 및 재배포 산출물을 관리합니다.
+엔진의 릴리스 사이클별 상세 변경 내역과 외부 기여자 인정은 upstream 의 [CHANGELOG](https://github.com/edwardkim/rhwp/blob/main/CHANGELOG.md) 와 [Releases](https://github.com/edwardkim/rhwp/releases) 를 참조하세요. paldyn 의 본 저장소는 엔진 자체를 fork 하여 hanpage.paldyn.com 호스팅 및 재배포 산출물을 관리합니다.
 
 ## 로드맵
 
@@ -505,4 +505,4 @@ This project is an independent open-source project with no affiliation, sponsors
 
 HanPage 재배포 산출물 (본 저장소 추가분): MIT License — Copyright (c) 2026 paldyn
 
-본 저장소는 MIT 라이선스의 권한에 따라 rhwp 를 fork 하여 hwpio.paldyn.com 호스팅용으로 재배포합니다. 자세한 재배포 안내는 [LICENSE](LICENSE) 와 동봉된 라이선스 고지 파일을 참조하세요.
+본 저장소는 MIT 라이선스의 권한에 따라 rhwp 를 fork 하여 hanpage.paldyn.com 호스팅용으로 재배포합니다. 자세한 재배포 안내는 [LICENSE](LICENSE) 와 동봉된 라이선스 고지 파일을 참조하세요.

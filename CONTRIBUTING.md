@@ -10,7 +10,7 @@ rhwp에 관심을 가져주셔서 감사합니다!
 
 코드를 보기 전에 먼저 사용해보세요:
 
-- **[온라인 데모](https://hwpio.paldyn.com/)** — 브라우저에서 바로 HWP 파일 열기
+- **[온라인 데모](https://hanpage.paldyn.com/)** — 브라우저에서 바로 HWP 파일 열기
 - **[VS Code 확장](https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode)** — VS Code에서 HWP 미리보기
 - **[npm 패키지](https://www.npmjs.com/package/@rhwp/editor)** — 3줄로 HWP 에디터 임베드
 

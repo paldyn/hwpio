@@ -220,7 +220,7 @@ rhwp가 SVG에 적용하는 자동 폴백 체인:
 
 ## 링크
 
-- **[온라인 데모](https://hwpio.paldyn.com/)**
+- **[온라인 데모](https://hanpage.paldyn.com/)**
 - **[GitHub](https://github.com/paldyn/HanPage)**
 - **[@rhwp/editor](https://www.npmjs.com/package/@rhwp/editor)** — 에디터 UI 임베드
 - **[VS Code 확장](https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode)**
