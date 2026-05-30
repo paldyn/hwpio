@@ -291,12 +291,13 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
   let wHwp = Math.round(wPx * 75);
   let hHwp = Math.round(hPx * 75);
 
-  // [Task #1151 v8 결함 C] 셀 안 floating picture 의 paper-relative offset 계산.
-  // 사용자가 드래그/클릭한 위치 (drag.startClientX/Y) 를 page (= paper) 좌표로 변환.
-  // 본문 inline 분기 (inCell=false) 는 wasm 이 무시하므로 undefined 전달.
+  // [Task #1151 v8 결함 C / v9 결함 E] 셀 안 + 본문 floating picture 의 paper-relative
+  // offset 계산. 사용자가 드래그/클릭한 위치 (drag.startClientX/Y) 를 page (= paper)
+  // 좌표로 변환. v9 결함 E 후 본문 path 도 floating sibling 으로 통합되었으므로
+  // inCell 제한 제거 — 본문에서도 사용자 클릭 위치 전달 필요.
   let paperOffsetXHu: number | undefined;
   let paperOffsetYHu: number | undefined;
-  if (inCell) {
+  {
     const scrollContent = this.container.querySelector('#scroll-content');
     if (scrollContent) {
       const contentRect = scrollContent.getBoundingClientRect();
