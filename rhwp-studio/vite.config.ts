@@ -66,8 +66,8 @@ export default defineConfig({
         theme_color: '#2b6cb0',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: '/hwpio/',
-        scope: '/hwpio/',
+        start_url: '/',
+        scope: '/',
         icons: [
           { src: 'icons/icon-128.png', sizes: '128x128', type: 'image/png' },
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },
