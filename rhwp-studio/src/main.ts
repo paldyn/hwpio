@@ -34,6 +34,7 @@ import {
   resolveRenderBackendRequest,
   resolveRenderProfile,
 } from '@/view/render-backend';
+import { initDesktopBridge } from '@/core/desktop-bridge';
 
 const wasm = new WasmBridge();
 const eventBus = new EventBus();
@@ -238,6 +239,8 @@ async function initialize(): Promise<void> {
     setupZoomControls();
     setupEventListeners();
     setupGlobalShortcuts();
+    // [Task #1 데스크톱] 네이티브(Tauri) 브리지 초기화. 브라우저에선 즉시 return = no-op.
+    initDesktopBridge();
     loadFromUrlParam();
 
     // E2E 테스트용 전역 노출 (개발 모드 전용)
