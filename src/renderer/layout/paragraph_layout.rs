@@ -2682,37 +2682,18 @@ impl LayoutEngine {
                                     } else {
                                         None
                                     };
-                                    let img_id = tree.next_id();
-                                    // [Task #1151 v7 항목 1] cell_ctx 의 3 필드 매핑은
-                                    // CellContext::last_image_indices() 로 통합.
-                                    let (cei, cpi, otci) = cell_ctx
-                                        .as_ref()
-                                        .map(|c| c.last_image_indices())
-                                        .unwrap_or((None, None, None));
-                                    let img_node = RenderNode::new(
-                                        img_id,
-                                        RenderNodeType::Image(ImageNode {
-                                            section_index: Some(section_index),
-                                            // [Task #1151 v4] 셀 안 picture 는 outer paragraph idx 노출.
-                                            para_index: Some(
-                                                cell_ctx
-                                                    .as_ref()
-                                                    .map(|c| c.parent_para_index)
-                                                    .unwrap_or(para_index),
-                                            ),
-                                            control_index: Some(tac_ci),
-                                            cell_index: cei,
-                                            cell_para_index: cpi,
-                                            outer_table_control_index: otci,
-                                            crop,
-                                            original_size_hu,
-                                            effect: pic.image_attr.effect,
-                                            brightness: pic.image_attr.brightness,
-                                            contrast: pic.image_attr.contrast,
-                                            text_wrap: Some(pic.common.text_wrap),
-                                            transform: extract_shape_transform(&pic.shape_attr),
-                                            ..ImageNode::new(bin_data_id, image_data)
-                                        }),
+                                    // [Task #1151 v7 항목 7] ImageNode 생성 helper 통합.
+                                    let img_node = make_picture_image_node(
+                                        tree,
+                                        pic,
+                                        section_index,
+                                        para_index,
+                                        tac_ci,
+                                        cell_ctx.as_ref(),
+                                        crop,
+                                        original_size_hu,
+                                        bin_data_id,
+                                        image_data,
                                         BoundingBox::new(x, img_y, tac_w, pic_h),
                                     );
                                     line_node.children.push(img_node);
@@ -3076,36 +3057,18 @@ impl LayoutEngine {
                                 } else {
                                     None
                                 };
-                                let img_id = tree.next_id();
-                                // [Task #1151 v7 항목 1] cell_ctx 의 3 필드 매핑 통합.
-                                let (cei, cpi, otci) = cell_ctx
-                                    .as_ref()
-                                    .map(|c| c.last_image_indices())
-                                    .unwrap_or((None, None, None));
-                                let img_node = RenderNode::new(
-                                    img_id,
-                                    RenderNodeType::Image(ImageNode {
-                                        section_index: Some(section_index),
-                                        // [Task #1151 v4] 셀 안 picture 는 outer paragraph idx 노출.
-                                        para_index: Some(
-                                            cell_ctx
-                                                .as_ref()
-                                                .map(|c| c.parent_para_index)
-                                                .unwrap_or(para_index),
-                                        ),
-                                        control_index: Some(tac_ci),
-                                        cell_index: cei,
-                                        cell_para_index: cpi,
-                                        outer_table_control_index: otci,
-                                        crop,
-                                        original_size_hu,
-                                        effect: pic.image_attr.effect,
-                                        brightness: pic.image_attr.brightness,
-                                        contrast: pic.image_attr.contrast,
-                                        text_wrap: Some(pic.common.text_wrap),
-                                        transform: extract_shape_transform(&pic.shape_attr),
-                                        ..ImageNode::new(bin_data_id, image_data)
-                                    }),
+                                // [Task #1151 v7 항목 7] ImageNode 생성 helper 통합.
+                                let img_node = make_picture_image_node(
+                                    tree,
+                                    pic,
+                                    section_index,
+                                    para_index,
+                                    tac_ci,
+                                    cell_ctx.as_ref(),
+                                    crop,
+                                    original_size_hu,
+                                    bin_data_id,
+                                    image_data,
                                     BoundingBox::new(x, img_y, tac_w, pic_h),
                                 );
                                 line_node.children.push(img_node);
@@ -3238,36 +3201,18 @@ impl LayoutEngine {
                                     } else {
                                         None
                                     };
-                                    let img_id = tree.next_id();
-                                    // [Task #1151 v7 항목 1] cell_ctx 의 3 필드 매핑 통합.
-                                    let (cei, cpi, otci) = cell_ctx
-                                        .as_ref()
-                                        .map(|c| c.last_image_indices())
-                                        .unwrap_or((None, None, None));
-                                    let img_node = RenderNode::new(
-                                        img_id,
-                                        RenderNodeType::Image(ImageNode {
-                                            section_index: Some(section_index),
-                                            // [Task #1151 v4] 셀 안 picture 는 outer paragraph idx 노출.
-                                            para_index: Some(
-                                                cell_ctx
-                                                    .as_ref()
-                                                    .map(|c| c.parent_para_index)
-                                                    .unwrap_or(para_index),
-                                            ),
-                                            control_index: Some(tac_ci),
-                                            cell_index: cei,
-                                            cell_para_index: cpi,
-                                            outer_table_control_index: otci,
-                                            crop,
-                                            original_size_hu,
-                                            effect: pic.image_attr.effect,
-                                            brightness: pic.image_attr.brightness,
-                                            contrast: pic.image_attr.contrast,
-                                            text_wrap: Some(pic.common.text_wrap),
-                                            transform: extract_shape_transform(&pic.shape_attr),
-                                            ..ImageNode::new(bin_data_id, image_data)
-                                        }),
+                                    // [Task #1151 v7 항목 7] ImageNode 생성 helper 통합.
+                                    let img_node = make_picture_image_node(
+                                        tree,
+                                        pic,
+                                        section_index,
+                                        para_index,
+                                        tac_ci,
+                                        cell_ctx.as_ref(),
+                                        crop,
+                                        original_size_hu,
+                                        bin_data_id,
+                                        image_data,
                                         BoundingBox::new(img_x, img_y, tac_w, pic_h),
                                     );
                                     line_node.children.push(img_node);
@@ -4208,6 +4153,51 @@ pub(crate) fn calc_sibling_topandbottom_table_reserved_hu(
             _ => 0,
         })
         .sum()
+}
+
+/// [Task #1151 v7 항목 7] paragraph_layout 의 3 곳에서 반복되던 ImageNode 생성
+/// boilerplate 통합 (cell_ctx → 3 필드 + outer paragraph idx 노출 + picture 의
+/// effect/brightness/contrast/text_wrap/transform 매핑). picture_footnote 의
+/// `layout_picture_full` 가 본문/머리말/꼬리말 path 의 진입점 helper 인 것과 짝.
+#[allow(clippy::too_many_arguments)]
+fn make_picture_image_node(
+    tree: &mut PageRenderTree,
+    pic: &crate::model::image::Picture,
+    section_index: usize,
+    para_index: usize,
+    ctrl_idx: usize,
+    cell_ctx: Option<&CellContext>,
+    crop: Option<(i32, i32, i32, i32)>,
+    original_size_hu: Option<(u32, u32)>,
+    bin_data_id: u16,
+    image_data: Option<Vec<u8>>,
+    bbox: BoundingBox,
+) -> RenderNode {
+    let (cei, cpi, otci) = cell_ctx
+        .map(|c| c.last_image_indices())
+        .unwrap_or((None, None, None));
+    let para_for_image = cell_ctx.map(|c| c.parent_para_index).unwrap_or(para_index);
+    let img_id = tree.next_id();
+    RenderNode::new(
+        img_id,
+        RenderNodeType::Image(ImageNode {
+            section_index: Some(section_index),
+            para_index: Some(para_for_image),
+            control_index: Some(ctrl_idx),
+            cell_index: cei,
+            cell_para_index: cpi,
+            outer_table_control_index: otci,
+            crop,
+            original_size_hu,
+            effect: pic.image_attr.effect,
+            brightness: pic.image_attr.brightness,
+            contrast: pic.image_attr.contrast,
+            text_wrap: Some(pic.common.text_wrap),
+            transform: extract_shape_transform(&pic.shape_attr),
+            ..ImageNode::new(bin_data_id, image_data)
+        }),
+        bbox,
+    )
 }
 
 #[cfg(test)]
