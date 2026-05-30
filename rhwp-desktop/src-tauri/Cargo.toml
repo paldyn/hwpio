@@ -1,0 +1,25 @@
+[package]
+name = "rhwp-desktop"
+version = "0.7.13"
+description = "HanPage desktop application (Tauri shell wrapping rhwp-studio + WASM)"
+authors = ["paldyn"]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/paldyn/HanPage"
+
+# rhwp-desktop은 독립 크레이트다. 저장소 루트 Cargo.toml에는 [workspace] 섹션이
+# 없으므로 루트 `cargo build`는 `rhwp` 크레이트만 빌드하며 아래 Tauri 의존성을
+# 절대 끌어오지 않는다. 이 크레이트를 포착하는 루트 [workspace]를 신설하지 말 것
+# (WASM/네이티브 빌드에 영향을 주게 된다).
+
+[lib]
+name = "rhwp_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
