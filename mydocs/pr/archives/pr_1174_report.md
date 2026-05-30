@@ -62,3 +62,12 @@ filename field 치환 경로(`DocumentCore.file_name → LayoutEngine.set_file_n
 ## 비고 (검토 과정)
 
 초기 PR 번호만으로 "탭/리더" 로 오추정했으나, 실제 PR 정보 확인 후 정정 — filename field context 일관화가 정확한 주제.
+
+---
+
+## 9. 처리 결과 (보고)
+
+- **MERGED**: devel `804b4ae9` (이슈 #1144 close)
+- auto-merge clean (3 파일 무충돌), BEHIND → devel 직접 머지
+- 검증: 빌드 + issue_1144 5(native-skia 포함) + cargo test --tests 전수 + fmt 통과
+- PR 코멘트 등록 + 이슈 #1144 close
