@@ -58,7 +58,14 @@ jobs:
         uses: jetli/wasm-pack-action@v0.4.0
 
       - name: Build WASM
-        run: wasm-pack build --target web --release
+        # CI 한정 wasm-opt 비활성화: macOS 러너 wasm-pack 의 번들 wasm-opt 가 구버전이라
+        # 다중 table wasm 파싱 실패("Only 1 table definition allowed in MVP"). 커밋된
+        # Cargo.toml 은 그대로 두어 GitHub Pages(deploy-pages.yml 의 wasm-pack 빌드)는
+        # 최적화 유지·산출물 불변. wasm-opt 는 최적화 단계일 뿐이라 기능 영향 없음.
+        shell: bash
+        run: |
+          printf '\n[package.metadata.wasm-pack.profile.release]\nwasm-opt = false\n' >> Cargo.toml
+          wasm-pack build --target web --release
 
       # --- Node 의존성 (studio: 프런트 빌드, desktop: @tauri-apps/cli) ---
       - name: Setup Node.js
