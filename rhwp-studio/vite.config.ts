@@ -59,8 +59,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.ico', 'icons/*.png'],
       manifest: {
-        name: 'hwpio',
-        short_name: 'hwpio',
+        name: 'HanPage',
+        short_name: 'HanPage',
         description: 'HWP/HWPX 뷰어·에디터',
         lang: 'ko',
         theme_color: '#2b6cb0',

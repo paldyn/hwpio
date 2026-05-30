@@ -68,7 +68,7 @@ export class AboutDialog extends ModalDialog {
     // 제품 한글명
     const titleKo = document.createElement('div');
     titleKo.className = 'about-product-name-ko';
-    titleKo.textContent = 'HWP 오픈소스 편집 — hwpio';
+    titleKo.textContent = 'HWP 오픈소스 편집 — HanPage';
     body.appendChild(titleKo);
 
     // 버전
@@ -94,7 +94,7 @@ export class AboutDialog extends ModalDialog {
     const baseNotice = document.createElement('div');
     baseNotice.className = 'about-notice';
     baseNotice.textContent =
-      'hwpio는 rhwp(MIT License, © 2025–2026 Edward Kim)를 기반으로 재배포됩니다.';
+      'HanPage는 rhwp(MIT License, © 2025–2026 Edward Kim)를 기반으로 재배포됩니다.';
     body.appendChild(baseNotice);
 
     // 오픈소스 라이선스
@@ -125,7 +125,7 @@ export class AboutDialog extends ModalDialog {
     const copyright = document.createElement('div');
     copyright.className = 'about-copyright';
     copyright.textContent =
-      '\u00A9 2025\u20132026 Edward Kim (rhwp, MIT) \u00B7 hwpio \uC7AC\uBC30\uD3EC: paldyn';
+      '\u00A9 2025\u20132026 Edward Kim (rhwp, MIT) \u00B7 HanPage \uC7AC\uBC30\uD3EC: paldyn';
     body.appendChild(copyright);
 
     return body;

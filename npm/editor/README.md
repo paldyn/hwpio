@@ -360,7 +360,7 @@ const editor = await createEditor('#editor', {
 | TypeScript | Apache-2.0 |
 | Vite | MIT |
 
-전체 목록: [THIRD_PARTY_LICENSES.md](https://github.com/paldyn/hwpio/blob/main/THIRD_PARTY_LICENSES.md)
+전체 목록: [THIRD_PARTY_LICENSES.md](https://github.com/paldyn/HanPage/blob/main/THIRD_PARTY_LICENSES.md)
 
 > 모든 의존성은 MIT 라이선스와 호환됩니다.
 

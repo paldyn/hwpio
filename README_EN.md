@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/logo/logo-256.png" alt="hwpio logo" width="128" />
+  <img src="assets/logo/logo-256.png" alt="HanPage logo" width="128" />
 </p>
 
-<h1 align="center">hwpio</h1>
+<h1 align="center">HanPage</h1>
 
 <p align="center">
   <strong>Korean documents anywhere</strong> — no installation, just a browser<br/>
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/paldyn/hwpio/actions/workflows/ci.yml"><img src="https://github.com/paldyn/hwpio/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/paldyn/HanPage/actions/workflows/ci.yml"><img src="https://github.com/paldyn/HanPage/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://hwpio.paldyn.com/"><img src="https://img.shields.io/badge/Demo-hwpio.paldyn.com-blue" alt="Demo" /></a>
   <a href="https://www.npmjs.com/package/@rhwp/core"><img src="https://img.shields.io/npm/v/@rhwp/core?label=npm" alt="npm" /></a>
   <a href="https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode"><img src="https://img.shields.io/badge/VS%20Code-Marketplace-007ACC" alt="VS Code" /></a>
@@ -30,19 +30,19 @@
 
 ---
 
-**hwpio** is paldyn's hosted redistribution of the open-source HWP/HWPX viewer · editor engine [rhwp](https://github.com/edwardkim/rhwp), served at [hwpio.paldyn.com](https://hwpio.paldyn.com/). Open Korean documents in the browser, no installation required.
+**HanPage** is paldyn's hosted redistribution of the open-source HWP/HWPX viewer · editor engine [rhwp](https://github.com/edwardkim/rhwp), served at [hwpio.paldyn.com](https://hwpio.paldyn.com/). Open Korean documents in the browser, no installation required.
 
 **HWP** is the dominant document format in South Korea — used by government agencies, schools, courts, and most organizations. The rhwp engine, written in Rust and compiled to WebAssembly, renders HWP documents directly in the browser with accuracy that matches (and sometimes exceeds) the proprietary viewer.
 
 > **[Live Demo](https://hwpio.paldyn.com/)** | **[VS Code Extension](https://marketplace.visualstudio.com/items?itemName=edwardkim.rhwp-vscode)** | **[Open VSX](https://open-vsx.org/extension/edwardkim/rhwp-vscode)**
 
 <p align="center">
-  <img src="assets/screenshots/render-example-1.png" alt="hwpio rendering example — KTX route map" width="700" />
+  <img src="assets/screenshots/render-example-1.png" alt="HanPage rendering example — KTX route map" width="700" />
 </p>
 
 ## Engine — rhwp
 
-The parser · renderer · editor engine used by hwpio is the open-source project [rhwp](https://github.com/edwardkim/rhwp). Current engine version **v0.7.13** (MIT License, © 2025-2026 Edward Kim and contributors).
+The parser · renderer · editor engine used by HanPage is the open-source project [rhwp](https://github.com/edwardkim/rhwp). Current engine version **v0.7.13** (MIT License, © 2025-2026 Edward Kim and contributors).
 
 For per-release cycle changes and external contributor credits, see upstream's [CHANGELOG](https://github.com/edwardkim/rhwp/blob/main/CHANGELOG.md) and [Releases](https://github.com/edwardkim/rhwp/releases). This paldyn repository forks the engine and manages the hwpio.paldyn.com hosting and redistribution artifacts.
 
@@ -467,10 +467,10 @@ graph TB
 
 ## Contributing
 
-This repository (paldyn/hwpio) manages the redistribution and hosting artifacts for the [rhwp](https://github.com/edwardkim/rhwp) engine. Contributions split by category:
+This repository (paldyn/HanPage) manages the redistribution and hosting artifacts for the [rhwp](https://github.com/edwardkim/rhwp) engine. Contributions split by category:
 
 - **Engine itself (parser · renderer · pagination · editor · CLI · WASM · extensions)**: please submit PRs to upstream [edwardkim/rhwp](https://github.com/edwardkim/rhwp). The PR base is upstream's `devel`.
-- **hwpio hosting / redistribution (CI, gh-pages workflow, domain config, etc.)**: please open [Issues](https://github.com/paldyn/hwpio/issues) / [PRs](https://github.com/paldyn/hwpio/pulls) on this repository.
+- **HanPage hosting / redistribution (CI, gh-pages workflow, domain config, etc.)**: please open [Issues](https://github.com/paldyn/HanPage/issues) / [PRs](https://github.com/paldyn/HanPage/pulls) on this repository.
 
 > **Hancom PDFs are not authoritative ground truth**: PDF output differs across Hancom tools (Editor / Viewer / Hancom Docs), versions (2010 / 2020 / 2022), and output paths (Hancom-native / OS print). See the [Hancom PDF Environment Dependency wiki](https://github.com/edwardkim/rhwp/wiki/한컴-PDF-환경-의존성) for environment-specific comparison data and PR review guidance.
 
@@ -503,6 +503,6 @@ This project is an independent open-source project with no affiliation, sponsors
 
 Engine [rhwp](https://github.com/edwardkim/rhwp): [MIT License](LICENSE) — Copyright (c) 2025-2026 Edward Kim and contributors
 
-hwpio redistribution artifacts (additions in this repository): MIT License — Copyright (c) 2026 paldyn
+HanPage redistribution artifacts (additions in this repository): MIT License — Copyright (c) 2026 paldyn
 
 This repository forks rhwp under the MIT License's redistribution grant to host hwpio.paldyn.com. See [LICENSE](LICENSE) and the accompanying license notice files for redistribution details.

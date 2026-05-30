@@ -1,7 +1,7 @@
-SIL Open Font License 1.1 — hwpio 번들 웹폰트 고지
+SIL Open Font License 1.1 — HanPage 번들 웹폰트 고지
 ================================================================
 
-본 디렉터리(web/fonts/, 웹 배포 시 /hwpio/fonts/)에 포함된 아래 폰트는
+본 디렉터리(web/fonts/, 웹 배포 시 /fonts/)에 포함된 아래 폰트는
 SIL Open Font License, Version 1.1("OFL") 하에 재배포됩니다.
 OFL 조건 2에 따라 각 폰트의 저작권 고지와 라이선스 전문(1부)을 함께
 포함합니다. 각 폰트의 권위 있는 원본 고지는 출처 URL에서 확인할 수 있습니다.

@@ -8,12 +8,12 @@
   "icon": "media/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/paldyn/hwpio"
+    "url": "https://github.com/paldyn/HanPage"
   },
   "bugs": {
-    "url": "https://github.com/paldyn/hwpio/issues"
+    "url": "https://github.com/paldyn/HanPage/issues"
   },
-  "homepage": "https://github.com/paldyn/hwpio/tree/main/rhwp-vscode",
+  "homepage": "https://github.com/paldyn/HanPage/tree/main/rhwp-vscode",
   "keywords": [
     "hwp",
     "hwpx",
