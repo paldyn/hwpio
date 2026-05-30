@@ -15,22 +15,19 @@ interface FontEntry {
   unicodeRange?: string;
 }
 
-// 함초롬체 CDN (눈누 jsdelivr — 비상업적 사용 허용, 한컴 라이선스)
-const CDN_HAMCHOB_R = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2104@1.0/HANBatang.woff';
-const CDN_HAMCHOB_B = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2104@1.0/HANBatangB.woff';
-const CDN_HAMCHOD_R = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_four@1.0/HCRDotum.woff';
-
 // 한컴 webhwp CSS(@font-face) 매핑 기준 + HWP 문서에서 사용하는 별칭
 const FONT_LIST: FontEntry[] = [
-  // === 함초롬/함초롱/한컴 폰트 (CDN 참조) ===
-  { name: '함초롬돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '함초롬바탕', file: CDN_HAMCHOB_R, format: 'woff' },
-  { name: '함초롱돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '함초롱바탕', file: CDN_HAMCHOB_R, format: 'woff' },
-  { name: '한컴돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '한컴바탕', file: CDN_HAMCHOB_R, format: 'woff' },
-  { name: '새돋움', file: CDN_HAMCHOD_R, format: 'woff' },
-  { name: '새바탕', file: CDN_HAMCHOB_R, format: 'woff' },
+  // === 함초롬/함초롱/한컴 폰트 → OFL 폴백 ===
+  // 비상업 한정 한컴 함초롬체 CDN(눈누) 로드를 제거하고, 돋움(고딕)은 Noto Sans KR,
+  // 바탕(명조)은 Noto Serif KR 로 대체한다 (재배포 라이선스 안전).
+  { name: '함초롬돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
+  { name: '함초롬바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
+  { name: '함초롱돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
+  { name: '함초롱바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
+  { name: '한컴돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
+  { name: '한컴바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
+  { name: '새돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
+  { name: '새바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
   // === 한컴 HY 폰트 → 오픈소스 대체 ===
   { name: 'HY헤드라인M', file: 'fonts/NotoSansKR-Bold.woff2' },
   { name: 'HYHeadLine M', file: 'fonts/NotoSansKR-Bold.woff2' },

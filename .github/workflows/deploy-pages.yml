@@ -79,7 +79,7 @@ jobs:
 
       - name: Build rhwp-studio
         working-directory: rhwp-studio
-        run: npx vite build --base=/rhwp/
+        run: npx vite build --base=/hwpio/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
