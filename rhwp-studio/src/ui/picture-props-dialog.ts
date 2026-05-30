@@ -492,8 +492,13 @@ export class PicturePropsDialog {
     const hPosRow = this.row();
     hPosRow.classList.add('pp-pos-detail');
     hPosRow.appendChild(this.label('가로(I):'));
+    // [Task #1151 v8 결함 B] Para 옵션 추가. horz_rel_to 의 valid 값은
+    // Paper/Page/Column/Para 4 개 (스펙 pack_common_attr_bits 의 horz_rel_to_to_bits).
+    // 이전: ['Paper', '종이'], ['Page', '쪽'], ['Column', '단'] 만 → picture.common.horz_rel_to
+    // = Para 시 select 매칭 실패 → "select 없음" 표시. 사용자 한컴 native 시연 시
+    // 글자처럼 해제 후 가로 기준이 "문단" 으로 표시되어야 정합 (한컴 동작).
     this.horzRelSelect = this.selectEl([
-      ['Paper', '종이'], ['Page', '쪽'], ['Column', '단'],
+      ['Paper', '종이'], ['Page', '쪽'], ['Column', '단'], ['Para', '문단'],
     ]);
     hPosRow.appendChild(this.horzRelSelect);
     hPosRow.appendChild(this.unit('의'));
