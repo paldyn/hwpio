@@ -10,6 +10,7 @@ import {
   type FileSystemFileHandleLike,
   type FileSystemWindowLike,
 } from '@/command/file-system-access';
+import { getDesktopOpenHandler, getDesktopSaveHandler } from '@/core/desktop-bridge';
 
 /** [Task #833] 사용자 명시 cancel 에러 검출.
  * - AbortError: showSaveFilePicker / showOpenFilePicker 다이얼로그 취소
@@ -57,6 +58,24 @@ export async function saveCurrentDocument(services: CommandServices): Promise<Sa
     }
 
     const bytes = services.wasm.exportHwp();
+
+    // [Task #1 데스크톱] 네이티브 저장 dialog 분기. 브라우저에선 핸들러가 null →
+    // 아래 File System Access / 다운로드 폴백이 그대로 동작(웹 무변경).
+    const desktopSave = getDesktopSaveHandler();
+    if (desktopSave) {
+      const r = await desktopSave({ bytes, suggestedName: hwpSaveFileName(saveName), saveAs: false });
+      if (r.status === 'saved') {
+        services.wasm.fileName = r.fileName;
+        services.documentState.markClean('save');
+        console.log(`[file:save] (native) ${r.fileName} (${(bytes.length / 1024).toFixed(1)}KB)`);
+        return 'saved';
+      }
+      if (r.status === 'cancelled') return 'cancelled';
+      console.error('[file:save] (native) 저장 실패:', r.message);
+      alert(`파일 저장에 실패했습니다:\n${r.message}`);
+      return 'failed';
+    }
+
     const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/x-hwp' });
     console.log(`[file:save] format=${sourceFormat}, isHwpx=${isHwpx}, ${bytes.length} bytes`);
 
@@ -228,6 +247,21 @@ export const fileCommands: CommandDef[] = [
         const canReplace = await confirmSaveBeforeReplacingDocument(services);
         if (!canReplace) return;
 
+        // [Task #1 데스크톱] 네이티브 열기 dialog 분기. 브라우저에선 핸들러가 null →
+        // 아래 File System Access / file-input 경로가 그대로 동작(웹 무변경).
+        const desktopOpen = getDesktopOpenHandler();
+        if (desktopOpen) {
+          await desktopOpen((bytes, fileName) => {
+            services.eventBus.emit('open-document-bytes', {
+              bytes,
+              fileName,
+              fileHandle: null,
+              skipUnsavedGuard: true, // 위에서 이미 confirmSaveBeforeReplacingDocument 수행
+            });
+          });
+          return;
+        }
+
         const handle = await pickOpenFileHandle(window as FileSystemWindowLike);
         if (!handle) {
           const fileInput = document.getElementById('file-input') as HTMLInputElement | null;
@@ -274,6 +308,23 @@ export const fileCommands: CommandDef[] = [
         const isHwpx = sourceFormat === 'hwpx';
         const saveName = hwpSaveFileName(services.wasm.fileName);
         const bytes = services.wasm.exportHwp();
+
+        // [Task #1 데스크톱] 네이티브 저장 dialog 분기. 브라우저에선 핸들러가 null →
+        // 아래 File System Access / 다운로드 폴백이 그대로 동작(웹 무변경).
+        const desktopSave = getDesktopSaveHandler();
+        if (desktopSave) {
+          const r = await desktopSave({ bytes, suggestedName: saveName, saveAs: true });
+          if (r.status === 'saved') {
+            services.wasm.fileName = r.fileName;
+            console.log(`[file:save-as] (native) ${r.fileName} (${(bytes.length / 1024).toFixed(1)}KB)`);
+            return;
+          }
+          if (r.status === 'cancelled') return;
+          console.error('[file:save-as] (native) 저장 실패:', r.message);
+          alert(`파일 저장에 실패했습니다:\n${r.message}`);
+          return;
+        }
+
         const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/x-hwp' });
         console.log(`[file:save-as] format=${sourceFormat}, hwpExport=${isHwpx}, ${bytes.length} bytes`);
 
