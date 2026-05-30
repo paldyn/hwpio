@@ -9,7 +9,7 @@
     "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
-    "copy-wasm": "cp ../pkg/rhwp_bg.wasm ../pkg/rhwp.js ../rhwp-studio/public/",
+    "copy-wasm": "node -e \"const fs=require('fs');for(const f of ['rhwp_bg.wasm','rhwp.js'])fs.copyFileSync('../pkg/'+f,'../rhwp-studio/public/'+f)\"",
     "build:frontend": "npm run copy-wasm && npm --prefix ../rhwp-studio run build:desktop",
     "dev:frontend": "npm run copy-wasm && npm --prefix ../rhwp-studio run dev"
   },
