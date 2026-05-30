@@ -24,5 +24,15 @@ tauri = { version = "2", features = [] }
 # [Task #1 Stage 2] 네이티브 열기/저장 dialog. Rust 측에서만 호출하므로 JS ACL
 # 권한(dialog:*)이나 tauri-plugin-fs 는 불필요하다(파일 IO 는 std::fs).
 tauri-plugin-dialog = "2"
+# [Task #1 Stage 3] 최근 문서 영속화(store)·창 상태 저장/복원(window-state)·
+# 단일 인스턴스(single-instance, Win/Linux 파일 연결 argv 캡처). 모두 Rust 측에서만
+# 사용하므로 JS ACL 권한 추가가 불필요하다(core:default 유지).
+tauri-plugin-store = "2"
+tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# single-instance 는 desktop(non-mobile)에서만. Win/Linux 의 파일 연결은 2번째
+# 실행 argv 로 전달되므로 이를 캡처해 기존 창으로 넘긴다(macOS 는 RunEvent::Opened 사용).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-single-instance = "2"

@@ -240,7 +240,14 @@ async function initialize(): Promise<void> {
     setupEventListeners();
     setupGlobalShortcuts();
     // [Task #1 데스크톱] 네이티브(Tauri) 브리지 초기화. 브라우저에선 즉시 return = no-op.
-    initDesktopBridge();
+    // 데스크톱에선 펜딩 문서 드레인(파일 연결/최근 문서/argv)과 네이티브 메뉴 명령을
+    // 기존 eventBus/dispatcher 흐름에 연결한다. openDocument 은 skipUnsavedGuard 를
+    // 생략 → 리스너의 unsaved-guard 가 적용된다(메뉴 file:open 의 dialog 경로와 구분).
+    initDesktopBridge({
+      openDocument: (bytes, fileName) =>
+        eventBus.emit('open-document-bytes', { bytes, fileName, fileHandle: null }),
+      dispatchCommand: (id) => dispatcher.dispatch(id),
+    });
     loadFromUrlParam();
 
     // E2E 테스트용 전역 노출 (개발 모드 전용)
