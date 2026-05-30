@@ -4200,6 +4200,42 @@ fn make_picture_image_node(
     )
 }
 
+/// [Task #1151 v9 결함 D] paragraph 의 sibling TAC picture 들의 (control_idx, width_px)
+/// 시퀀스 수집 (시점순). layout_shape_item 의 가로 분배 cursor / alignment 계산용.
+///
+/// 한컴 native 정합: 동일 paragraph 안 sibling tac=true picture 들이 가로로 inline
+/// 분배 (inline glyph 처럼). 첫 picture 시점에 전체 시퀀스 폭을 알아야 alignment
+/// (center / right) 의 시작 x 가 정확히 계산되므로 pre-scan helper 가 필요.
+pub(crate) fn collect_sibling_tac_picture_widths_px(
+    controls: &[crate::model::control::Control],
+    dpi: f64,
+) -> Vec<(usize, f64)> {
+    use crate::model::control::Control;
+    controls
+        .iter()
+        .enumerate()
+        .filter_map(|(ci, c)| match c {
+            Control::Picture(p) if p.common.treat_as_char => {
+                Some((ci, hwpunit_to_px(p.common.width as i32, dpi)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// [Task #1151 v9 결함 D] paragraph 단위 inline picture 의 가로 분배 cursor 상태.
+/// layout_shape_item 이 같은 paragraph 의 sibling TAC picture 들을 순서대로 처리할 때
+/// HashMap<para_index, ParaInlineState> 에 보관하여 가로 누적 + line wrap 처리.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParaInlineState {
+    /// 다음 picture 의 x 시작점 (paper-relative px)
+    pub cursor_x: f64,
+    /// 현재 line 의 y (= first picture 의 pic_y, 가로 분배 시 유지)
+    pub line_top_y: f64,
+    /// 현재 line 의 최대 picture height (line wrap 임계 + 다음 line advance 용)
+    pub line_height: f64,
+}
+
 #[cfg(test)]
 mod issue_1151_v3_helper_tests {
     //! Issue #1151 v3: calc_sibling_topandbottom_table_reserved_hu helper 단위 검증.
@@ -4281,6 +4317,96 @@ mod issue_1151_v3_helper_tests {
             calc_sibling_topandbottom_table_reserved_hu(&controls),
             16132
         );
+    }
+}
+
+#[cfg(test)]
+mod issue_1151_v9_helper_tests {
+    //! [Task #1151 v9 결함 D] collect_sibling_tac_picture_widths_px helper 단위 검증.
+
+    use super::collect_sibling_tac_picture_widths_px;
+    use crate::model::control::Control;
+    use crate::model::image::Picture;
+    use crate::model::shape::CommonObjAttr;
+    use crate::model::table::Table;
+
+    fn make_pic(width: u32, height: u32, tac: bool) -> Picture {
+        Picture {
+            common: CommonObjAttr {
+                width,
+                height,
+                treat_as_char: tac,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn empty_controls_returns_empty() {
+        assert!(collect_sibling_tac_picture_widths_px(&[], 96.0).is_empty());
+    }
+
+    #[test]
+    fn collects_single_tac_picture() {
+        // 5670 HU @ 96 dpi = 5670 * 96 / 7200 = 75.6 px
+        let controls = vec![Control::Picture(Box::new(make_pic(5670, 5670, true)))];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, 0);
+        assert!((result[0].1 - 75.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn collects_multiple_tac_pictures_in_order() {
+        let controls = vec![
+            Control::Picture(Box::new(make_pic(3000, 3000, true))),
+            Control::Picture(Box::new(make_pic(4500, 4500, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].0, 0);
+        assert_eq!(result[1].0, 1);
+    }
+
+    #[test]
+    fn skips_non_tac_picture() {
+        // tac=false 인 picture (floating) 는 가로 분배 대상 아님 — 제외.
+        let controls = vec![
+            Control::Picture(Box::new(make_pic(3000, 3000, false))),
+            Control::Picture(Box::new(make_pic(4500, 4500, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, 1); // 두 번째 (tac=true) 만
+    }
+
+    #[test]
+    fn skips_table_and_other_controls() {
+        // Table / Shape 는 가로 분배 대상 아님 (Picture 만).
+        let controls = vec![
+            Control::Table(Box::new(Table::default())),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].0, 1);
+        assert_eq!(result[1].0, 2);
+    }
+
+    #[test]
+    fn realistic_v1_scenario_1x1_table_two_tac_pictures() {
+        // 사용자 시연 정확 재현: [Table(tac=false), Pic1(tac=true), Pic2(tac=true)]
+        let controls = vec![
+            Control::Table(Box::new(Table::default())),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 2);
+        let total_width: f64 = result.iter().map(|(_, w)| w).sum();
+        assert!((total_width - 151.2).abs() < 0.01); // 75.6 + 75.6
     }
 }
 
