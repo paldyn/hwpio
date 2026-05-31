@@ -143,6 +143,21 @@ fn collect_equation_bboxes_containing(node: &RenderNode, needle: &str, out: &mut
     }
 }
 
+fn find_equation_bbox(
+    node: &RenderNode,
+    para_index: usize,
+    control_index: usize,
+) -> Option<BoundingBox> {
+    if let RenderNodeType::Equation(eq) = &node.node_type {
+        if eq.para_index == Some(para_index) && eq.control_index == Some(control_index) {
+            return Some(node.bbox.clone());
+        }
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_equation_bbox(child, para_index, control_index))
+}
+
 fn count_table_nodes(node: &RenderNode, para_index: usize, control_index: usize) -> usize {
     let own = match &node.node_type {
         RenderNodeType::Table(table)
@@ -201,6 +216,23 @@ fn max_para_content_bottom(node: &RenderNode, para_index: usize) -> Option<f64> 
                 .filter_map(|child| max_para_content_bottom(child, para_index)),
         )
         .max_by(|a, b| a.partial_cmp(b).unwrap())
+}
+
+#[test]
+fn issue_1189_2022_nov_page1_question1_marker_gap_matches_pdf() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(0).expect("page 1 render tree");
+
+    let question1_eq = find_equation_bbox(&tree.root, 0, 4).expect("문1 수식");
+    assert!(
+        question1_eq.x <= 72.0,
+        "문1 본문 미주 마커 앞 HWP5 placeholder가 0폭이어야 수식이 한컴/PDF처럼 문항 번호 바로 뒤에 붙음: {question1_eq:?}"
+    );
+    assert!(
+        question1_eq.x >= 68.0,
+        "문1 수식이 문항 번호와 겹치면 안 됨: {question1_eq:?}"
+    );
 }
 
 #[test]
