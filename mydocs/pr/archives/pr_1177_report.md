@@ -66,3 +66,13 @@
 - 표+picture 는 시각 정밀 영역 — 작업지시자 시각 판정 권장 (단, PR 이 한컴 양방향 검증 자료 첨부).
 
 > 승인 시: 메인테이너 빌드+test 검증 → merge → `pr_1177_report.md`.
+
+---
+
+## 8. 처리 결과 (보고)
+
+- **MERGED**: devel `84a09e8c` (이슈 #1151 close)
+- auto-merge CLEAN, CI pass, cargo test --tests 97 스위트 전부 통과 + fmt
+- PR 코멘트 등록 + 이슈 #1151 close
+- 시각 판정: 작업지시자 직접 진행 (PR 한컴 2022 양방향 자료 첨부)
+- 후속 #1171 별도 분리
