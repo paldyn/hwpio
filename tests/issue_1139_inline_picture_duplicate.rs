@@ -1005,6 +1005,13 @@ fn issue_1189_2022_nov_pages10_12_rewind_tail_and_equation_scale_match_pdf() {
             && page10.contains("FullParagraph[미주]  pi=476"),
         "PDF 기준 10쪽 하단/우측 시작 미주 흐름을 유지해야 함\n{page10}"
     );
+    let page10_tree = doc.build_page_render_tree(9).expect("page 10 render tree");
+    let question6_tail_bottom =
+        max_para_content_bottom(&page10_tree.root, 475).expect("문6 꼬리 수식");
+    assert!(
+        question6_tail_bottom <= 1092.8,
+        "10쪽 문6 꼬리 수식은 본문 하단을 넘겨 문단끼리 겹치면 안 됨: bottom={question6_tail_bottom}"
+    );
     assert!(
         page11.contains("PartialParagraph  pi=553  lines=0..8")
             && !page11.contains("FullParagraph[미주]  pi=553"),

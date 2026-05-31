@@ -186,6 +186,25 @@ impl HeightCursor {
                         item_para, prev_pi, y_offset, prev_vpos_end, lazy_base_corrected, lazy_base,
                     );
                 }
+                let compact_endnote_question_title = self.suppress_large_forward_jump
+                    && paragraphs
+                        .get(item_para)
+                        .map(|p| p.text.trim_start().starts_with('문'))
+                        .unwrap_or(false)
+                    && seg.line_spacing > 1000;
+                if compact_endnote_question_title
+                    && y_offset > self.col_area_y + self.col_area_height * 0.85
+                {
+                    let prev_line_spacing_px = (seg.line_spacing.max(0) as f64) / 7200.0 * self.dpi;
+                    let prev_content_bottom_y = y_offset - prev_line_spacing_px;
+                    let capped_y = prev_content_bottom_y + 10.0;
+                    if capped_y < y_offset
+                        && y_offset - capped_y <= 24.0
+                        && capped_y >= self.col_area_y
+                    {
+                        return capped_y;
+                    }
+                }
                 return y_offset;
             } else {
                 self.vpos_lazy_base = Some(lazy_base);
