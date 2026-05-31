@@ -2,8 +2,8 @@
 
 - 이슈: [paldyn/HanPage#12](https://github.com/paldyn/HanPage/issues/12) · 마일스톤 M100(v1.0.0)
 - 브랜치: `local/task12` (origin/main 분기) · 머지 타깃: **`main` PR** (#1/#5/#7 선례)
-- PR: _(Stage 3 에서 생성·기재)_
-- 상태: **수정 완료 · 검증 통과 · main PR 단계**
+- PR: [paldyn/HanPage#14](https://github.com/paldyn/HanPage/pull/14) (base `main` ← `task12-scrollbar`)
+- 상태: **수정 완료 · 검증 통과 · main PR #14 생성** (머지/이슈 클로즈 승인 대기)
 
 ## 1. 증상
 
