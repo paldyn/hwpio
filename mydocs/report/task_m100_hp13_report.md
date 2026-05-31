@@ -2,8 +2,8 @@
 
 - 이슈: [paldyn/HanPage#13](https://github.com/paldyn/HanPage/issues/13) · 마일스톤 M100(v1.0.0)
 - 브랜치: `local/task13` (origin/main 분기) · 머지 타깃: **`main` PR** (#1/#5/#7/#12 선례)
-- PR: **(생성 예정)** base `main` ← `task13-rename`
-- 상태: **리네임·CI 정합 완료 · 검증 통과 · main PR 단계** (머지/이슈 클로즈 승인 대기)
+- PR: [paldyn/HanPage#15](https://github.com/paldyn/HanPage/pull/15) (base `main` ← `task13-rename`)
+- 상태: **리네임·CI 정합 완료 · 검증 통과 · main PR #15 생성** (머지/이슈 클로즈 승인 대기)
 
 ## 1. 배경 / 목표
 
