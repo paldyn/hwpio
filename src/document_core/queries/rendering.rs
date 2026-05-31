@@ -1522,10 +1522,33 @@ impl DocumentCore {
                         Some(otci) => format!(",\"outerTableControlIdx\":{}", otci),
                         None => String::new(),
                     };
+                    // [Task #1161] 전체 다단계 cellPath (중첩 표/글상자). TextRun 방출
+                    // (cell_coords, 라인 1313-1327) 과 동일 포맷. 단일 레벨 스칼라는 위
+                    // cell_str/outer_table_str 로 하위호환 유지. 본문 picture 는 빈 문자열.
+                    let cell_path_str = match &image_node.cell_context {
+                        Some(ctx) => {
+                            let entries: Vec<String> = ctx
+                                .path
+                                .iter()
+                                .map(|e| {
+                                    format!(
+                                        "{{\"controlIndex\":{},\"cellIndex\":{},\"cellParaIndex\":{}}}",
+                                        e.control_index, e.cell_index, e.cell_para_index
+                                    )
+                                })
+                                .collect();
+                            format!(
+                                ",\"parentParaIdx\":{},\"cellPath\":[{}]",
+                                ctx.parent_para_index,
+                                entries.join(",")
+                            )
+                        }
+                        None => String::new(),
+                    };
                     controls.push(format!(
-                        "{{\"type\":\"image\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}{}{}}}",
+                        "{{\"type\":\"image\",\"x\":{:.1},\"y\":{:.1},\"w\":{:.1},\"h\":{:.1}{}{}{}{}{}{}}}",
                         node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
-                        doc_coords, wrap_str, hf_str, cell_str, outer_table_str
+                        doc_coords, wrap_str, hf_str, cell_str, outer_table_str, cell_path_str
                     ));
                     return;
                 }

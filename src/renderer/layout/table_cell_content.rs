@@ -731,6 +731,24 @@ impl LayoutEngine {
                             // cellParaIdx 노출 → studio findPictureAtClick / cursor_rect hit-test
                             // 가 인식. enclosing_ctx 에서 section / outer paragraph / outer table
                             // control 인덱스 추출. ctrl_idx 는 셀 paragraph 안의 picture 인덱스.
+                            // [Task #1161] 전체 다단계 경로(중첩 표 포함)를 먼저 구성해
+                            // ImageNode.cell_context 와 inline_shape_position 등록에 공유.
+                            // 단일 레벨 스칼라(cell_index/cell_para_index/outer_table_control_index)
+                            // 는 이 경로의 innermost 투영으로 유지(하위호환).
+                            let cell_ctx =
+                                enclosing_ctx.map(|(_, outer_pi, parent_path, table_ci)| {
+                                    let mut path = parent_path.to_vec();
+                                    path.push(CellPathEntry {
+                                        control_index: table_ci,
+                                        cell_index: cell_idx,
+                                        cell_para_index: pidx,
+                                        text_direction: cell.text_direction,
+                                    });
+                                    CellContext {
+                                        parent_para_index: outer_pi,
+                                        path,
+                                    }
+                                });
                             let img_node = RenderNode::new(
                                 img_node_id,
                                 RenderNodeType::Image(ImageNode {
@@ -754,6 +772,7 @@ impl LayoutEngine {
                                     cell_para_index: Some(pidx),
                                     outer_table_control_index: enclosing_ctx
                                         .map(|(_, _, _, table_ci)| table_ci),
+                                    cell_context: cell_ctx.clone(),
                                 }),
                                 BoundingBox::new(pic_x, pic_y, fit_w, fit_h),
                             );
@@ -762,24 +781,14 @@ impl LayoutEngine {
                             // 에 등록. cursor_rect.rs 의 hit-test 루프가 이 등록 없이는 picture 클릭을
                             // 인식하지 못해 (키보드 입력으로 paragraph_layout 의 다른 path 가 등록할
                             // 때까지) 첫 클릭 무반응. enclosing_ctx 가 Some 인 경우만 (셀 컨텍스트 있음).
-                            if let Some((sec_idx, outer_pi, parent_path, table_ci)) = enclosing_ctx
+                            if let (Some((sec_idx, outer_pi, _, _)), Some(cell_ctx)) =
+                                (enclosing_ctx, cell_ctx.as_ref())
                             {
-                                let mut path = parent_path.to_vec();
-                                path.push(CellPathEntry {
-                                    control_index: table_ci,
-                                    cell_index: cell_idx,
-                                    cell_para_index: pidx,
-                                    text_direction: cell.text_direction,
-                                });
-                                let cell_ctx_for_register = CellContext {
-                                    parent_para_index: outer_pi,
-                                    path,
-                                };
                                 tree.set_inline_shape_position(
                                     sec_idx,
                                     outer_pi,
                                     ctrl_idx,
-                                    Some(&cell_ctx_for_register),
+                                    Some(cell_ctx),
                                     pic_x,
                                     pic_y,
                                 );

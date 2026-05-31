@@ -177,6 +177,8 @@ impl LayoutEngine {
                 cell_index: cei,
                 cell_para_index: cpi,
                 outer_table_control_index: otci,
+                // [Task #1161] 전체 다단계 경로 보존(스칼라는 위 innermost 투영).
+                cell_context: cell_ctx.cloned(),
                 ..ImageNode::new(bin_data_id, image_data)
             }),
             BoundingBox::new(pic_x, pic_y, pic_width, pic_height),
