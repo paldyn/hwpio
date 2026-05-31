@@ -471,16 +471,11 @@ export class PageRenderer {
     } catch {
       return;
     }
-    // image 항목들의 mime + base64 추출 (간단한 정규식)
-    const re = /"type":"image"[^}]*?(?:"wrap":"(behindText|inFrontOfText)")?[^}]*?"mime":"([^"]+)","base64":"([^"]+)"/g;
     const tasks: Promise<unknown>[] = [];
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(json)) !== null) {
-      const wrap = m[1]; // overlay wrap 은 prefetch 대상 아님 (별도 <img>)
-      if (wrap === 'behindText' || wrap === 'inFrontOfText') continue;
-      const mime = m[2];
-      const b64 = m[3];
-      const dataUrl = `data:${mime};base64,${b64}`;
+    const seen = new Set<string>();
+    const enqueue = (dataUrl: string) => {
+      if (seen.has(dataUrl)) return;
+      seen.add(dataUrl);
       tasks.push(
         new Promise<void>((resolve) => {
           const img = new Image();
@@ -493,6 +488,22 @@ export class PageRenderer {
           }
         }),
       );
+    };
+    // image 항목들의 mime + base64 추출 (간단한 정규식)
+    const re = /"type":"image"[^}]*?(?:"wrap":"(behindText|inFrontOfText)")?[^}]*?"mime":"([^"]+)","base64":"([^"]+)"/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(json)) !== null) {
+      const wrap = m[1]; // overlay wrap 은 prefetch 대상 아님 (별도 <img>)
+      if (wrap === 'behindText' || wrap === 'inFrontOfText') continue;
+      enqueue(`data:${m[2]};base64,${m[3]}`);
+    }
+    // rawSvg 항목 (OLE/차트 미리보기) 의 embedded data URL 추출.
+    // svg 필드는 JSON 인코딩 문자열이며 내부에 data:image/MIME;base64,... 가 등장한다.
+    // rawSvg 의 wrap 은 항상 flow 이므로 overlay 필터링 불필요.
+    const dataUrlRe = /data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)/g;
+    let d: RegExpExecArray | null;
+    while ((d = dataUrlRe.exec(json)) !== null) {
+      enqueue(`data:${d[1]};base64,${d[2]}`);
     }
     await Promise.all(tasks);
   }

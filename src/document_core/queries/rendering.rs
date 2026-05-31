@@ -657,34 +657,42 @@ impl DocumentCore {
                 LayerNodeKind::ClipRect { child, .. } => collect(child, behind, front, image_count),
                 LayerNodeKind::Leaf { ops } => {
                     for op in ops {
-                        if let PaintOp::Image {
-                            bbox,
-                            image,
-                            resolved,
-                        } = op
-                        {
-                            *image_count += 1;
-                            match image.text_wrap {
-                                Some(TextWrap::BehindText) => {
-                                    write_overlay_image(
-                                        behind,
-                                        *bbox,
-                                        image,
-                                        resolved.as_deref(),
-                                        TextWrap::BehindText,
-                                    );
+                        match op {
+                            PaintOp::Image {
+                                bbox,
+                                image,
+                                resolved,
+                            } => {
+                                *image_count += 1;
+                                match image.text_wrap {
+                                    Some(TextWrap::BehindText) => {
+                                        write_overlay_image(
+                                            behind,
+                                            *bbox,
+                                            image,
+                                            resolved.as_deref(),
+                                            TextWrap::BehindText,
+                                        );
+                                    }
+                                    Some(TextWrap::InFrontOfText) => {
+                                        write_overlay_image(
+                                            front,
+                                            *bbox,
+                                            image,
+                                            resolved.as_deref(),
+                                            TextWrap::InFrontOfText,
+                                        );
+                                    }
+                                    _ => {}
                                 }
-                                Some(TextWrap::InFrontOfText) => {
-                                    write_overlay_image(
-                                        front,
-                                        *bbox,
-                                        image,
-                                        resolved.as_deref(),
-                                        TextWrap::InFrontOfText,
-                                    );
-                                }
-                                _ => {}
                             }
+                            // OLE/차트 미리보기 등은 RawSvg 로 emit 되며 web_canvas 의 draw_image
+                            // 경로(IMAGE_CACHE 비동기 디코드)를 그대로 탄다. scheduleReRender 재시도
+                            // 발화를 위해 image_count 에 포함한다.
+                            PaintOp::RawSvg { .. } => {
+                                *image_count += 1;
+                            }
+                            _ => {}
                         }
                     }
                 }
