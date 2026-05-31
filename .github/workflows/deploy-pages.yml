@@ -22,7 +22,7 @@ on:
       - 'rhwp-chrome/**'
       - 'rhwp-vscode/**'
       - 'rhwp-shared/**'
-      - 'rhwp-desktop/**'
+      - 'HanPage-Desktop/**'
       - '*.md'
       - 'LICENSE'
       - 'CLAUDE.md'
