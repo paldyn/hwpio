@@ -1217,12 +1217,28 @@ impl DocumentCore {
         // 클릭 시 해당 Shape의 텍스트 위치(char_offset)를 반환
         for (key, &(sx, sy)) in tree.inline_shape_positions() {
             let (si, pi, ci, ref cell_path) = *key;
-            // 셀 내부 inline shape 은 cursor hit-test 에서 별도 처리 — 섹션 단위만 검사
-            if !cell_path.is_empty() {
-                continue;
-            }
+            // [Task #1151 v4] 셀 안 inline picture/shape 도 hit-test 진입.
+            // cell_path 가 있으면 셀 안 paragraph 에서 control 을 조회, 없으면 outer
+            // paragraph 에서 조회 (기존 본문 path).
             if let Some(section) = self.document.sections.get(si) {
-                if let Some(para) = section.paragraphs.get(pi) {
+                let target_para = if cell_path.is_empty() {
+                    section.paragraphs.get(pi)
+                } else {
+                    // cell_path 의 마지막 entry = picture/shape 가 있는 셀의 (table_ci,
+                    // cell_idx, cell_para_idx). 중첩 표는 본 분기에서 첫 외곽 표 하나만
+                    // resolve (셀 안 표 안 picture 는 후속 task).
+                    let last = cell_path.last().copied().unwrap_or((0, 0, 0));
+                    section
+                        .paragraphs
+                        .get(pi)
+                        .and_then(|p| p.controls.get(last.0))
+                        .and_then(|c| match c {
+                            Control::Table(t) => t.cells.get(last.1),
+                            _ => None,
+                        })
+                        .and_then(|cell| cell.paragraphs.get(last.2))
+                };
+                if let Some(para) = target_para {
                     if let Some(ctrl) = para.controls.get(ci) {
                         let (sw, sh) = match ctrl {
                             Control::Shape(s) => (
@@ -1309,9 +1325,25 @@ impl DocumentCore {
                                 return Ok(format_hit(&runs[idx], offset, page_num));
                             }
                             // TextRun이 없으면 기본 반환
+                            // [Task #1151 v4] cell_path 가 있으면 cellPath / innerControlIdx
+                            // 정보 추가 — studio 측 picture select / 그림 속성 대화상자가
+                            // cellPath 인식하여 셀 안 picture 를 정상 처리.
+                            let cell_path_str = if cell_path.is_empty() {
+                                String::new()
+                            } else {
+                                let entries: Vec<String> = cell_path
+                                    .iter()
+                                    .map(|(t, c, p)| format!("[{},{},{}]", t, c, p))
+                                    .collect();
+                                format!(
+                                    ",\"cellPath\":[{}],\"innerControlIdx\":{}",
+                                    entries.join(","),
+                                    ci
+                                )
+                            };
                             return Ok(format!(
-                                "{{\"sectionIndex\":{},\"paragraphIndex\":{},\"charOffset\":{},\"cursorRect\":{{\"pageIndex\":{},\"x\":{:.1},\"y\":{:.1},\"height\":{:.1}}}}}",
-                                si, pi, offset, page_num, sx, sy, sh
+                                "{{\"sectionIndex\":{},\"paragraphIndex\":{},\"charOffset\":{},\"cursorRect\":{{\"pageIndex\":{},\"x\":{:.1},\"y\":{:.1},\"height\":{:.1}}}{}}}",
+                                si, pi, offset, page_num, sx, sy, sh, cell_path_str
                             ));
                         }
                     }

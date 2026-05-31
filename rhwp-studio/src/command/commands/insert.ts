@@ -182,13 +182,16 @@ export const insertCommands: CommandDef[] = [
       }
       // [Task #825] 머리말/꼬리말 그림은 ref.headerFooter 동반 — dialog 에 전달.
       // [Task #1138] 표 셀 내 도형(shape/line) 은 cellPath 구성하여 dialog 에 전달
-      // → by_path API 사용. picture (image) 는 paragraph_layout path 가 처리하므로
-      // cellPath 미사용 (검증 결과 picture 는 외부 좌표 path 로 정상 동작).
+      // → by_path API 사용.
+      // [Task #1151 v4] picture (image) 도 셀 안 inline picture (tac-img-02.hwp 같은
+      // 케이스) 의 경우 cellPath 구성 필요 — getCellPicturePropertiesByPath /
+      // setCellPicturePropertiesByPath wasm API 호출. cell context (cellIdx/cellParaIdx/
+      // outerTableControlIdx) 가 모두 있으면 셀 안 picture.
       const cellPath = (
         ref.cellIdx !== undefined &&
         ref.cellParaIdx !== undefined &&
         (ref as any).outerTableControlIdx !== undefined &&
-        (ref.type === 'shape' || ref.type === 'line')
+        (ref.type === 'shape' || ref.type === 'line' || ref.type === 'image')
       )
         ? [{
             controlIdx: (ref as any).outerTableControlIdx as number,

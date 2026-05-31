@@ -957,6 +957,7 @@ impl LayoutEngine {
                                             width: clamped_w,
                                             height: clamped_h,
                                         };
+                                        // [Task #1151 v4] 셀 안 inline picture (partial 표 path).
                                         self.layout_picture(
                                             tree,
                                             &mut cell_node,
@@ -964,9 +965,10 @@ impl LayoutEngine {
                                             &pic_area,
                                             bin_data_content,
                                             Alignment::Left,
-                                            None,
-                                            None,
-                                            None,
+                                            Some(section_index),
+                                            Some(cell_context.parent_para_index),
+                                            Some(ctrl_idx),
+                                            Some(&cell_context),
                                         );
                                         inline_x += clamped_w;
                                         continue;
@@ -980,6 +982,7 @@ impl LayoutEngine {
                                             .max(0.0),
                                         ..inner_area
                                     };
+                                    // [Task #1151 v4] 셀 안 non-inline picture (partial 표 path).
                                     self.layout_picture(
                                         tree,
                                         &mut cell_node,
@@ -987,9 +990,10 @@ impl LayoutEngine {
                                         &pic_area,
                                         bin_data_content,
                                         para_alignment,
-                                        None,
-                                        None,
-                                        None,
+                                        Some(section_index),
+                                        Some(cell_context.parent_para_index),
+                                        Some(ctrl_idx),
+                                        Some(&cell_context),
                                     );
                                     let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
                                     para_y += pic_h;

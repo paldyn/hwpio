@@ -877,6 +877,16 @@ pub struct ImageNode {
     /// `None` 일 때 본문 그림 (현행 동작).
     #[serde(default)]
     pub header_footer_ref: Option<HeaderFooterImageRef>,
+    /// [Task #1151 v4] 표 셀 안 inline picture (tac=true) 인 경우: 셀 인덱스.
+    /// Rectangle/Ellipse/Path 의 [Task #1138] 패턴 정합. `None` 이면 셀 외부 picture.
+    #[serde(default)]
+    pub cell_index: Option<usize>,
+    /// [Task #1151 v4] 표 셀 안 inline picture 인 경우: 셀 내 문단 인덱스.
+    #[serde(default)]
+    pub cell_para_index: Option<usize>,
+    /// [Task #1151 v4] 표 셀 안 inline picture 인 경우: outer paragraph 의 표 control 인덱스.
+    #[serde(default)]
+    pub outer_table_control_index: Option<usize>,
 }
 
 /// [Task #825] 머리말/꼬리말 안 그림의 outer 위치 + 종류.
@@ -927,6 +937,9 @@ impl ImageNode {
             text_wrap: None,
             external_path: None,
             header_footer_ref: None,
+            cell_index: None,
+            cell_para_index: None,
+            outer_table_control_index: None,
         }
     }
 }
@@ -1021,7 +1034,12 @@ impl PageRenderTree {
             .unwrap_or_default()
     }
 
-    /// 인라인 Shape 좌표 등록 (셀 컨텍스트 포함)
+    /// 인라인 Shape 좌표 등록 (셀 컨텍스트 포함).
+    /// [Task #1151 v4] 셀 안인 경우 InlineShapeKey 의 para 는 호출자가 전달한
+    /// cell paragraph idx 가 아닌 **outer paragraph idx** (`cell_ctx.parent_para_index`)
+    /// 로 정규화한다. cursor_rect 의 hit-test 가 `section.paragraphs.get(pi)` 로
+    /// outer paragraph 에서 table → cell → cell paragraph 경로로 resolve 하기 위해
+    /// 정합 필요.
     pub fn set_inline_shape_position(
         &mut self,
         sec: usize,
@@ -1032,11 +1050,13 @@ impl PageRenderTree {
         y: f64,
     ) {
         let cell_path = Self::cell_path_from_ctx(cell_ctx);
+        let para_for_key = cell_ctx.map(|c| c.parent_para_index).unwrap_or(para);
         self.inline_shape_positions
-            .insert((sec, para, ctrl, cell_path), (x, y));
+            .insert((sec, para_for_key, ctrl, cell_path), (x, y));
     }
 
-    /// 인라인 Shape 좌표 조회 (셀 컨텍스트 포함)
+    /// 인라인 Shape 좌표 조회 (셀 컨텍스트 포함).
+    /// [Task #1151 v4] `set_inline_shape_position` 과 동일한 para 정규화.
     pub fn get_inline_shape_position(
         &self,
         sec: usize,
@@ -1045,8 +1065,9 @@ impl PageRenderTree {
         cell_ctx: Option<&crate::renderer::layout::CellContext>,
     ) -> Option<(f64, f64)> {
         let cell_path = Self::cell_path_from_ctx(cell_ctx);
+        let para_for_key = cell_ctx.map(|c| c.parent_para_index).unwrap_or(para);
         self.inline_shape_positions
-            .get(&(sec, para, ctrl, cell_path))
+            .get(&(sec, para_for_key, ctrl, cell_path))
             .copied()
     }
 

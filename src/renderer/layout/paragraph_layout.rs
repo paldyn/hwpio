@@ -2646,7 +2646,15 @@ impl LayoutEngine {
                             if let Some(ctrl) = p.controls.get(tac_ci) {
                                 if let Control::Picture(pic) = ctrl {
                                     let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
-                                    let img_y = (y + baseline - pic_h).max(y);
+                                    // [Task #1151 v3] sibling wrap=TopAndBottom 표 (tac=false) 가
+                                    // 차지하는 vertical 영역만큼 picture y 보정. 한컴 정합
+                                    // (samples/tac-verify/scenario-{a..d}-after.hwp).
+                                    let sibling_table_reserved_hu =
+                                        calc_sibling_topandbottom_table_reserved_hu(&p.controls);
+                                    let sibling_table_reserved_px =
+                                        hwpunit_to_px(sibling_table_reserved_hu, self.dpi);
+                                    let img_y =
+                                        (y + baseline - pic_h).max(y) + sibling_table_reserved_px;
                                     let bin_data_id = pic.image_attr.bin_data_id;
                                     let image_data =
                                         find_bin_data(bdc, bin_data_id).map(|c| c.data.clone());
@@ -2674,22 +2682,18 @@ impl LayoutEngine {
                                     } else {
                                         None
                                     };
-                                    let img_id = tree.next_id();
-                                    let img_node = RenderNode::new(
-                                        img_id,
-                                        RenderNodeType::Image(ImageNode {
-                                            section_index: Some(section_index),
-                                            para_index: Some(para_index),
-                                            control_index: Some(tac_ci),
-                                            crop,
-                                            original_size_hu,
-                                            effect: pic.image_attr.effect,
-                                            brightness: pic.image_attr.brightness,
-                                            contrast: pic.image_attr.contrast,
-                                            text_wrap: Some(pic.common.text_wrap),
-                                            transform: extract_shape_transform(&pic.shape_attr),
-                                            ..ImageNode::new(bin_data_id, image_data)
-                                        }),
+                                    // [Task #1151 v7 항목 7] ImageNode 생성 helper 통합.
+                                    let img_node = make_picture_image_node(
+                                        tree,
+                                        pic,
+                                        section_index,
+                                        para_index,
+                                        tac_ci,
+                                        cell_ctx.as_ref(),
+                                        crop,
+                                        original_size_hu,
+                                        bin_data_id,
+                                        image_data,
                                         BoundingBox::new(x, img_y, tac_w, pic_h),
                                     );
                                     line_node.children.push(img_node);
@@ -3053,22 +3057,18 @@ impl LayoutEngine {
                                 } else {
                                     None
                                 };
-                                let img_id = tree.next_id();
-                                let img_node = RenderNode::new(
-                                    img_id,
-                                    RenderNodeType::Image(ImageNode {
-                                        section_index: Some(section_index),
-                                        para_index: Some(para_index),
-                                        control_index: Some(tac_ci),
-                                        crop,
-                                        original_size_hu,
-                                        effect: pic.image_attr.effect,
-                                        brightness: pic.image_attr.brightness,
-                                        contrast: pic.image_attr.contrast,
-                                        text_wrap: Some(pic.common.text_wrap),
-                                        transform: extract_shape_transform(&pic.shape_attr),
-                                        ..ImageNode::new(bin_data_id, image_data)
-                                    }),
+                                // [Task #1151 v7 항목 7] ImageNode 생성 helper 통합.
+                                let img_node = make_picture_image_node(
+                                    tree,
+                                    pic,
+                                    section_index,
+                                    para_index,
+                                    tac_ci,
+                                    cell_ctx.as_ref(),
+                                    crop,
+                                    original_size_hu,
+                                    bin_data_id,
+                                    image_data,
                                     BoundingBox::new(x, img_y, tac_w, pic_h),
                                 );
                                 line_node.children.push(img_node);
@@ -3163,7 +3163,17 @@ impl LayoutEngine {
                                 }
                                 if let Control::Picture(pic) = ctrl {
                                     let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
-                                    let img_y = (y + baseline - pic_h).max(y);
+                                    // [Task #1151 v3] 같은 paragraph 의 sibling wrap=TopAndBottom
+                                    // 표 (tac=false) 가 차지하는 vertical 영역만큼 picture y 보정.
+                                    // 한컴 정합 (samples/tac-verify/scenario-{a..d}-after.hwp): picture
+                                    // 가 표 아래에 그려져 오버랩 차단. sibling 표가 없으면 reserved=0
+                                    // → 기존 동작 보존 (회귀 0).
+                                    let sibling_table_reserved_hu =
+                                        calc_sibling_topandbottom_table_reserved_hu(&p.controls);
+                                    let sibling_table_reserved_px =
+                                        hwpunit_to_px(sibling_table_reserved_hu, self.dpi);
+                                    let img_y =
+                                        (y + baseline - pic_h).max(y) + sibling_table_reserved_px;
                                     let bin_data_id = pic.image_attr.bin_data_id;
                                     let image_data =
                                         find_bin_data(bdc, bin_data_id).map(|c| c.data.clone());
@@ -3191,22 +3201,18 @@ impl LayoutEngine {
                                     } else {
                                         None
                                     };
-                                    let img_id = tree.next_id();
-                                    let img_node = RenderNode::new(
-                                        img_id,
-                                        RenderNodeType::Image(ImageNode {
-                                            section_index: Some(section_index),
-                                            para_index: Some(para_index),
-                                            control_index: Some(tac_ci),
-                                            crop,
-                                            original_size_hu,
-                                            effect: pic.image_attr.effect,
-                                            brightness: pic.image_attr.brightness,
-                                            contrast: pic.image_attr.contrast,
-                                            text_wrap: Some(pic.common.text_wrap),
-                                            transform: extract_shape_transform(&pic.shape_attr),
-                                            ..ImageNode::new(bin_data_id, image_data)
-                                        }),
+                                    // [Task #1151 v7 항목 7] ImageNode 생성 helper 통합.
+                                    let img_node = make_picture_image_node(
+                                        tree,
+                                        pic,
+                                        section_index,
+                                        para_index,
+                                        tac_ci,
+                                        cell_ctx.as_ref(),
+                                        crop,
+                                        original_size_hu,
+                                        bin_data_id,
+                                        image_data,
                                         BoundingBox::new(img_x, img_y, tac_w, pic_h),
                                     );
                                     line_node.children.push(img_node);
@@ -4117,6 +4123,290 @@ impl LayoutEngine {
                 }
             }
         }
+    }
+}
+
+/// [Task #1151 v3] paragraph 의 sibling controls 중 `wrap=TopAndBottom` +
+/// `treat_as_char=false` 인 표가 차지하는 vertical 영역 (HWPUNIT) 합산.
+///
+/// 한컴 layout 정합 (`mydocs/tech/topandbottom_table_inline_picture_layout.md` H1):
+/// 같은 paragraph 의 sibling tac picture 가 표 아래 영역에 그려지도록 picture
+/// 의 y 위치 보정값을 계산한다. 표가 없으면 0 반환 (회귀 0 보장).
+///
+/// 합산 공식: `table.common.height + outer_margin_top + outer_margin_bottom`
+/// (한컴 산출물 `samples/tac-verify/scenario-a-after.hwp` 의 표 outer_margin
+/// 1.0mm 정합).
+pub(crate) fn calc_sibling_topandbottom_table_reserved_hu(
+    controls: &[crate::model::control::Control],
+) -> i32 {
+    use crate::model::control::Control;
+    use crate::model::shape::TextWrap;
+    controls
+        .iter()
+        .map(|c| match c {
+            Control::Table(t)
+                if matches!(t.common.text_wrap, TextWrap::TopAndBottom)
+                    && !t.common.treat_as_char =>
+            {
+                t.common.height as i32 + t.outer_margin_top as i32 + t.outer_margin_bottom as i32
+            }
+            _ => 0,
+        })
+        .sum()
+}
+
+/// [Task #1151 v7 항목 7] paragraph_layout 의 3 곳에서 반복되던 ImageNode 생성
+/// boilerplate 통합 (cell_ctx → 3 필드 + outer paragraph idx 노출 + picture 의
+/// effect/brightness/contrast/text_wrap/transform 매핑). picture_footnote 의
+/// `layout_picture_full` 가 본문/머리말/꼬리말 path 의 진입점 helper 인 것과 짝.
+#[allow(clippy::too_many_arguments)]
+fn make_picture_image_node(
+    tree: &mut PageRenderTree,
+    pic: &crate::model::image::Picture,
+    section_index: usize,
+    para_index: usize,
+    ctrl_idx: usize,
+    cell_ctx: Option<&CellContext>,
+    crop: Option<(i32, i32, i32, i32)>,
+    original_size_hu: Option<(u32, u32)>,
+    bin_data_id: u16,
+    image_data: Option<Vec<u8>>,
+    bbox: BoundingBox,
+) -> RenderNode {
+    let (cei, cpi, otci) = cell_ctx
+        .map(|c| c.last_image_indices())
+        .unwrap_or((None, None, None));
+    let para_for_image = cell_ctx.map(|c| c.parent_para_index).unwrap_or(para_index);
+    let img_id = tree.next_id();
+    RenderNode::new(
+        img_id,
+        RenderNodeType::Image(ImageNode {
+            section_index: Some(section_index),
+            para_index: Some(para_for_image),
+            control_index: Some(ctrl_idx),
+            cell_index: cei,
+            cell_para_index: cpi,
+            outer_table_control_index: otci,
+            crop,
+            original_size_hu,
+            effect: pic.image_attr.effect,
+            brightness: pic.image_attr.brightness,
+            contrast: pic.image_attr.contrast,
+            text_wrap: Some(pic.common.text_wrap),
+            transform: extract_shape_transform(&pic.shape_attr),
+            ..ImageNode::new(bin_data_id, image_data)
+        }),
+        bbox,
+    )
+}
+
+/// [Task #1151 v9 결함 D] paragraph 의 sibling TAC picture 들의 (control_idx, width_px)
+/// 시퀀스 수집 (시점순). layout_shape_item 의 가로 분배 cursor / alignment 계산용.
+///
+/// 한컴 native 정합: 동일 paragraph 안 sibling tac=true picture 들이 가로로 inline
+/// 분배 (inline glyph 처럼). 첫 picture 시점에 전체 시퀀스 폭을 알아야 alignment
+/// (center / right) 의 시작 x 가 정확히 계산되므로 pre-scan helper 가 필요.
+pub(crate) fn collect_sibling_tac_picture_widths_px(
+    controls: &[crate::model::control::Control],
+    dpi: f64,
+) -> Vec<(usize, f64)> {
+    use crate::model::control::Control;
+    controls
+        .iter()
+        .enumerate()
+        .filter_map(|(ci, c)| match c {
+            Control::Picture(p) if p.common.treat_as_char => {
+                Some((ci, hwpunit_to_px(p.common.width as i32, dpi)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// [Task #1151 v9 결함 D] paragraph 단위 inline picture 의 가로 분배 cursor 상태.
+/// layout_shape_item 이 같은 paragraph 의 sibling TAC picture 들을 순서대로 처리할 때
+/// HashMap<para_index, ParaInlineState> 에 보관하여 가로 누적 + line wrap 처리.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ParaInlineState {
+    /// 다음 picture 의 x 시작점 (paper-relative px)
+    pub cursor_x: f64,
+    /// 현재 line 의 y (= first picture 의 pic_y, 가로 분배 시 유지)
+    pub line_top_y: f64,
+    /// 현재 line 의 최대 picture height (line wrap 임계 + 다음 line advance 용)
+    pub line_height: f64,
+}
+
+#[cfg(test)]
+mod issue_1151_v3_helper_tests {
+    //! Issue #1151 v3: calc_sibling_topandbottom_table_reserved_hu helper 단위 검증.
+    //!
+    //! 한컴 정합 (samples/tac-verify/scenario-{a..d}-after.hwp): wrap=TopAndBottom +
+    //! tac=false 인 표만 vertical 영역 reservation 으로 합산. 그 외 (TAC 표 / Square
+    //! wrap / picture 등) 은 0.
+
+    use super::calc_sibling_topandbottom_table_reserved_hu;
+    use crate::model::control::Control;
+    use crate::model::image::Picture;
+    use crate::model::shape::{CommonObjAttr, TextWrap};
+    use crate::model::table::Table;
+
+    fn make_table(width: u32, height: u32, wrap: TextWrap, tac: bool) -> Table {
+        Table {
+            common: CommonObjAttr {
+                width,
+                height,
+                text_wrap: wrap,
+                treat_as_char: tac,
+                ..Default::default()
+            },
+            outer_margin_left: 283,
+            outer_margin_right: 283,
+            outer_margin_top: 283,
+            outer_margin_bottom: 283,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_single() {
+        // scenario-a-after.hwp 의 표: 13630×12498, outer_margin (top=283, bottom=283).
+        // 합산 = 12498 + 283 + 283 = 13064 HU.
+        let table = make_table(13630, 12498, TextWrap::TopAndBottom, false);
+        let controls = vec![Control::Table(Box::new(table))];
+        assert_eq!(
+            calc_sibling_topandbottom_table_reserved_hu(&controls),
+            13064
+        );
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_none_when_no_table() {
+        let controls: Vec<Control> = vec![];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_excludes_tac_table() {
+        let table = make_table(13630, 12498, TextWrap::TopAndBottom, true); // tac=true 제외
+        let controls = vec![Control::Table(Box::new(table))];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_excludes_square_wrap() {
+        let table = make_table(13630, 12498, TextWrap::Square, false); // wrap=Square 제외
+        let controls = vec![Control::Table(Box::new(table))];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_ignores_picture_control() {
+        // Picture 는 합산 대상 아님 (sibling Picture 자체는 inline 글리프).
+        let pic = Picture::default();
+        let controls = vec![Control::Picture(Box::new(pic))];
+        assert_eq!(calc_sibling_topandbottom_table_reserved_hu(&controls), 0);
+    }
+
+    #[test]
+    fn topandbottom_table_reserved_sums_multiple_tables() {
+        let t1 = make_table(13630, 10000, TextWrap::TopAndBottom, false);
+        let t2 = make_table(13630, 5000, TextWrap::TopAndBottom, false);
+        let controls = vec![Control::Table(Box::new(t1)), Control::Table(Box::new(t2))];
+        // (10000 + 283 + 283) + (5000 + 283 + 283) = 10566 + 5566 = 16132
+        assert_eq!(
+            calc_sibling_topandbottom_table_reserved_hu(&controls),
+            16132
+        );
+    }
+}
+
+#[cfg(test)]
+mod issue_1151_v9_helper_tests {
+    //! [Task #1151 v9 결함 D] collect_sibling_tac_picture_widths_px helper 단위 검증.
+
+    use super::collect_sibling_tac_picture_widths_px;
+    use crate::model::control::Control;
+    use crate::model::image::Picture;
+    use crate::model::shape::CommonObjAttr;
+    use crate::model::table::Table;
+
+    fn make_pic(width: u32, height: u32, tac: bool) -> Picture {
+        Picture {
+            common: CommonObjAttr {
+                width,
+                height,
+                treat_as_char: tac,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn empty_controls_returns_empty() {
+        assert!(collect_sibling_tac_picture_widths_px(&[], 96.0).is_empty());
+    }
+
+    #[test]
+    fn collects_single_tac_picture() {
+        // 5670 HU @ 96 dpi = 5670 * 96 / 7200 = 75.6 px
+        let controls = vec![Control::Picture(Box::new(make_pic(5670, 5670, true)))];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, 0);
+        assert!((result[0].1 - 75.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn collects_multiple_tac_pictures_in_order() {
+        let controls = vec![
+            Control::Picture(Box::new(make_pic(3000, 3000, true))),
+            Control::Picture(Box::new(make_pic(4500, 4500, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].0, 0);
+        assert_eq!(result[1].0, 1);
+    }
+
+    #[test]
+    fn skips_non_tac_picture() {
+        // tac=false 인 picture (floating) 는 가로 분배 대상 아님 — 제외.
+        let controls = vec![
+            Control::Picture(Box::new(make_pic(3000, 3000, false))),
+            Control::Picture(Box::new(make_pic(4500, 4500, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, 1); // 두 번째 (tac=true) 만
+    }
+
+    #[test]
+    fn skips_table_and_other_controls() {
+        // Table / Shape 는 가로 분배 대상 아님 (Picture 만).
+        let controls = vec![
+            Control::Table(Box::new(Table::default())),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].0, 1);
+        assert_eq!(result[1].0, 2);
+    }
+
+    #[test]
+    fn realistic_v1_scenario_1x1_table_two_tac_pictures() {
+        // 사용자 시연 정확 재현: [Table(tac=false), Pic1(tac=true), Pic2(tac=true)]
+        let controls = vec![
+            Control::Table(Box::new(Table::default())),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+            Control::Picture(Box::new(make_pic(5670, 5670, true))),
+        ];
+        let result = collect_sibling_tac_picture_widths_px(&controls, 96.0);
+        assert_eq!(result.len(), 2);
+        let total_width: f64 = result.iter().map(|(_, w)| w).sum();
+        assert!((total_width - 151.2).abs() < 0.01); // 75.6 + 75.6
     }
 }
 

@@ -822,12 +822,30 @@ export class WasmBridge {
     return this.doc.evaluateTableFormula(sec, parentPara, controlIdx, targetRow, targetCol, formula, writeResult);
   }
 
+  /**
+   * 커서 위치에 그림을 삽입한다.
+   *
+   * @param cellPathJson 표 셀 안 삽입 시 cellPath JSON (#1151).
+   *   빈 문자열 또는 `'[]'` 면 본문 inline 삽입 (기존 동작, treat_as_char=true).
+   *   비어있지 않으면 셀 영역에 floating picture 삽입 (한컴 정합, tac=false,
+   *   wrap=Square, Page-relative offset). 셀 자체는 비어있는 채로 유지되어
+   *   클릭 시 cursor 가 정상 동작한다.
+   *   예: `JSON.stringify([{controlIndex:0, cellIndex:2, cellParaIndex:0}])`
+   */
   insertPicture(sec: number, paraIdx: number, charOffset: number,
+                cellPathJson: string,
                 imageData: Uint8Array, width: number, height: number,
                 naturalWidthPx: number, naturalHeightPx: number,
-                extension: string, description: string = ''): { ok: boolean; paraIdx: number; controlIdx: number } {
+                extension: string, description: string = '',
+                // [Task #1151 v8 결함 C] 사용자 클릭/드래그 paper-relative 좌표 (HU).
+                // 셀 floating 분기에서 사용. undefined 면 셀 좌상단 default (기존 동작).
+                paperOffsetXHu?: number, paperOffsetYHu?: number): { ok: boolean; paraIdx: number; controlIdx: number } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
-    return JSON.parse(this.doc.insertPicture(sec, paraIdx, charOffset, imageData, width, height, naturalWidthPx, naturalHeightPx, extension, description));
+    return JSON.parse(this.doc.insertPicture(
+      sec, paraIdx, charOffset, cellPathJson, imageData,
+      width, height, naturalWidthPx, naturalHeightPx, extension, description,
+      paperOffsetXHu, paperOffsetYHu,
+    ));
   }
 
   // ── 그림 속성 API ─────────────────────────────────────
@@ -887,6 +905,21 @@ export class WasmBridge {
     );
   }
 
+  /** [Task #1151 v4] 표 셀 내 Picture 속성 조회 (by_path). Shape 패턴 정합. */
+  getCellPicturePropertiesByPath(
+    sec: number,
+    parentPara: number,
+    cellPath: import('./types').CellPath,
+    innerControlIdx: number,
+  ): import('./types').PictureProperties {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse(
+      (this.doc as any).getCellPicturePropertiesByPath(
+        sec, parentPara, JSON.stringify(cellPath), innerControlIdx,
+      )
+    );
+  }
+
   /** [Task #1138] 표 셀 내 Shape 속성 변경 (by_path). */
   setCellShapePropertiesByPath(
     sec: number,
@@ -906,6 +939,22 @@ export class WasmBridge {
   setPictureProperties(sec: number, para: number, ci: number, props: Record<string, unknown>): { ok: boolean } {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return JSON.parse(this.doc.setPictureProperties(sec, para, ci, JSON.stringify(props)));
+  }
+
+  /** [Task #1151 v4] 표 셀 내 Picture 속성 변경 (by_path). Shape 패턴 정합. */
+  setCellPicturePropertiesByPath(
+    sec: number,
+    parentPara: number,
+    cellPath: import('./types').CellPath,
+    innerControlIdx: number,
+    props: Record<string, unknown>,
+  ): { ok: boolean } {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return JSON.parse(
+      (this.doc as any).setCellPicturePropertiesByPath(
+        sec, parentPara, JSON.stringify(cellPath), innerControlIdx, JSON.stringify(props),
+      )
+    );
   }
 
   // ── 수식 속성 API ─────────────────────────────────────
