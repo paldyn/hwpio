@@ -45,6 +45,17 @@ impl From<HwpError> for JsValue {
     }
 }
 
+/// [Task #1161] 클립보드 API 의 cellPath JSON 인자 파싱.
+/// 빈 문자열 또는 `"[]"` 면 본문(빈 경로), 그 외에는
+/// `[{"controlIndex","cellIndex","cellParaIndex"}, ...]` 를 파싱한다.
+fn parse_cell_path_arg(cell_path_json: &str) -> Result<Vec<(usize, usize, usize)>, JsValue> {
+    if cell_path_json.is_empty() || cell_path_json == "[]" {
+        Ok(Vec::new())
+    } else {
+        DocumentCore::parse_cell_path(cell_path_json).map_err(JsValue::from)
+    }
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 const MAX_CANVAS_DIMENSION: f64 = 16_384.0;
 
@@ -5147,17 +5158,22 @@ impl HwpDocument {
     }
 
     /// 컨트롤 객체(표, 이미지, 도형)를 내부 클립보드에 복사한다.
+    ///
+    /// [Task #1161] `cell_path_json` 이 빈 문자열/`"[]"` 면 본문, 그 외에는 셀/글상자
+    /// 경로(`[{"controlIndex","cellIndex","cellParaIndex"}, ...]`)의 컨트롤을 복사한다.
     #[wasm_bindgen(js_name = copyControl)]
     pub fn copy_control(
         &mut self,
         section_idx: u32,
         para_idx: u32,
+        cell_path_json: &str,
         control_idx: u32,
     ) -> Result<String, JsValue> {
+        let cell_path = parse_cell_path_arg(cell_path_json)?;
         self.copy_control_native(
             section_idx as usize,
             para_idx as usize,
-            &[],
+            &cell_path,
             control_idx as usize,
         )
         .map_err(|e| e.into())
@@ -5281,12 +5297,14 @@ impl HwpDocument {
         &self,
         section_idx: u32,
         para_idx: u32,
+        cell_path_json: &str,
         control_idx: u32,
     ) -> Result<String, JsValue> {
+        let cell_path = parse_cell_path_arg(cell_path_json)?;
         self.export_control_html_native(
             section_idx as usize,
             para_idx as usize,
-            &[],
+            &cell_path,
             control_idx as usize,
         )
         .map_err(|e| e.into())
@@ -5298,12 +5316,14 @@ impl HwpDocument {
         &self,
         section_idx: u32,
         para_idx: u32,
+        cell_path_json: &str,
         control_idx: u32,
     ) -> Result<Vec<u8>, JsValue> {
+        let cell_path = parse_cell_path_arg(cell_path_json)?;
         self.get_control_image_data_native(
             section_idx as usize,
             para_idx as usize,
-            &[],
+            &cell_path,
             control_idx as usize,
         )
         .map_err(|e| e.into())
@@ -5315,12 +5335,14 @@ impl HwpDocument {
         &self,
         section_idx: u32,
         para_idx: u32,
+        cell_path_json: &str,
         control_idx: u32,
     ) -> Result<String, JsValue> {
+        let cell_path = parse_cell_path_arg(cell_path_json)?;
         self.get_control_image_mime_native(
             section_idx as usize,
             para_idx as usize,
-            &[],
+            &cell_path,
             control_idx as usize,
         )
         .map_err(|e| e.into())

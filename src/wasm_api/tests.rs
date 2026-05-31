@@ -1945,6 +1945,24 @@ fn test_clipboard_copy_control() {
 }
 
 #[test]
+fn test_clipboard_copy_control_cell_path_json_arg() {
+    // [Task #1161] copyControl 래퍼의 cell_path_json 인자: 빈 문자열/"[]" 는 본문.
+    // (에러 경로는 JsValue 를 구성하므로 native 테스트에서 호출 불가 → OK 경로만 검증.
+    //  cell 경로 자체는 tests/issue_1161_copy_picture_in_cell.rs 의 native 테스트로 가드.)
+    let mut doc = create_doc_with_table();
+
+    // 빈 문자열 = 본문 → 표 복사
+    let r_empty = doc.copy_control(0, 0, "", 0);
+    assert!(r_empty.is_ok(), "빈 cell_path_json 본문 복사 실패");
+    assert!(r_empty.unwrap().contains("[표]"));
+
+    // "[]" 도 본문
+    let r_arr = doc.copy_control(0, 0, "[]", 0);
+    assert!(r_arr.is_ok(), "[] cell_path_json 본문 복사 실패");
+    assert!(r_arr.unwrap().contains("[표]"));
+}
+
+#[test]
 fn test_clipboard_clear() {
     let mut doc = HwpDocument::create_empty();
     let mut document = Document::default();
