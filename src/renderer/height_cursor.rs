@@ -248,6 +248,8 @@ impl HeightCursor {
             self.dpi,
         );
         let prev_line_spacing_px = (seg.line_spacing.max(0) as f64) / 7200.0 * self.dpi;
+        let prev_content_bottom_y = y_offset - prev_line_spacing_px;
+        let follows_tall_inline_item = self.suppress_large_forward_jump && seg.line_height > 1500;
         let compact_endnote_question_title = self.suppress_large_forward_jump
             && paragraphs
                 .get(item_para)
@@ -259,12 +261,20 @@ impl HeightCursor {
             && (y_offset > self.col_area_y + self.col_area_height * 0.75
                 || compact_endnote_question_title)
         {
-            let preserved_gap_px = if y_offset > self.col_area_y + self.col_area_height * 0.75 {
-                prev_line_spacing_px
-            } else {
-                prev_line_spacing_px + 40.0
-            };
-            Some((y_offset + preserved_gap_px).min(end_y))
+            let preserved_gap_y =
+                if compact_endnote_question_title && follows_tall_inline_item && !is_page_path {
+                    // Display-style equation lines in compact endnotes already include a large
+                    // trailing line_spacing in some lazy-base flows. Hancom places the next
+                    // red question title shortly after the visible equation bottom instead
+                    // of after that full trailing gap (3-11월_실전_통합_2022 p11 문13/문14).
+                    // Page-base flows already carry the correct 7mm note gap and must keep it.
+                    prev_content_bottom_y + 10.0
+                } else if y_offset > self.col_area_y + self.col_area_height * 0.75 {
+                    y_offset + prev_line_spacing_px
+                } else {
+                    y_offset + prev_line_spacing_px + 40.0
+                };
+            Some(preserved_gap_y.min(end_y))
         } else {
             None
         };
@@ -290,8 +300,6 @@ impl HeightCursor {
                 .get(prev_pi)
                 .map(|p| p.text.trim_start().starts_with('문'))
                 .unwrap_or(false);
-        let follows_tall_inline_item = self.suppress_large_forward_jump && seg.line_height > 1500;
-        let prev_content_bottom_y = y_offset - prev_line_spacing_px;
         let compact_endnote_deep_backtrack = self.suppress_large_forward_jump
             && !is_page_path
             && !vpos_rewind
@@ -627,6 +635,28 @@ mod tests {
 
         let got = c.vpos_adjust(650.0, 1, &ps, &styles(0.0));
         let expected = 650.0 + 1984.0 / 75.0 + 40.0;
+
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "got={got}, expected={expected}"
+        );
+    }
+
+    /// 큰 디스플레이 수식 줄 뒤 새 문제 제목은 trailing 줄간격 전체 뒤가 아니라
+    /// 보이는 수식 바닥 직후로 붙는다.
+    #[test]
+    fn compact_endnote_question_title_after_tall_line_uses_content_bottom_gap() {
+        let mut c = compact_endnote_cursor(None);
+        c.prev_layout_para = Some(0);
+        let mut ps = vec![
+            para(0, 100000, 2690, 1984, 5000),
+            para(0, 109174, 900, 452, 5000),
+        ];
+        ps[0].text = "따라서".to_string();
+        ps[1].text = "문13)".to_string();
+
+        let got = c.vpos_adjust(500.0, 1, &ps, &styles(0.0));
+        let expected = 500.0 - 1984.0 / 75.0 + 10.0;
 
         assert!(
             (got - expected).abs() < 1e-6,
