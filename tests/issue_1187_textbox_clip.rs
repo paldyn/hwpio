@@ -23,6 +23,14 @@ fn render_bookreview_page1_svg() -> String {
     doc.render_page_svg_native(0).expect("render page 1 svg")
 }
 
+fn render_bookreview_page1_layer_json() -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/basic/BookReview.hwp");
+    let bytes = fs::read(&path).expect("read samples/basic/BookReview.hwp");
+    let doc = rhwp::wasm_api::HwpDocument::from_bytes(&bytes).expect("parse BookReview.hwp");
+    doc.get_page_layer_tree_native(0)
+        .expect("render page 1 layer tree")
+}
+
 fn attr_f64(tag: &str, name: &str) -> Option<f64> {
     let needle = format!("{name}=\"");
     let start = tag.find(&needle)? + needle.len();
@@ -113,5 +121,20 @@ fn bookreview_textbox_content_is_clipped_to_inner_area() {
     assert!(
         has_main_textbox_clip,
         "큰 점선 글상자 내부 영역 clip 이 필요함. actual textbox clips={rects:?}"
+    );
+}
+
+#[test]
+fn bookreview_textbox_content_has_paint_layer_clip() {
+    let json = render_bookreview_page1_layer_json();
+    let textbox_clip_count = json.matches("\"clipKind\":\"textBox\"").count();
+
+    assert!(
+        textbox_clip_count >= 3,
+        "BookReview.hwp 글상자 콘텐츠에는 paint layer textBox ClipRect 가 필요함. count={textbox_clip_count}"
+    );
+    assert!(
+        json.contains("\"groupKind\":{\"kind\":\"textBox\"}"),
+        "TextBox ClipRect child 는 TextBox groupKind 를 유지해야 함"
     );
 }
