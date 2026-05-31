@@ -115,6 +115,11 @@ fn external_path_extension(basename: &str) -> String {
         .to_string()
 }
 
+fn parse_external_image_key(key: &str) -> Option<u16> {
+    let bin_data_id = key.strip_prefix("binData:")?.parse::<u16>().ok()?;
+    (bin_data_id != 0).then_some(bin_data_id)
+}
+
 fn collect_external_image_references(document: &Document) -> Vec<ExternalImageReference> {
     let mut references = std::collections::BTreeMap::new();
 
@@ -189,6 +194,44 @@ impl HwpDocument {
 
     pub fn find_column_def_for_paragraph(paragraphs: &[Paragraph], para_idx: usize) -> ColumnDef {
         DocumentCore::find_column_def_for_paragraph(paragraphs, para_idx)
+    }
+
+    fn inject_external_image_by_bin_data_id(
+        &mut self,
+        bin_data_id: u16,
+        data: &[u8],
+        display_path: &str,
+        fallback_basename: Option<&str>,
+    ) -> u32 {
+        let Some(reference) = collect_external_image_references(self.document())
+            .into_iter()
+            .find(|reference| reference.bin_data_id == bin_data_id)
+        else {
+            return 0;
+        };
+
+        if reference.loaded {
+            return 0;
+        }
+
+        if !self.document_mut().inject_external_image_data(
+            bin_data_id,
+            data.to_vec(),
+            reference.extension.clone(),
+        ) {
+            return 0;
+        }
+
+        let basename = fallback_basename.unwrap_or(&reference.basename);
+        let resolved = if display_path.is_empty() {
+            format!("/samples/{basename}")
+        } else {
+            display_path.to_string()
+        };
+        self.document_mut()
+            .update_external_image_display_path(bin_data_id, &resolved);
+
+        1
     }
 }
 
@@ -2355,11 +2398,11 @@ impl HwpDocument {
     ) -> u32 {
         use crate::model::control::Control;
         use crate::model::shape::ShapeObject;
-        use std::collections::BTreeMap;
+        use std::collections::BTreeSet;
 
         let mut injected: u32 = 0;
-        // 영역 외부 image 영역 영역 영역 영역 basename 매칭 영역 영역 (id, ext) 수집
-        let mut targets: BTreeMap<u16, String> = BTreeMap::new();
+        // 영역 외부 image 영역 영역 영역 영역 basename 매칭 영역 영역 id 수집
+        let mut targets: BTreeSet<u16> = BTreeSet::new();
         for section in &self.document().sections {
             for para in &section.paragraphs {
                 for ctrl in &para.controls {
@@ -2383,45 +2426,44 @@ impl HwpDocument {
                         if self.document().external_image_loaded(id) {
                             continue;
                         }
-                        let ext = std::path::Path::new(basename)
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_string();
-                        targets.entry(id).or_insert(ext);
+                        targets.insert(id);
                     }
                 }
             }
         }
 
-        for (id, ext) in targets {
-            if !self
-                .document_mut()
-                .inject_external_image_data(id, data.to_vec(), ext)
-            {
-                continue;
-            }
-
-            injected += 1;
-
-            // [한컴 viewer 정합] 원본 path 영역 영역 access 부재 시 HWP file 영역 영역
-            // 같은 영역 영역 image 영역 영역 영역 dialog 영역 영역 resolved path 영역 영역 갱신.
-            // display_path 영역 영역 영역 영역 (Vite middleware 영역 영역 X-File-Path header
-            // 영역 영역 영역 OS 절대 경로) 영역 사용, 빈 문자열 영역 fallback 영역 영역
-            // `/samples/<basename>` 영역 사용.
-            let resolved = if display_path.is_empty() {
-                format!("/samples/{}", basename)
-            } else {
-                display_path.to_string()
-            };
-            self.document_mut()
-                .update_external_image_display_path(id, &resolved);
+        for id in targets {
+            injected +=
+                self.inject_external_image_by_bin_data_id(id, data, display_path, Some(basename));
         }
 
         if injected > 0 {
             self.invalidate_page_tree_cache();
         }
 
+        injected
+    }
+
+    /// [Task #1143] `getExternalImageReferences()` 의 key로 외부 이미지 bytes를 주입한다.
+    ///
+    /// 지원 key: `binData:<bin_data_id>`.
+    /// 잘못된 key, 존재하지 않는 key, 이미 loaded 상태인 reference는 0을 반환한다.
+    #[wasm_bindgen(js_name = injectExternalImageByKey)]
+    pub fn inject_external_image_by_key(
+        &mut self,
+        key: &str,
+        data: &[u8],
+        display_path: &str,
+    ) -> u32 {
+        let Some(bin_data_id) = parse_external_image_key(key) else {
+            return 0;
+        };
+
+        let injected =
+            self.inject_external_image_by_bin_data_id(bin_data_id, data, display_path, None);
+        if injected > 0 {
+            self.invalidate_page_tree_cache();
+        }
         injected
     }
 

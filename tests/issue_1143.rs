@@ -120,6 +120,127 @@ fn issue_1143_basename_injection_marks_reference_loaded() {
 }
 
 #[test]
+fn issue_1143_key_injection_uses_discovery_key_and_invalidates_cache() {
+    let mut doc = load_doc("samples/hwp3-sample10.hwp");
+
+    let oracle_ref = external_image_refs(&doc)
+        .into_iter()
+        .find(|reference| reference.bin_data_id == 1)
+        .expect("binDataId 1 ref");
+    assert_eq!(oracle_ref.key, "binData:1");
+
+    let before_payloads = page_layer_image_payload_count(&doc, 0);
+    assert_eq!(
+        before_payloads, 0,
+        "sample10 page 1 external images should have no payload before key injection"
+    );
+
+    let oracle = read_sample("samples/oracle.gif");
+    assert_eq!(
+        doc.inject_external_image_by_key(&oracle_ref.key, &oracle, "/tmp/oracle.gif"),
+        1
+    );
+    assert_eq!(
+        doc.inject_external_image_by_key(&oracle_ref.key, &oracle, "/tmp/oracle.gif"),
+        0,
+        "already-loaded key injection should be idempotent"
+    );
+
+    let refs = external_image_refs(&doc);
+    assert!(
+        refs.iter()
+            .any(|reference| reference.bin_data_id == 1 && reference.loaded),
+        "target reference should be marked loaded after key injection"
+    );
+    assert!(
+        refs.iter()
+            .any(|reference| reference.bin_data_id == 2 && !reference.loaded)
+            && refs
+                .iter()
+                .any(|reference| reference.bin_data_id == 3 && !reference.loaded),
+        "key injection should not load unrelated references"
+    );
+
+    let basenames = external_image_basenames(&doc);
+    assert!(
+        !basenames.iter().any(|name| name == "oracle.gif"),
+        "key-injected basename should be hidden from the legacy missing-image API"
+    );
+    assert!(
+        basenames.iter().any(|name| name == "rdb02.gif")
+            && basenames.iter().any(|name| name == "s1.jpg"),
+        "unrelated missing basenames should remain visible"
+    );
+
+    let after_payloads = page_layer_image_payload_count(&doc, 0);
+    assert!(
+        after_payloads > before_payloads,
+        "key injection should invalidate cached PageLayerTrees"
+    );
+}
+
+#[test]
+fn issue_1143_key_injection_targets_only_the_requested_reference() {
+    let mut doc = load_doc("samples/hwp3-sample10.hwp");
+
+    let rdb02_ref = external_image_refs(&doc)
+        .into_iter()
+        .find(|reference| reference.bin_data_id == 2)
+        .expect("binDataId 2 ref");
+    assert_eq!(rdb02_ref.key, "binData:2");
+    assert_eq!(rdb02_ref.basename, "rdb02.gif");
+
+    let rdb02 = read_sample("samples/rdb02.gif");
+    assert_eq!(
+        doc.inject_external_image_by_key(&rdb02_ref.key, &rdb02, "/tmp/rdb02.gif"),
+        1
+    );
+
+    let refs = external_image_refs(&doc);
+    assert!(
+        refs.iter()
+            .any(|reference| reference.bin_data_id == 2 && reference.loaded),
+        "requested key should be loaded"
+    );
+    assert!(
+        refs.iter()
+            .any(|reference| reference.bin_data_id == 1 && !reference.loaded)
+            && refs
+                .iter()
+                .any(|reference| reference.bin_data_id == 3 && !reference.loaded),
+        "key injection must not fall back to basename matching"
+    );
+}
+
+#[test]
+fn issue_1143_key_injection_rejects_invalid_or_unknown_keys() {
+    let mut doc = load_doc("samples/hwp3-sample10.hwp");
+    let oracle = read_sample("samples/oracle.gif");
+
+    for key in [
+        "",
+        "oracle.gif",
+        "binData:",
+        "binData:0",
+        "binData:not-a-number",
+        "binData:999",
+    ] {
+        assert_eq!(
+            doc.inject_external_image_by_key(key, &oracle, ""),
+            0,
+            "invalid or unknown key should not inject: {key}"
+        );
+    }
+
+    assert!(
+        external_image_refs(&doc)
+            .iter()
+            .all(|reference| !reference.loaded),
+        "invalid key attempts must not mutate external image loaded state"
+    );
+}
+
+#[test]
 fn issue_1143_basename_injection_respects_index_first_loaded_state() {
     let mut doc = load_doc("samples/hwp3-sample10.hwp");
 
