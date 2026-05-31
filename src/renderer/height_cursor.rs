@@ -288,7 +288,11 @@ impl HeightCursor {
                     // of after that full trailing gap (3-11월_실전_통합_2022 p11 문13/문14).
                     // Page-base flows already carry the correct 7mm note gap and must keep it.
                     prev_content_bottom_y + 10.0
-                } else if y_offset > self.col_area_y + self.col_area_height * 0.75 {
+                } else if y_offset > self.col_area_y + self.col_area_height * 0.75
+                    || prev_para.text.trim().is_empty()
+                {
+                    // Empty paragraphs before the next compact endnote title already carry the
+                    // visual spacer. Adding the mid-column buffer again pushes later notes down.
                     y_offset + prev_line_spacing_px
                 } else {
                     y_offset + prev_line_spacing_px + 40.0
@@ -650,10 +654,31 @@ mod tests {
             para(0, 100000, 900, 1984, 5000),
             para(0, 108025, 900, 452, 5000),
         ];
+        ps[0].text = "따라서".to_string();
         ps[1].text = "문29)".to_string();
 
         let got = c.vpos_adjust(650.0, 1, &ps, &styles(0.0));
         let expected = 650.0 + 1984.0 / 75.0 + 40.0;
+
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "got={got}, expected={expected}"
+        );
+    }
+
+    /// 빈 문단이 새 미주 제목 앞의 시각 간격을 이미 만들었다면 추가 40px 완충은 넣지 않는다.
+    #[test]
+    fn compact_endnote_question_title_after_empty_spacer_keeps_stored_gap_only() {
+        let mut c = compact_endnote_cursor(None);
+        c.prev_layout_para = Some(0);
+        let mut ps = vec![
+            para(0, 100000, 900, 1984, 5000),
+            para(0, 108025, 900, 452, 5000),
+        ];
+        ps[1].text = "문19)".to_string();
+
+        let got = c.vpos_adjust(650.0, 1, &ps, &styles(0.0));
+        let expected = 650.0 + 1984.0 / 75.0;
 
         assert!(
             (got - expected).abs() < 1e-6,

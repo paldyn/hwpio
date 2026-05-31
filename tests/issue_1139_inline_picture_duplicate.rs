@@ -1025,6 +1025,28 @@ fn issue_1189_2022_oct_page17_endnote_drag_selection_covers_equation_tail_lines(
 }
 
 #[test]
+fn issue_1189_2022_oct_page11_endnote_question_gaps_match_pdf() {
+    let bytes = std::fs::read("samples/3-10월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(10).expect("page 11 render tree");
+
+    let question18_y = min_para_text_y(&tree.root, 569).expect("문18 title");
+    let question19_y = min_para_text_y(&tree.root, 574).expect("문19 title");
+    let question20_y = min_para_text_y(&tree.root, 582).expect("문20 title");
+    let gap18_to_19 = question19_y - question18_y;
+    let gap19_to_20 = question20_y - question19_y;
+
+    assert!(
+        (205.0..235.0).contains(&gap18_to_19),
+        "11쪽 문18→문19 미주 간격이 PDF보다 넓어지면 안 됨: q18={question18_y}, q19={question19_y}, gap={gap18_to_19}"
+    );
+    assert!(
+        (180.0..210.0).contains(&gap19_to_20),
+        "11쪽 문19→문20 미주 간격도 한컴/PDF 흐름을 유지해야 함: q19={question19_y}, q20={question20_y}, gap={gap19_to_20}"
+    );
+}
+
+#[test]
 fn issue_1189_2022_nov_pages10_12_rewind_tail_and_equation_scale_match_pdf() {
     let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
     let doc = HwpDocument::from_bytes(&bytes).expect("parse");
