@@ -16,7 +16,6 @@ use web_sys::HtmlCanvasElement;
 
 use crate::document_core::{DocumentCore, DEFAULT_FALLBACK_FONT};
 use crate::error::HwpError;
-use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::document::{Document, Section};
 use crate::model::page::ColumnDef;
@@ -116,20 +115,6 @@ fn external_path_extension(basename: &str) -> String {
         .to_string()
 }
 
-fn external_image_loaded(bin_data_content: &[BinDataContent], bin_data_id: u16) -> bool {
-    if bin_data_id == 0 {
-        return false;
-    }
-
-    if let Some(content) = bin_data_content.get((bin_data_id - 1) as usize) {
-        return !content.data.is_empty();
-    }
-
-    bin_data_content
-        .iter()
-        .any(|content| content.id == bin_data_id && !content.data.is_empty())
-}
-
 fn collect_external_image_references(document: &Document) -> Vec<ExternalImageReference> {
     let mut references = std::collections::BTreeMap::new();
 
@@ -158,7 +143,7 @@ fn collect_external_image_references(document: &Document) -> Vec<ExternalImageRe
                         extension: external_path_extension(&basename),
                         basename,
                         original_path: original_path.clone(),
-                        loaded: external_image_loaded(&document.bin_data_content, bin_data_id),
+                        loaded: document.external_image_loaded(bin_data_id),
                     }
                 });
             }
@@ -2370,10 +2355,11 @@ impl HwpDocument {
     ) -> u32 {
         use crate::model::control::Control;
         use crate::model::shape::ShapeObject;
+        use std::collections::BTreeMap;
 
         let mut injected: u32 = 0;
         // 영역 외부 image 영역 영역 영역 영역 basename 매칭 영역 영역 (id, ext) 수집
-        let mut targets: Vec<(u16, String)> = Vec::new();
+        let mut targets: BTreeMap<u16, String> = BTreeMap::new();
         for section in &self.document().sections {
             for para in &section.paragraphs {
                 for ctrl in &para.controls {
@@ -2394,12 +2380,7 @@ impl HwpDocument {
                             continue;
                         }
                         let id = pic.image_attr.bin_data_id;
-                        let already_loaded = self
-                            .document()
-                            .bin_data_content
-                            .iter()
-                            .any(|c| c.id == id && !c.data.is_empty());
-                        if already_loaded {
+                        if self.document().external_image_loaded(id) {
                             continue;
                         }
                         let ext = std::path::Path::new(basename)
@@ -2407,27 +2388,20 @@ impl HwpDocument {
                             .and_then(|e| e.to_str())
                             .unwrap_or("")
                             .to_string();
-                        targets.push((id, ext));
+                        targets.entry(id).or_insert(ext);
                     }
                 }
             }
         }
 
         for (id, ext) in targets {
-            let idx = (id as usize).saturating_sub(1);
-            if idx < self.document().bin_data_content.len() {
-                self.document_mut().bin_data_content[idx].id = id;
-                self.document_mut().bin_data_content[idx].data = data.to_vec();
-                self.document_mut().bin_data_content[idx].extension = ext;
-            } else {
-                self.document_mut()
-                    .bin_data_content
-                    .push(crate::model::bin_data::BinDataContent {
-                        id,
-                        data: data.to_vec(),
-                        extension: ext,
-                    });
+            if !self
+                .document_mut()
+                .inject_external_image_data(id, data.to_vec(), ext)
+            {
+                continue;
             }
+
             injected += 1;
 
             // [한컴 viewer 정합] 원본 path 영역 영역 access 부재 시 HWP file 영역 영역
@@ -2440,26 +2414,14 @@ impl HwpDocument {
             } else {
                 display_path.to_string()
             };
-            for section in &mut self.document_mut().sections {
-                for para in &mut section.paragraphs {
-                    for ctrl in &mut para.controls {
-                        let pic = match ctrl {
-                            crate::model::control::Control::Picture(p) => p,
-                            crate::model::control::Control::Shape(s) => match s.as_mut() {
-                                crate::model::shape::ShapeObject::Picture(p) => p,
-                                _ => continue,
-                            },
-                            _ => continue,
-                        };
-                        if pic.image_attr.bin_data_id == id
-                            && pic.image_attr.external_path.is_some()
-                        {
-                            pic.image_attr.external_path = Some(resolved.clone());
-                        }
-                    }
-                }
-            }
+            self.document_mut()
+                .update_external_image_display_path(id, &resolved);
         }
+
+        if injected > 0 {
+            self.invalidate_page_tree_cache();
+        }
+
         injected
     }
 
