@@ -123,3 +123,24 @@
 - 세로쓰기와 overflow 수신 분기는 early return 이 있어 `textbox_node` push 누락 위험이 있다. 각 분기별로 push 경로를 명시적으로 확인한다.
 - nested shape/table 이 shape node 아래에 남으면 clip 이 적용되지 않는다. 글상자 내부에서 생성되는 모든 자식 parent 를 `textbox_node` 로 통일한다.
 - SVG 와 paint layer 의 clip 의미가 달라지면 멀티 렌더러 회귀가 난다. 같은 bbox(`inner_area`)를 사용한다.
+
+## Stage 6 — PR 시각 피드백 반영: 글상자 vpos 중복 보정
+
+**목표**: #1190 1차 수정 후 정상 목차 줄까지 잘리는 문제를 보정한다.
+
+- 문제:
+  - 큰 글상자 하단의 `5장`, `6장`, `에필로그` 줄이 한컴 기준에서는 보여야 하지만, PR 1차 수정본에서는 clip 밖으로 밀려 보이지 않았다.
+  - `layout_textbox_content` 가 `line_seg.vertical_pos` 로 explicit y 를 이미 계산한 뒤 `layout_composed_paragraph` 의 column-top fallback 이 글상자 첫 문단에도 vpos 를 다시 더했다.
+- 수정:
+  - `src/renderer/layout/paragraph_layout.rs`
+    - column-top `spacing_before`/`line_seg.vertical_pos` fallback 을 `cell_ctx.is_none()` 인 본문 흐름에만 적용한다.
+  - `tests/issue_1187_textbox_clip.rs`
+    - `5장`, `6장`, `에필로그` 목차 줄이 큰 글상자 clip bottom 안에 있는지 검사한다.
+- 검증:
+  - `cargo fmt --all -- --check`
+  - `cargo build --bin rhwp`
+  - `cargo test --test issue_1187_textbox_clip`
+  - 관련 글상자/paint/svg layer 테스트
+  - `wasm-pack build --target web --dev`
+  - `npm run build`
+  - rhwp-studio Browser 시각 확인

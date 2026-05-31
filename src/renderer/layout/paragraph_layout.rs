@@ -1022,7 +1022,7 @@ impl LayoutEngine {
         if start_line == 0 && spacing_before > 0.0 {
             if !is_column_top {
                 y += spacing_before;
-            } else if para_index == 0 {
+            } else if para_index == 0 && cell_ctx.is_none() {
                 let vpos0_px = para
                     .and_then(|p| p.line_segs.first())
                     .map(|ls| hwpunit_to_px(ls.vertical_pos, self.dpi))
@@ -1035,7 +1035,12 @@ impl LayoutEngine {
         // 인라인 wrap 조합) — line_seg.vpos 를 직접 y 에 가산하여 텍스트가 wrap
         // shape 아래로 위치하도록 함. wrap 메커니즘이 별도로 처리하지 못하는
         // case 의 fallback. start_line==0 + column-top + para_index==0 으로 한정.
-        if start_line == 0 && spacing_before == 0.0 && is_column_top && para_index == 0 {
+        if start_line == 0
+            && spacing_before == 0.0
+            && is_column_top
+            && para_index == 0
+            && cell_ctx.is_none()
+        {
             let vpos0_px = para
                 .and_then(|p| p.line_segs.first())
                 .map(|ls| hwpunit_to_px(ls.vertical_pos, self.dpi))
