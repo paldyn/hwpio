@@ -242,6 +242,12 @@ test('GlyphOutline payload resource keys keep payload families and palettes disj
         nodes: [{
           nodeId: 0,
           kind: 'solidPath',
+          solidPath: {
+            commands: [{ type: 'moveTo', x: 0, y: 0 }],
+            fill: { rgba: [0, 0, 0, 1] },
+            fillRule: 'nonzero',
+          },
+          sourceRangeUtf8: { start: 0, end: 1 },
           glyphRange: { start: 0, end: 1 },
           sourceFontRef: { faceKey: 'fixture-face', glyphId: 42, colorFormat: 'colrV1' },
         }],
@@ -293,6 +299,37 @@ test('GlyphOutline payload resource keys keep payload families and palettes disj
   assert.notEqual(colorKey, bitmapKey);
   assert.notEqual(colorKey, svgKey);
   assert.notEqual(bitmapKey, svgKey);
+});
+
+test('GlyphOutline payload resource keys are suppressed for incomplete payloads', () => {
+  assert.equal(glyphOutlinePayloadResourceKey({
+    type: 'glyphOutline',
+    bbox: { x: 0, y: 0, width: 10, height: 10 },
+    payloadKind: 'bitmapGlyph',
+    bitmapGlyph: {
+      imageRef: 7,
+      sourceRangeUtf8: { start: 0, end: 1 },
+      glyphRange: { start: 0, end: 1 },
+      scalingPolicy: 'backendDefault',
+      filtering: 'linear',
+    },
+  }), null);
+  assert.equal(glyphOutlinePayloadResourceKey({
+    type: 'glyphOutline',
+    bbox: { x: 0, y: 0, width: 10, height: 10 },
+    payloadKind: 'svgGlyph',
+    svgGlyph: {
+      svgRef: 7,
+      sourceRangeUtf8: { start: 0, end: 1 },
+      glyphRange: { start: 0, end: 1 },
+      viewBox: { x: 0, y: 0, width: 10, height: 10 },
+      staticSanitized: false,
+      scriptAllowed: false,
+      animationAllowed: false,
+      externalResourcesAllowed: false,
+      interactivityAllowed: false,
+    },
+  }), null);
 });
 
 test('GlyphOutline COLRv1 gate reports unsupported graph node kind exactly', () => {

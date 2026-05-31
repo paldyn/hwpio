@@ -206,7 +206,7 @@ fn collect_text_variant_features(root: &LayerNode) -> TextVariantFeatureFlags {
                             features.has_glyph_outline_svg |=
                                 matches!(outline.payload_kind, GlyphOutlinePayloadKind::SvgGlyph);
                             features.has_glyph_outline_payload_resource_keys |=
-                                outline.payload_resource_key().is_some();
+                                outline.has_payload_resource_key();
                         }
                         _ => {}
                     }
@@ -3219,6 +3219,41 @@ mod tests {
             shade_color: 0x00FF_FFFF,
             ..Default::default()
         });
+        let incomplete_bitmap_outline = LayerGlyphOutlinePaint {
+            source: source.clone(),
+            variant: PaintVariantMeta {
+                equivalence_group: "text-invalid".to_string(),
+                variant_id: "bitmapGlyphInvalid".to_string(),
+                variant_kind: TextVariantKind::GlyphOutline,
+                part_index: 0,
+                part_count: 1,
+                is_default_fallback: false,
+                requires: vec!["text.glyphOutline.bitmapGlyph".to_string()],
+                quality: Some(TextVariantQuality::Exact),
+                anchor_op_id: Some("text-invalid".to_string()),
+                local_paint_order: Some(0),
+            },
+            payload_kind: GlyphOutlinePayloadKind::BitmapGlyph,
+            color_layers: None,
+            bitmap_glyph: Some(BitmapGlyphPayload {
+                image_ref: ImageResourceId(7),
+                source_range_utf8: TextSourceRange::new(0, 1),
+                glyph_range: GlyphRange::new(0, 1),
+                placement: BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+                alpha_premultiplied: true,
+                scaling_policy: BitmapGlyphScalingPolicy::BackendDefault,
+                filtering: BitmapGlyphFiltering::Linear,
+                transform_to_run: None,
+            }),
+            svg_glyph: None,
+            paint_style: text_style.clone(),
+            placement,
+            paths: Vec::new(),
+            stroke: None,
+            diagnostics: diagnostics.clone(),
+        };
+        assert!(!incomplete_bitmap_outline.has_payload_resource_key());
+        assert!(incomplete_bitmap_outline.payload_resource_key().is_none());
         let bitmap_outline = PaintOp::GlyphOutline {
             bbox: BoundingBox::new(0.0, 0.0, 20.0, 20.0),
             outline: Box::new(LayerGlyphOutlinePaint {

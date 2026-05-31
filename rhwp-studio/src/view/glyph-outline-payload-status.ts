@@ -69,13 +69,22 @@ export function glyphOutlinePayloadStatus(
 
 export function glyphOutlinePayloadResourceKey(op: LayerGlyphOutlineOp): string | null {
   const payloadKind = op.payloadKind ?? 'monochromeFill';
+  if (!hasExclusivePayloadFamily(op, payloadKind)) {
+    return null;
+  }
   switch (payloadKind) {
     case 'colorLayers':
-      return op.colorLayers ? colorLayersResourceKey(op.colorLayers) : null;
+      return hasColorLayersResourceKeyContract(op) && op.colorLayers
+        ? colorLayersResourceKey(op.colorLayers)
+        : null;
     case 'bitmapGlyph':
-      return op.bitmapGlyph ? bitmapGlyphResourceKey(op.bitmapGlyph) : null;
+      return hasBitmapGlyphContract(op) && op.bitmapGlyph
+        ? bitmapGlyphResourceKey(op.bitmapGlyph)
+        : null;
     case 'svgGlyph':
-      return op.svgGlyph ? svgGlyphResourceKey(op.svgGlyph) : null;
+      return hasSvgGlyphContract(op) && op.svgGlyph
+        ? svgGlyphResourceKey(op.svgGlyph)
+        : null;
     default:
       return null;
   }
@@ -230,6 +239,36 @@ function hasSupportedColrv1GraphContract(op: LayerGlyphOutlineOp): boolean {
   return false;
 }
 
+function hasColorLayersResourceKeyContract(op: LayerGlyphOutlineOp): boolean {
+  const colorLayers = op.colorLayers;
+  if (!colorLayers) {
+    return false;
+  }
+  if (colorLayers.colorFormat === 'colrV0') {
+    return hasColrv0ResolvedLayerContract(colorLayers);
+  }
+  if (colorLayers.colorFormat === 'colrV1') {
+    return hasSupportedColrv1GraphContract(op);
+  }
+  return false;
+}
+
+function hasColrv0ResolvedLayerContract(colorLayers: NonNullable<LayerGlyphOutlineOp['colorLayers']>): boolean {
+  const layers = colorLayers.layers ?? [];
+  return colorLayers.colorFormat === 'colrV0'
+    && colorLayers.paintGraph === undefined
+    && layers.length > 0
+    && layers.every((layer) => (
+      isValidPathCommands(layer.commands)
+      && isValidResolvedColor(layer.fill)
+      && isSupportedFillRule(layer.fillRule)
+      && isValidTextRange(layer.sourceRangeUtf8)
+      && isNonEmptyTextRange(layer.glyphRange)
+      && isOptionalFiniteAffine(layer.transformToRun)
+      && (layer.opacity === undefined || Number.isFinite(layer.opacity))
+    ));
+}
+
 function isLeafMetadataValid(node: LayerColorPaintGraphNode): boolean {
   return isValidTextRange(node.sourceRangeUtf8)
     && isNonEmptyTextRange(node.glyphRange)
@@ -255,6 +294,10 @@ function isFiniteAffine(transform: { a?: number; b?: number; c?: number; d?: num
     && Number.isFinite(transform.d)
     && Number.isFinite(transform.e)
     && Number.isFinite(transform.f);
+}
+
+function isOptionalFiniteAffine(transform: { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number } | undefined): boolean {
+  return transform === undefined || isFiniteAffine(transform);
 }
 
 function isValidPathCommands(commands: unknown[] | undefined): boolean {

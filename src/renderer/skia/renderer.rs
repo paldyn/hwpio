@@ -34,6 +34,7 @@ pub enum NativeGlyphRunReplayProofReason {
     ClusterMismatch,
     UnsupportedQuality,
     PositionAdjustedResidualTooLarge,
+    ReplayEligibilityNotPortable,
     UnsupportedPaintEffect,
     GlyphIdOutOfRange,
     PlacementNotFinite,
@@ -60,6 +61,7 @@ impl NativeGlyphRunReplayProofReason {
             Self::ClusterMismatch => "clusterMismatch",
             Self::UnsupportedQuality => "unsupportedQuality",
             Self::PositionAdjustedResidualTooLarge => "positionAdjustedResidualTooLarge",
+            Self::ReplayEligibilityNotPortable => "replayEligibilityNotPortable",
             Self::UnsupportedPaintEffect => "unsupportedPaintEffect",
             Self::GlyphIdOutOfRange => "glyphIdOutOfRange",
             Self::PlacementNotFinite => "placementNotFinite",
@@ -144,7 +146,7 @@ pub fn native_skia_glyph_run_replay_proof(
         }
     }
     if run.diagnostics.replay_eligibility != GlyphRunReplayEligibility::Portable {
-        contract_reasons.insert(NativeGlyphRunReplayProofReason::FontBlobNotPortable);
+        contract_reasons.insert(NativeGlyphRunReplayProofReason::ReplayEligibilityNotPortable);
     }
     if !run.paint_style.is_fill_only_glyph_replay() {
         contract_reasons.insert(NativeGlyphRunReplayProofReason::UnsupportedPaintEffect);
@@ -217,10 +219,11 @@ pub fn native_skia_glyph_run_replay_proof(
             .insert(NativeGlyphRunReplayProofReason::TypefaceConstructionNotImplemented);
     }
     let typeface_constructible = contract_replayable && construction_reasons.is_empty();
-    let reasons = contract_reasons
+    let mut reasons = contract_reasons
         .into_iter()
         .chain(construction_reasons)
-        .collect();
+        .collect::<Vec<_>>();
+    reasons.sort();
 
     NativeGlyphRunReplayProof {
         contract_replayable,
@@ -1569,6 +1572,22 @@ mod tests {
         assert!(proof
             .reasons
             .contains(&NativeGlyphRunReplayProofReason::FontBlobBytesMissing));
+    }
+
+    #[test]
+    fn native_skia_glyph_run_proof_separates_replay_eligibility_from_blob_portability() {
+        let resources = portable_font_resources();
+        let mut run = portable_glyph_run(GlyphRunOrientation::Horizontal);
+        run.diagnostics.replay_eligibility = GlyphRunReplayEligibility::ConditionalExternalFont;
+        let proof = native_skia_glyph_run_replay_proof(&run, &resources);
+
+        assert!(!proof.contract_replayable);
+        assert!(proof
+            .reasons
+            .contains(&NativeGlyphRunReplayProofReason::ReplayEligibilityNotPortable));
+        assert!(!proof
+            .reasons
+            .contains(&NativeGlyphRunReplayProofReason::FontBlobNotPortable));
     }
 
     #[test]

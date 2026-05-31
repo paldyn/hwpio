@@ -23,6 +23,7 @@ pub struct ResourceArena {
     font_blob_hashes: Vec<u64>,
     font_blob_fingerprints: Vec<[u8; 16]>,
     font_blob_lookup: HashMap<u64, Vec<FontBlobResourceId>>,
+    font_blob_ref_lookup: HashMap<String, FontBlobResourceId>,
     font_resources: FontResourceTable,
 }
 
@@ -38,11 +39,16 @@ impl ResourceArena {
         }
 
         let id = FontBlobResourceId(self.font_blob_bytes.len());
+        let digest = blake3::hash(bytes);
+        let mut fingerprint = [0; 16];
+        fingerprint.copy_from_slice(&digest.as_bytes()[..16]);
+        let digest_hex = digest.to_hex();
+        let resource_key = font_blob_resource_key(bytes.len(), digest_hex.as_str());
         self.font_blob_bytes.push(bytes.to_vec());
         self.font_blob_hashes.push(hash);
-        self.font_blob_fingerprints
-            .push(resource_fingerprint(bytes));
+        self.font_blob_fingerprints.push(fingerprint);
         self.font_blob_lookup.entry(hash).or_default().push(id);
+        self.font_blob_ref_lookup.insert(resource_key, id);
         id
     }
 
@@ -73,13 +79,9 @@ impl ResourceArena {
         if data_ref.kind != BinaryResourceKind::FontBlob {
             return None;
         }
-        self.font_blob_bytes
-            .iter()
-            .find(|bytes| {
-                let digest = resource_digest_hex(bytes.as_slice());
-                font_blob_resource_key(bytes.len(), &digest) == data_ref.id
-            })
-            .map(Vec::as_slice)
+        self.font_blob_ref_lookup
+            .get(&data_ref.id)
+            .and_then(|id| self.font_blob_bytes(*id))
     }
 
     pub fn font_resources(&self) -> &FontResourceTable {
@@ -178,6 +180,13 @@ mod tests {
             arena.font_blob_bytes_for_ref(&BinaryResourceRef {
                 kind: BinaryResourceKind::ExternalFont,
                 id: font_blob_resource_key(4, &digest),
+            }),
+            None
+        );
+        assert_eq!(
+            arena.font_blob_bytes_for_ref(&BinaryResourceRef {
+                kind: BinaryResourceKind::FontBlob,
+                id: font_blob_resource_key(5, &digest),
             }),
             None
         );

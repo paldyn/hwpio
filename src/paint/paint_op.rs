@@ -245,6 +245,9 @@ impl LayerGlyphOutlinePaint {
     /// decision key that keeps color/bitmap/SVG payload families from sharing a
     /// cache slot merely because a producer reused the same numeric resource id.
     pub fn payload_resource_key(&self) -> Option<String> {
+        if !self.has_payload_resource_key() {
+            return None;
+        }
         match self.payload_kind {
             GlyphOutlinePayloadKind::MonochromeFill
             | GlyphOutlinePayloadKind::MonochromeFillStroke => None,
@@ -259,6 +262,27 @@ impl LayerGlyphOutlinePaint {
             GlyphOutlinePayloadKind::SvgGlyph => {
                 self.svg_glyph.as_ref().map(svg_glyph_payload_resource_key)
             }
+        }
+    }
+
+    pub fn has_payload_resource_key(&self) -> bool {
+        match self.payload_kind {
+            GlyphOutlinePayloadKind::MonochromeFill
+            | GlyphOutlinePayloadKind::MonochromeFillStroke => false,
+            GlyphOutlinePayloadKind::ColorLayers => {
+                self.color_layers.as_ref().is_some_and(|payload| {
+                    payload.has_colrv0_resolved_layer_contract()
+                        || payload.has_colrv1_supported_graph_contract()
+                })
+            }
+            GlyphOutlinePayloadKind::BitmapGlyph => self
+                .bitmap_glyph
+                .as_ref()
+                .is_some_and(BitmapGlyphPayload::has_strict_visual_contract),
+            GlyphOutlinePayloadKind::SvgGlyph => self
+                .svg_glyph
+                .as_ref()
+                .is_some_and(SvgGlyphPayload::has_static_sanitized_contract),
         }
     }
 }
