@@ -632,7 +632,7 @@ fn test_split_table_cell() {
 }
 
 #[test]
-fn test_merge_then_control_layout_has_colSpan() {
+fn test_merge_then_control_layout_has_col_span() {
     let mut doc = create_doc_with_table();
     // 병합 전: colSpan=1
     let layout_before = doc.get_page_control_layout_native(0).unwrap();
@@ -11301,7 +11301,7 @@ fn test_text_insert_detailed_diff() {
     let mut doc = HwpDocument::from_bytes(&orig_data).unwrap();
 
     // 텍스트 삽입
-    doc.insert_text_native(0, 0, 0, "가나다라마바사아");
+    doc.insert_text_native(0, 0, 0, "가나다라마바사아").unwrap();
     let saved = doc.export_hwp_native().unwrap();
 
     // 레코드 파싱
@@ -15780,7 +15780,7 @@ fn test_textbox_render_tree_debug() {
 
     let data = std::fs::read(path).unwrap();
     let mut doc = HwpDocument::from_bytes(&data).unwrap();
-    doc.convert_to_editable_native();
+    doc.convert_to_editable_native().unwrap();
 
     // 문서 구조 확인: Shape 컨트롤 찾기
     let mut shape_found = false;
