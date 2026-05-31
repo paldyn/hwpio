@@ -1,8 +1,9 @@
-# rhwp-desktop — HanPage 데스크톱 앱
+# HanPage-Desktop — HanPage 데스크톱 앱
 
 [`rhwp-studio`](../rhwp-studio) 웹 에디터 + WASM 엔진을 [Tauri v2](https://v2.tauri.app/)
-OS 웹뷰로 감싼 **HanPage** 데스크톱 앱이다. (제품 표시명: **HanPage**, 엔진 패밀리
-디렉터리 명명규약상 디렉터리/패키지명은 `rhwp-desktop`.)
+OS 웹뷰로 감싼 **HanPage** 데스크톱 앱이다. (제품 표시명: **HanPage**, 디렉터리
+`HanPage-Desktop`, npm 패키지명 `hanpage-desktop`. 단 Rust 크레이트 내부 식별자는
+비노출이라 `rhwp-desktop`/`rhwp_desktop_lib` 유지.)
 
 ## 설계 원칙 (1단계)
 
@@ -11,7 +12,7 @@ OS 웹뷰로 감싼 **HanPage** 데스크톱 앱이다. (제품 표시명: **Han
 
 - **GitHub Pages 무영향**: 웹 기본 빌드(`rhwp-studio` `build`)는 변경하지 않는다.
   데스크톱은 `VITE_TARGET=desktop` 분기로 PWA/Service Worker를 끄고 상대 base(`./`)로
-  빌드한다. 데스크톱 전용 변경은 `deploy-pages.yml` `paths-ignore`(`rhwp-desktop/**`)로
+  빌드한다. 데스크톱 전용 변경은 `deploy-pages.yml` `paths-ignore`(`HanPage-Desktop/**`)로
   배포를 트리거하지 않는다.
 - **빌드 격리**: `src-tauri`는 루트 워크스페이스에 포함되지 않는 독립 크레이트다.
   루트 `cargo build`/WASM 빌드에 영향을 주지 않는다.
@@ -26,7 +27,7 @@ OS 웹뷰로 감싼 **HanPage** 데스크톱 앱이다. (제품 표시명: **Han
 ## 개발 / 빌드
 
 ```bash
-cd rhwp-desktop
+cd HanPage-Desktop
 npm install                 # @tauri-apps/cli 설치 (최초 1회)
 
 npm run dev                 # 개발: rhwp-studio dev 서버(7700) + Tauri 창

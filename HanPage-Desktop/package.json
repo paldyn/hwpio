@@ -1,5 +1,5 @@
 {
-  "name": "rhwp-desktop",
+  "name": "hanpage-desktop",
   "private": true,
   "version": "0.7.13",
   "description": "HanPage desktop app — Tauri shell around rhwp-studio (HWP/HWPX viewer/editor)",

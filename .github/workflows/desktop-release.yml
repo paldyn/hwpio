@@ -5,7 +5,7 @@ name: Desktop Release
 # macOS 로컬에서는 Windows 인스톨러를 만들 수 없으므로(Tauri 의 Windows 번들러는
 # Windows 호스트 필요), Windows .exe(NSIS)는 windows-latest 러너가 산출한다.
 #
-# 트리거: `desktop-v*` 태그 push (→ GitHub Release 생성/첨부) + workflow_dispatch
+# 트리거: `hanpage-desktop-v*` 태그 push (→ GitHub Release 생성/첨부) + workflow_dispatch
 #   (→ 릴리스 없이 빌드만, 산출물은 워크플로 아티팩트로 업로드 = 테스트용).
 #
 # CLI 바이너리 릴리스(`release-binary.yml`, `v*` 태그)와 태그 패턴을 분리해 충돌을
@@ -16,7 +16,7 @@ name: Desktop Release
 on:
   push:
     tags:
-      - 'desktop-v*'
+      - 'hanpage-desktop-v*'
   workflow_dispatch:
 
 permissions:
@@ -52,7 +52,7 @@ jobs:
         with:
           workspaces: |
             .
-            rhwp-desktop/src-tauri
+            HanPage-Desktop/src-tauri
 
       - name: Install wasm-pack
         uses: jetli/wasm-pack-action@v0.4.0
@@ -78,8 +78,20 @@ jobs:
         run: npm install
 
       - name: Install desktop deps
-        working-directory: rhwp-desktop
+        working-directory: HanPage-Desktop
         run: npm install
+
+      # --- 릴리스 표시명: 태그 hanpage-desktop-v{ver} → "HanPage Desktop-v{ver}" ---
+      # GitHub Actions 식 표현식엔 문자열 치환 함수가 없어 bash 로 접두어를 제거한다.
+      # matrix 양 러너(macOS·Windows)가 동일 문자열을 산출 → tauri-action 릴리스 생성/첨부 멱등.
+      # tagName 은 git 태그(hanpage-desktop-v{ver}) 그대로, 표시명만 "HanPage Desktop-v{ver}".
+      - name: Compute release name
+        id: relname
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          ver="${GITHUB_REF_NAME#hanpage-desktop-v}"
+          echo "name=HanPage Desktop-v${ver}" >> "$GITHUB_OUTPUT"
 
       # --- Tauri 번들 (beforeBuildCommand = build:frontend = copy-wasm + studio build:desktop) ---
       - name: Build & bundle (tauri-action)
@@ -87,10 +99,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: rhwp-desktop
+          projectPath: HanPage-Desktop
           # 태그 push 시에만 릴리스 생성. dispatch 는 빈 tagName → 빌드만 수행.
           tagName: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && format('HanPage {0}', github.ref_name) || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/') && steps.relname.outputs.name || '' }}
           releaseDraft: false
           prerelease: false
           args: ${{ matrix.args }}
@@ -102,7 +114,7 @@ jobs:
         with:
           name: hanpage-${{ matrix.runner }}
           path: |
-            rhwp-desktop/src-tauri/target/release/bundle/dmg/*.dmg
-            rhwp-desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            HanPage-Desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            HanPage-Desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: ignore
           retention-days: 7
