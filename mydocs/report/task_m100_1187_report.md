@@ -13,6 +13,8 @@
 
 PR 1차 수정 후 추가 시각 검증에서 정상으로 보여야 하는 큰 글상자 하단 `5장`, `6장`, `에필로그` 목차 줄이 보이지 않는 문제가 확인됐다. 이는 글상자 문단 y 좌표를 `layout_textbox_content` 가 이미 `line_seg.vertical_pos` 로 잡은 뒤, `layout_composed_paragraph` 의 본문 column-top fallback 이 글상자 첫 문단에도 다시 vpos 를 더해 전체 목차를 아래로 밀었기 때문이다.
 
+Stage 6 의 1차 보정은 `cell_ctx.is_none()` 으로 fallback 을 막았으나, `cell_ctx` 는 글상자뿐 아니라 표 셀 문단에도 사용되므로 CI 의 `svg_snapshot` 에서 표 셀 y 좌표 부작용을 만들었다. 최종 보정은 명시 플래그로 글상자 내부 문단에만 fallback 생략을 적용한다.
+
 ## 수정 요약
 
 1. `tests/issue_1187_textbox_clip.rs` 를 추가해 `BookReview.hwp` 1쪽의 SVG 글상자 clipPath 회귀를 고정했다.
@@ -21,8 +23,9 @@ PR 1차 수정 후 추가 시각 검증에서 정상으로 보여야 하는 큰 
 4. `src/paint` layer 경로에 `ClipKind::TextBox` 를 추가하고, `LayerBuilder` 가 TextBox 를 `ClipRect` 로 내리도록 했다.
 5. PageLayerTree JSON 에 `"clipKind":"textBox"` 를 추가하면서 `schemaMinorVersion` 을 `14 -> 15` 로 올렸다.
 6. `svg_layer`, `web_canvas`, `canvaskit_policy`, `rhwp-studio` 타입 정의를 새 clip kind 에 맞췄다.
-7. `layout_composed_paragraph` 의 column-top vpos fallback 을 `cell_ctx.is_none()` 인 본문 흐름에만 적용해 글상자/표 셀의 explicit y 배치와 중복되지 않게 했다.
+7. `layout_composed_paragraph` 에 `suppress_column_top_vpos_fallback` 플래그를 추가해 글상자 내부 문단에만 column-top vpos fallback 생략을 적용했다.
 8. #1187 테스트를 보강해 `5장`, `6장`, `에필로그` 줄이 큰 글상자 clip 하단 안에 남는지 확인한다.
+9. PR #1190 CI 실패 보정으로 `issue-267`, `issue-617` SVG snapshot golden 을 텍스트박스 clip 출력에 맞춰 갱신했다.
 
 ## 산출물 확인
 
@@ -59,7 +62,9 @@ PR 1차 수정 후 추가 시각 검증에서 정상으로 보여야 하는 큰 
 
 ```bash
 cargo fmt --check
+git diff --check
 cargo build --bin rhwp
+cargo test --test svg_snapshot
 cargo test --test issue_1187_textbox_clip
 cargo test --lib paint::builder::tests
 cargo test --lib paint::json::tests::serializes_textbox_clip_kind
@@ -80,6 +85,7 @@ npm run build
 - 기존 글상자/각주/히트테스트/세로쓰기 관련 테스트: 모두 통과
 - `wasm-pack build --target web --dev`: 통과
 - `npm run build`: 통과
+- PR #1190 CI 실패 재현 케이스 `issue_267_ktx_toc_page`, `issue_617_exam_kor_page5`: 통과
 
 rhwp-studio 시각 검증:
 
@@ -97,7 +103,8 @@ rhwp-studio 시각 검증:
 - `befdc1f7` Task #1187 Stage 3: clip textbox content in SVG
 - `ffdd45b4` Task #1187 Stage 4: clip textbox content in paint layer
 - `cacbe332` Task #1187 Stage 5: finalize textbox clip fix
-- Stage 6: correct textbox vpos fallback
+- `566eb3f1` Task #1187 Stage 6: correct textbox vpos fallback
+- Stage 7: fix CI svg snapshot fallout
 
 ## 남은 절차
 

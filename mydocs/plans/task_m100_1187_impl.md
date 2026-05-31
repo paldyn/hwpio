@@ -144,3 +144,26 @@
   - `wasm-pack build --target web --dev`
   - `npm run build`
   - rhwp-studio Browser 시각 확인
+
+## Stage 7 — PR #1190 CI snapshot 실패 보정
+
+**목표**: Stage 6 보정이 표 셀 레이아웃까지 건드린 부작용을 제거하고,
+의도한 텍스트박스 clip 출력 변화만 snapshot golden 에 반영한다.
+
+- 문제:
+  - GitHub Actions `Build & Test` 에서 `cargo test --test svg_snapshot` 실패.
+  - 실패 케이스: `issue_267_ktx_toc_page`, `issue_617_exam_kor_page5`.
+  - Stage 6 의 `cell_ctx.is_none()` 조건은 글상자뿐 아니라 표 셀 문단에도
+    영향을 줘 표 셀 column-top vpos fallback 을 꺼버렸다.
+- 수정:
+  - `layout_composed_paragraph` 에 `suppress_column_top_vpos_fallback` 플래그를 추가한다.
+  - 글상자 내부 가로쓰기 문단 호출만 `true` 로 넘긴다.
+  - 일반 본문/표 셀/캡션/각주는 `false` 로 유지한다.
+  - 텍스트박스 clip 도입으로 의도적으로 바뀐 SVG snapshot golden 2개를 갱신한다.
+- 검증:
+  - `cargo test --test svg_snapshot`
+  - `cargo test --test issue_1187_textbox_clip`
+  - 관련 글상자/paint/svg layer 테스트
+  - `cargo build --bin rhwp`
+  - `wasm-pack build --target web --dev`
+  - `npm run build`
