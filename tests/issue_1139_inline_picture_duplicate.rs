@@ -968,6 +968,31 @@ fn issue_1189_2022_nov_page17_internal_rewind_keeps_formula_tail_on_next_page() 
 }
 
 #[test]
+fn issue_1189_2022_oct_page17_endnote_drag_selection_covers_equation_tail_lines() {
+    let bytes = std::fs::read("samples/3-10월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(16).expect("page 17 render tree");
+
+    let rects = doc
+        .get_selection_rects(0, 915, 0, 921, 3)
+        .unwrap_or_else(|e| panic!("17쪽 문27 미주 드래그 선택 사각형 조회 실패: {e:?}"));
+    let rects: Value = serde_json::from_str(&rects).expect("selection rects json");
+    let rects = rects.as_array().expect("selection rect array");
+
+    for para_idx in 915..=921 {
+        let para_y = min_para_text_y(&tree.root, para_idx).expect("문27 미주 문단 text y");
+        assert!(
+            rects.iter().any(|rect| {
+                rect["pageIndex"].as_u64() == Some(16)
+                    && (rect["y"].as_f64().unwrap_or_default() - para_y).abs() < 0.8
+                    && rect["width"].as_f64().unwrap_or_default() > 1.0
+            }),
+            "한컴오피스처럼 문27 미주 드래그 선택이 수식 꼬리 문단까지 연속으로 덮어야 함: para_idx={para_idx}, para_y={para_y}, rects={rects:?}"
+        );
+    }
+}
+
+#[test]
 fn issue_1189_2022_nov_pages10_12_rewind_tail_and_equation_scale_match_pdf() {
     let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
     let doc = HwpDocument::from_bytes(&bytes).expect("parse");
