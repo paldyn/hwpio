@@ -1102,8 +1102,8 @@ fn export_markdown(args: &[String]) {
 
                     let (mime, image_data) = if let Some((si, pi, ci)) = try_control {
                         match (
-                            doc.get_control_image_mime_native(si, pi, ci),
-                            doc.get_control_image_data_native(si, pi, ci),
+                            doc.get_control_image_mime_native(si, pi, &[], ci),
+                            doc.get_control_image_data_native(si, pi, &[], ci),
                         ) {
                             (Ok(m), Ok(d)) => (m, d),
                             _ => {

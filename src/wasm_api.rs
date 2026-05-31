@@ -5157,6 +5157,7 @@ impl HwpDocument {
         self.copy_control_native(
             section_idx as usize,
             para_idx as usize,
+            &[],
             control_idx as usize,
         )
         .map_err(|e| e.into())
@@ -5285,6 +5286,7 @@ impl HwpDocument {
         self.export_control_html_native(
             section_idx as usize,
             para_idx as usize,
+            &[],
             control_idx as usize,
         )
         .map_err(|e| e.into())
@@ -5301,6 +5303,7 @@ impl HwpDocument {
         self.get_control_image_data_native(
             section_idx as usize,
             para_idx as usize,
+            &[],
             control_idx as usize,
         )
         .map_err(|e| e.into())
@@ -5317,6 +5320,7 @@ impl HwpDocument {
         self.get_control_image_mime_native(
             section_idx as usize,
             para_idx as usize,
+            &[],
             control_idx as usize,
         )
         .map_err(|e| e.into())

@@ -1931,7 +1931,7 @@ fn test_clipboard_copy_control() {
     let mut doc = create_doc_with_table();
 
     // 표 컨트롤 복사
-    let result = doc.copy_control_native(0, 0, 0);
+    let result = doc.copy_control_native(0, 0, &[], 0);
     assert!(result.is_ok());
     let json = result.unwrap();
     assert!(json.contains("[표]"));
@@ -2096,7 +2096,7 @@ fn test_export_selection_html_partial() {
 fn test_export_control_html_table() {
     let mut doc = create_doc_with_table();
 
-    let result = doc.export_control_html_native(0, 0, 0);
+    let result = doc.export_control_html_native(0, 0, &[], 0);
     assert!(result.is_ok());
     let html = result.unwrap();
 

@@ -223,17 +223,11 @@ impl DocumentCore {
         &mut self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
@@ -925,17 +919,11 @@ impl DocumentCore {
         &self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
@@ -1285,17 +1273,11 @@ impl DocumentCore {
         &self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<Vec<u8>, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
@@ -1333,17 +1315,11 @@ impl DocumentCore {
         &self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
