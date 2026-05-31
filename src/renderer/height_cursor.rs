@@ -248,23 +248,31 @@ impl HeightCursor {
             self.dpi,
         );
         let prev_line_spacing_px = (seg.line_spacing.max(0) as f64) / 7200.0 * self.dpi;
-        let bottom_new_note_gap_cap = if self.suppress_large_forward_jump
-            && y_offset > self.col_area_y + self.col_area_height * 0.75
-            && end_y <= self.col_area_y + self.col_area_height
-        {
-            Some((y_offset + prev_line_spacing_px).min(end_y))
-        } else {
-            None
-        };
-        let compact_endnote_new_note_jump = self.suppress_large_forward_jump
+        let compact_endnote_question_title = self.suppress_large_forward_jump
             && paragraphs
                 .get(item_para)
                 .map(|p| p.text.trim_start().starts_with('문'))
                 .unwrap_or(false)
-            && seg.line_height > 1500
-            && seg.line_spacing > 1000
+            && seg.line_spacing > 1000;
+        let bottom_new_note_gap_cap = if self.suppress_large_forward_jump
+            && end_y <= self.col_area_y + self.col_area_height
+            && (y_offset > self.col_area_y + self.col_area_height * 0.75
+                || compact_endnote_question_title)
+        {
+            let preserved_gap_px = if y_offset > self.col_area_y + self.col_area_height * 0.75 {
+                prev_line_spacing_px
+            } else {
+                prev_line_spacing_px + 40.0
+            };
+            Some((y_offset + preserved_gap_px).min(end_y))
+        } else {
+            None
+        };
+        let compact_endnote_new_note_jump = self.suppress_large_forward_jump
+            && compact_endnote_question_title
+            && (seg.line_height > 1500 || bottom_new_note_gap_cap.is_some())
             && end_y > y_offset + 32.0
-            && end_y < y_offset + 80.0;
+            && end_y < y_offset + 120.0;
         let compact_endnote_tac_picture_gap = self.suppress_large_forward_jump
             && !is_page_path
             && end_y > y_offset
@@ -602,6 +610,28 @@ mod tests {
 
         let got = c.vpos_adjust(980.0, 1, &ps, &styles(0.0));
         assert!(got < 980.0, "got={got}");
+    }
+
+    /// 기본 미주 사이 간격을 가진 새 문제 제목이 단 중간에서 과도하게 전진하면
+    /// 뒤쪽 TAC 그림/문단이 단 하단을 넘는다. 제목 자체는 유지하되 저장된 간격에
+    /// 완충분만 더해 forward jump를 제한한다.
+    #[test]
+    fn compact_endnote_question_title_caps_large_forward_gap() {
+        let mut c = compact_endnote_cursor(None);
+        c.prev_layout_para = Some(0);
+        let mut ps = vec![
+            para(0, 100000, 900, 1984, 5000),
+            para(0, 108025, 900, 452, 5000),
+        ];
+        ps[1].text = "문29)".to_string();
+
+        let got = c.vpos_adjust(650.0, 1, &ps, &styles(0.0));
+        let expected = 650.0 + 1984.0 / 75.0 + 40.0;
+
+        assert!(
+            (got - expected).abs() < 1e-6,
+            "got={got}, expected={expected}"
+        );
     }
 
     /// 새 미주 제목 바로 다음 문단도 제목 위로 되감기면 미주 사이 간격과 제목이 깨진다.
