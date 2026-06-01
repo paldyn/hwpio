@@ -2,7 +2,8 @@
 
 - 이슈: [paldyn/HanPage#18](https://github.com/paldyn/HanPage/issues/18) · 마일스톤 M100(v1.0.0) · #13 후속
 - 브랜치: `local/task18` (origin/main `a7228f52` 분기) · 머지 타깃: **`main` PR** (#12·#13·#16·#17 선례)
-- 상태: **설정 수정·버전 범프 완료 · 정적 검증 통과 · main PR 생성** (머지/릴리스/이슈 클로즈 승인 대기)
+- PR: [paldyn/HanPage#19](https://github.com/paldyn/HanPage/pull/19) (base `main` ← `task18-mainbin`)
+- 상태: **설정 수정·버전 범프 완료 · 정적 검증 통과 · main PR #19 생성** (머지/릴리스/이슈 클로즈 승인 대기)
 
 ## 1. 배경 / 목표
 
