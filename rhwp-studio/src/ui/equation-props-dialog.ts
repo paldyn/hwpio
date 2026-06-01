@@ -2,6 +2,7 @@ import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
 import type { EquationProperties, NoteControlRef } from '@/core/types';
 import { EquationEditorDialog } from './equation-editor-dialog';
+import { enableDialogDrag } from './dialog-drag';
 
 type TabName = '기본' | '여백/캡션' | '수식';
 
@@ -167,7 +168,7 @@ export class EquationPropertiesDialog {
       if (e.target === this.overlay) this.hide();
     });
 
-    this.enableDrag(titleBar);
+    enableDialogDrag(this.dialog, titleBar);
   }
 
   private rebuildTabs(): void {
@@ -458,29 +459,4 @@ export class EquationPropertiesDialog {
     return button;
   }
 
-  private enableDrag(titleEl: HTMLElement): void {
-    let offsetX = 0;
-    let offsetY = 0;
-    let dragging = false;
-    titleEl.addEventListener('mousedown', (e) => {
-      if ((e.target as HTMLElement).closest('.dialog-close')) return;
-      dragging = true;
-      const rect = this.dialog.getBoundingClientRect();
-      offsetX = e.clientX - rect.left;
-      offsetY = e.clientY - rect.top;
-      this.dialog.style.position = 'fixed';
-      this.dialog.style.left = `${rect.left}px`;
-      this.dialog.style.top = `${rect.top}px`;
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!dragging) return;
-      this.dialog.style.left = `${e.clientX - offsetX}px`;
-      this.dialog.style.top = `${e.clientY - offsetY}px`;
-      this.dialog.style.margin = '0';
-    });
-    document.addEventListener('mouseup', () => {
-      dragging = false;
-    });
-  }
 }

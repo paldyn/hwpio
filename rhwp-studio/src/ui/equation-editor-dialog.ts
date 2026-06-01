@@ -2,6 +2,7 @@ import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
 import type { EquationProperties, NoteControlRef } from '@/core/types';
 import { appendSvgMarkup } from './dom-utils';
+import { enableDialogDrag } from './dialog-drag';
 
 /**
  * 수식 편집 대화상자
@@ -444,7 +445,7 @@ export class EquationEditorDialog {
       if (e.target === this.overlay) this.hide();
     });
 
-    this.enableDrag(titleBar);
+    enableDialogDrag(this.dialog, titleBar, { ignoreSelector: '.dialog-close, .eq-mode-btn' });
   }
 
   // ── 모드 ──────────────────────────────────────
@@ -714,26 +715,6 @@ export class EquationEditorDialog {
     this.hide();
   }
 
-  // ── 드래그 ────────────────────────────────────
-
-  private enableDrag(titleEl: HTMLElement): void {
-    let offsetX = 0, offsetY = 0, isDragging = false;
-    titleEl.addEventListener('mousedown', (e) => {
-      if ((e.target as HTMLElement).closest('.dialog-close, .eq-mode-btn')) return;
-      isDragging = true;
-      const rect = this.dialog.getBoundingClientRect();
-      offsetX = e.clientX - rect.left;
-      offsetY = e.clientY - rect.top;
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      this.dialog.style.left = `${e.clientX - offsetX}px`;
-      this.dialog.style.top = `${e.clientY - offsetY}px`;
-      this.dialog.style.margin = '0';
-    });
-    document.addEventListener('mouseup', () => { isDragging = false; });
-  }
 }
 
 // ── 색상 변환 유틸리티 ──────────────────────────
