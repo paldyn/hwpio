@@ -887,6 +887,12 @@ pub struct ImageNode {
     /// [Task #1151 v4] 표 셀 안 inline picture 인 경우: outer paragraph 의 표 control 인덱스.
     #[serde(default)]
     pub outer_table_control_index: Option<usize>,
+    /// [Task #1161] 표 셀/글상자 안 picture 의 **전체 다단계 경로**(중첩 표/글상자 지원).
+    /// `TextRunNode.cell_context` 와 동일 메커니즘. 위 단일 레벨 스칼라
+    /// (cell_index/cell_para_index/outer_table_control_index)는 이 경로의 innermost
+    /// 투영(`CellContext::last_image_indices`)으로 유지(하위호환). 본문 picture 는 `None`.
+    #[serde(default)]
+    pub cell_context: Option<CellContext>,
 }
 
 /// [Task #825] 머리말/꼬리말 안 그림의 outer 위치 + 종류.
@@ -940,6 +946,7 @@ impl ImageNode {
             cell_index: None,
             cell_para_index: None,
             outer_table_control_index: None,
+            cell_context: None,
         }
     }
 }

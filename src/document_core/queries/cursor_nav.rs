@@ -656,6 +656,31 @@ impl DocumentCore {
         Ok(para)
     }
 
+    /// [Task #1161] 컨트롤 복사/조회용으로 본문 또는 셀 경로의 문단을 통일 반환한다.
+    ///
+    /// `cell_path` 가 비어 있으면 본문 `sections[sec].paragraphs[para]` 를,
+    /// 아니면 `resolve_paragraph_by_path` 로 셀/글상자 안 문단을 반환한다.
+    /// 클립보드 native(copy/export/image) 들이 동일한 컨트롤 접근 진입점을
+    /// 공유하도록 일원화한다.
+    pub(crate) fn resolve_control_para<'a>(
+        &'a self,
+        sec: usize,
+        para: usize,
+        cell_path: &[(usize, usize, usize)],
+    ) -> Result<&'a Paragraph, HwpError> {
+        if cell_path.is_empty() {
+            self.document
+                .sections
+                .get(sec)
+                .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", sec)))?
+                .paragraphs
+                .get(para)
+                .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para)))
+        } else {
+            self.resolve_paragraph_by_path(sec, para, cell_path)
+        }
+    }
+
     /// 경로가 가리키는 컨테이너(표 셀/글상자)의 문단 수를 반환한다.
     pub(crate) fn resolve_container_para_count_by_path(
         &self,

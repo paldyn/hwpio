@@ -4585,6 +4585,8 @@ fn make_picture_image_node(
             cell_index: cei,
             cell_para_index: cpi,
             outer_table_control_index: otci,
+            // [Task #1161] 전체 다단계 경로 보존(스칼라는 위 innermost 투영).
+            cell_context: cell_ctx.cloned(),
             crop,
             original_size_hu,
             effect: pic.image_attr.effect,

@@ -1931,7 +1931,7 @@ fn test_clipboard_copy_control() {
     let mut doc = create_doc_with_table();
 
     // 표 컨트롤 복사
-    let result = doc.copy_control_native(0, 0, 0);
+    let result = doc.copy_control_native(0, 0, &[], 0);
     assert!(result.is_ok());
     let json = result.unwrap();
     assert!(json.contains("[표]"));
@@ -1942,6 +1942,125 @@ fn test_clipboard_copy_control() {
     assert_eq!(clip.paragraphs.len(), 1);
     assert_eq!(clip.paragraphs[0].controls.len(), 1);
     assert!(matches!(&clip.paragraphs[0].controls[0], Control::Table(_)));
+}
+
+#[test]
+fn test_clipboard_copy_control_cell_path_json_arg() {
+    // [Task #1161] copyControl 래퍼의 cell_path_json 인자: 빈 문자열/"[]" 는 본문.
+    // (에러 경로는 JsValue 를 구성하므로 native 테스트에서 호출 불가 → OK 경로만 검증.
+    //  cell 경로 자체는 tests/issue_1161_copy_picture_in_cell.rs 의 native 테스트로 가드.)
+    let mut doc = create_doc_with_table();
+
+    // 빈 문자열 = 본문 → 표 복사
+    let r_empty = doc.copy_control(0, 0, "", 0);
+    assert!(r_empty.is_ok(), "빈 cell_path_json 본문 복사 실패");
+    assert!(r_empty.unwrap().contains("[표]"));
+
+    // "[]" 도 본문
+    let r_arr = doc.copy_control(0, 0, "[]", 0);
+    assert!(r_arr.is_ok(), "[] cell_path_json 본문 복사 실패");
+    assert!(r_arr.unwrap().contains("[표]"));
+}
+
+/// [Task #1161] 떠 있는 그림(tac=false)을 반복 붙여넣으면 cascade 오프셋이 누적된다.
+fn create_doc_with_floating_picture(tac: bool, voff: u32, hoff: u32) -> HwpDocument {
+    use crate::model::control::Control;
+    use crate::model::document::{Section, SectionDef};
+    use crate::model::image::Picture;
+    use crate::model::page::PageDef;
+    use crate::model::shape::CommonObjAttr;
+
+    let mut doc = HwpDocument::create_empty();
+    let mut document = Document::default();
+    let page_def = PageDef {
+        width: 59528,
+        height: 84188,
+        margin_left: 8504,
+        margin_right: 8504,
+        margin_top: 5669,
+        margin_bottom: 4252,
+        margin_header: 4252,
+        margin_footer: 4252,
+        ..Default::default()
+    };
+    let pic = Control::Picture(Box::new(Picture {
+        common: CommonObjAttr {
+            treat_as_char: tac,
+            vertical_offset: voff,
+            horizontal_offset: hoff,
+            width: 5000,
+            height: 5000,
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    let pic_para = Paragraph {
+        controls: vec![pic],
+        line_segs: vec![LineSeg {
+            line_height: 400,
+            baseline_distance: 320,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    document.sections.push(Section {
+        section_def: SectionDef {
+            page_def,
+            ..Default::default()
+        },
+        paragraphs: vec![pic_para, Paragraph::default()],
+        raw_stream: None,
+    });
+    doc.set_document(document);
+    doc
+}
+
+fn collect_picture_voffsets(doc: &HwpDocument) -> Vec<u32> {
+    use crate::model::control::Control;
+    let mut offs = Vec::new();
+    for sec in &doc.document.sections {
+        for p in &sec.paragraphs {
+            for c in &p.controls {
+                if let Control::Picture(pic) = c {
+                    offs.push(pic.common.vertical_offset);
+                }
+            }
+        }
+    }
+    offs.sort_unstable();
+    offs
+}
+
+#[test]
+fn test_paste_cascade_floating_picture() {
+    let mut doc = create_doc_with_floating_picture(false, 1000, 1000);
+    doc.copy_control_native(0, 0, &[], 0).expect("copy");
+    doc.paste_control_native(0, 1, 0).expect("paste1");
+    doc.paste_control_native(0, 1, 0).expect("paste2");
+
+    // 원본 1000, 붙여넣기 1000+567, 1000+2*567 (PASTE_CASCADE_STEP_HU=567)
+    let offs = collect_picture_voffsets(&doc);
+    assert_eq!(
+        offs,
+        vec![1000, 1567, 2134],
+        "cascade 오프셋 누적 불일치: {offs:?}"
+    );
+}
+
+#[test]
+fn test_paste_inline_picture_no_cascade() {
+    // tac=true(글자처럼 취급)는 텍스트 흐름이 위치를 정하므로 cascade 미적용(오프셋 불변).
+    let mut doc = create_doc_with_floating_picture(true, 1000, 1000);
+    doc.copy_control_native(0, 0, &[], 0).expect("copy");
+    doc.paste_control_native(0, 1, 0).expect("paste1");
+    doc.paste_control_native(0, 1, 0).expect("paste2");
+
+    let offs = collect_picture_voffsets(&doc);
+    assert_eq!(
+        offs,
+        vec![1000, 1000, 1000],
+        "inline 그림에 cascade 적용됨: {offs:?}"
+    );
 }
 
 #[test]
@@ -2096,7 +2215,7 @@ fn test_export_selection_html_partial() {
 fn test_export_control_html_table() {
     let mut doc = create_doc_with_table();
 
-    let result = doc.export_control_html_native(0, 0, 0);
+    let result = doc.export_control_html_native(0, 0, &[], 0);
     assert!(result.is_ok());
     let html = result.unwrap();
 

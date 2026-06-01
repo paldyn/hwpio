@@ -10,6 +10,10 @@ use crate::model::control::Control;
 use crate::model::event::DocumentEvent;
 use crate::model::paragraph::Paragraph;
 
+/// [Task #1161] 떠 있는 개체 반복 붙여넣기 cascade 1 회당 위치 오프셋(HWPUNIT).
+/// 약 2mm (1mm = 7200/25.4 ≈ 283.46 HWPUNIT). 한컴 정합은 작업지시자 시각 대조로 미세조정.
+const PASTE_CASCADE_STEP_HU: u32 = 567;
+
 impl DocumentCore {
     pub fn has_internal_clipboard_native(&self) -> bool {
         self.clipboard.is_some()
@@ -223,17 +227,11 @@ impl DocumentCore {
         &mut self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
@@ -308,6 +306,8 @@ impl DocumentCore {
             paragraphs: vec![clip_para],
             plain_text: plain_text.clone(),
         });
+        // [Task #1161] 새 컨트롤 복사 → cascade 리셋(다음 첫 붙여넣기부터 누적 시작).
+        self.paste_cascade_count = 0;
 
         Ok(super::super::helpers::json_ok_with(&format!(
             "\"text\":\"{}\"",
@@ -689,13 +689,31 @@ impl DocumentCore {
         char_offset: usize,
     ) -> Result<String, HwpError> {
         // 클립보드에서 컨트롤 문단 확인
-        let clip_para = match &self.clipboard {
+        let mut clip_para = match &self.clipboard {
             Some(c) => match c.paragraphs.first() {
                 Some(p) if !p.controls.is_empty() => p.clone(),
                 _ => return Ok("{\"ok\":false,\"error\":\"no control in clipboard\"}".to_string()),
             },
             None => return Ok("{\"ok\":false,\"error\":\"clipboard empty\"}".to_string()),
         };
+
+        // [Task #1161] 떠 있는 개체(treat_as_char=false) 반복 붙여넣기 시 한컴처럼
+        // cascade 오프셋을 누적해 동일 위치 겹침을 방지한다. inline(글자처럼 취급)은
+        // 텍스트 흐름이 위치를 정하므로 제외(첫 붙여넣기부터 +1*step).
+        {
+            let cascade = self.paste_cascade_count.saturating_add(1);
+            let common = match clip_para.controls.first_mut() {
+                Some(Control::Picture(p)) if !p.common.treat_as_char => Some(&mut p.common),
+                Some(Control::Shape(s)) if !s.common().treat_as_char => Some(s.common_mut()),
+                _ => None,
+            };
+            if let Some(common) = common {
+                let off = cascade.saturating_mul(PASTE_CASCADE_STEP_HU);
+                common.vertical_offset = common.vertical_offset.saturating_add(off);
+                common.horizontal_offset = common.horizontal_offset.saturating_add(off);
+                self.paste_cascade_count = cascade;
+            }
+        }
 
         // 인덱스 검증
         if section_idx >= self.document.sections.len() {
@@ -933,17 +951,11 @@ impl DocumentCore {
         &self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
@@ -1293,17 +1305,11 @@ impl DocumentCore {
         &self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<Vec<u8>, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
@@ -1341,17 +1347,11 @@ impl DocumentCore {
         &self,
         section_idx: usize,
         para_idx: usize,
+        cell_path: &[(usize, usize, usize)],
         control_idx: usize,
     ) -> Result<String, HwpError> {
-        let section = self
-            .document
-            .sections
-            .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", section_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        // [Task #1161] cell_path 가 비면 본문, 아니면 셀/글상자 안 문단.
+        let para = self.resolve_control_para(section_idx, para_idx, cell_path)?;
         let control = para
             .controls
             .get(control_idx)
