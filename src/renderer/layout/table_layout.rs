@@ -2081,6 +2081,7 @@ impl LayoutEngine {
                             section_index,
                             cp_idx,
                             cell_context.clone(),
+                            false,
                             is_last_para,
                             0.0,
                             None,
@@ -2691,6 +2692,7 @@ impl LayoutEngine {
                                             control_index: Some(ctrl_idx),
                                             cell_index: Some(cell_idx),
                                             cell_para_index: Some(cp_idx),
+                                            note_ref: None,
                                         }),
                                         BoundingBox::new(eq_x, eq_y, eq_w, eq_h),
                                     );
@@ -2732,12 +2734,36 @@ impl LayoutEngine {
                                     if already_rendered_inline {
                                         inline_x += tac_w;
                                     } else {
+                                        // [Task #1195] 표 앞에 텍스트(공백 등)가 선행하면, 한컴은
+                                        // 그 textRun 너비 다음에 표를 놓되 잔여 너비가 부족하면
+                                        // 다음 줄(line feed)에 조판한다. 즉 표는 문단 첫 줄이 아니라
+                                        // 표가 속한 line_seg(표 앞 빈 줄 다음)에 위치한다.
+                                        // 이미지 TAC 분기(L2231)와 동일하게 para_y_before_compose 에
+                                        // (표 line_seg.vpos − 첫 line_seg.vpos) 상대 오프셋을 더한다.
+                                        // (para_y_before_compose 에 이미 ls[0].vpos 가 누적되어 있음.)
+                                        let table_anchor_y =
+                                            if has_preceding_text && para.line_segs.len() > 1 {
+                                                let first_vpos = para
+                                                    .line_segs
+                                                    .first()
+                                                    .map(|f| f.vertical_pos)
+                                                    .unwrap_or(0);
+                                                let tbl_vpos = para
+                                                    .line_segs
+                                                    .last()
+                                                    .map(|s| s.vertical_pos)
+                                                    .unwrap_or(first_vpos);
+                                                para_y_before_compose
+                                                    + hwpunit_to_px(tbl_vpos - first_vpos, self.dpi)
+                                            } else {
+                                                para_y_before_compose
+                                            };
                                         let ctrl_area = LayoutRect {
                                             x: inline_x,
-                                            y: para_y_before_compose,
+                                            y: table_anchor_y,
                                             width: tac_w,
                                             height: (inner_area.height
-                                                - (para_y_before_compose - inner_area.y))
+                                                - (table_anchor_y - inner_area.y))
                                                 .max(0.0),
                                         };
                                         let table_h = self.layout_table(
@@ -2748,7 +2774,7 @@ impl LayoutEngine {
                                             styles,
                                             outline_numbering_id,
                                             &ctrl_area,
-                                            para_y_before_compose,
+                                            table_anchor_y,
                                             bin_data_content,
                                             None,
                                             depth + 1,

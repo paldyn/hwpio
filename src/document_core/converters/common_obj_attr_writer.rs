@@ -7,7 +7,7 @@
 //! 라운드트립 테스트로 검증한다.
 
 use crate::model::shape::{
-    CommonObjAttr, HorzAlign, HorzRelTo, SizeCriterion, TextWrap, VertAlign, VertRelTo,
+    CommonObjAttr, HorzAlign, HorzRelTo, SizeCriterion, TextFlow, TextWrap, VertAlign, VertRelTo,
 };
 use crate::serializer::byte_writer::ByteWriter;
 
@@ -64,7 +64,7 @@ pub fn serialize_common_obj_attr(common: &CommonObjAttr) -> Vec<u8> {
 
 /// `CommonObjAttr` 의 enum 필드들로부터 attr u32 비트를 합성한다.
 ///
-/// 비트 레이아웃 (parser/control/shape.rs:247 의 역방향):
+/// 비트 레이아웃 (parser/control/shape.rs 의 역방향):
 /// - bit 0: treat_as_char
 /// - bit 3-4: vert_rel_to (Paper=0, Page=1, Para=2)
 /// - bit 5-7: vert_align
@@ -75,6 +75,7 @@ pub fn serialize_common_obj_attr(common: &CommonObjAttr) -> Vec<u8> {
 /// - bit 15-17: width_criterion
 /// - bit 18-19: height_criterion
 /// - bit 21-23: text_wrap
+/// - bit 24-25: text_flow
 /// - bit 26: HWPX GenShape storage high bit 후보
 pub(crate) fn pack_common_attr_bits(common: &CommonObjAttr) -> u32 {
     let mut a: u32 = 0;
@@ -94,6 +95,7 @@ pub(crate) fn pack_common_attr_bits(common: &CommonObjAttr) -> u32 {
     a |= (width_criterion_to_bits(common.width_criterion) & 0x07) << 15;
     a |= (height_criterion_to_bits(common.height_criterion) & 0x03) << 18;
     a |= (text_wrap_to_bits(common.text_wrap) & 0x07) << 21;
+    a |= (text_flow_to_bits(common.text_flow) & 0x03) << 24;
     if common.hwp5_gen_shape_attr_bit26 {
         a |= 1 << 26;
     }
@@ -169,6 +171,15 @@ fn text_wrap_to_bits(v: TextWrap) -> u32 {
     }
 }
 
+fn text_flow_to_bits(v: TextFlow) -> u32 {
+    match v {
+        TextFlow::BothSides => 0,
+        TextFlow::LeftOnly => 1,
+        TextFlow::RightOnly => 2,
+        TextFlow::LargestOnly => 3,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,6 +212,7 @@ mod tests {
             horz_rel_to: HorzRelTo::Para,
             horz_align: HorzAlign::Left,
             text_wrap: TextWrap::TopAndBottom,
+            text_flow: TextFlow::BothSides,
             width_criterion: SizeCriterion::Absolute,
             height_criterion: SizeCriterion::Absolute,
             description: String::new(),
@@ -309,5 +321,58 @@ mod tests {
             "예상 42바이트 이상, 실제={}",
             bytes.len()
         );
+    }
+
+    #[test]
+    fn roundtrip_text_flow_left_only() {
+        // HWPX 출처: attr=0, text_flow=LeftOnly → bits 24-25 = 0b01
+        let mut original = make_sample();
+        original.text_flow = TextFlow::LeftOnly;
+        let bytes = serialize_common_obj_attr(&original);
+        let parsed = parse_common_obj_attr(&bytes);
+        assert_eq!(parsed.text_flow, TextFlow::LeftOnly);
+    }
+
+    #[test]
+    fn roundtrip_text_flow_right_only() {
+        let mut original = make_sample();
+        original.text_flow = TextFlow::RightOnly;
+        let bytes = serialize_common_obj_attr(&original);
+        let parsed = parse_common_obj_attr(&bytes);
+        assert_eq!(parsed.text_flow, TextFlow::RightOnly);
+    }
+
+    #[test]
+    fn roundtrip_text_flow_largest_only() {
+        let mut original = make_sample();
+        original.text_flow = TextFlow::LargestOnly;
+        let bytes = serialize_common_obj_attr(&original);
+        let parsed = parse_common_obj_attr(&bytes);
+        assert_eq!(parsed.text_flow, TextFlow::LargestOnly);
+    }
+
+    #[test]
+    fn text_flow_bits_position() {
+        // bit 24-25 에 정확히 위치하는지 검증
+        let mut original = make_sample();
+        original.text_flow = TextFlow::LeftOnly; // 0b01
+        let bytes = serialize_common_obj_attr(&original);
+        let attr = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        assert_eq!((attr >> 24) & 0x03, 1, "LeftOnly 는 bit24-25 = 0b01");
+
+        original.text_flow = TextFlow::RightOnly; // 0b10
+        let bytes = serialize_common_obj_attr(&original);
+        let attr = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
+        assert_eq!((attr >> 24) & 0x03, 2, "RightOnly 는 bit24-25 = 0b10");
+    }
+
+    #[test]
+    fn text_flow_default_is_both_sides() {
+        // 기본값이 BOTH_SIDES(0) 인지 확인
+        let original = make_sample();
+        assert_eq!(original.text_flow, TextFlow::BothSides);
+        let bytes = serialize_common_obj_attr(&original);
+        let parsed = parse_common_obj_attr(&bytes);
+        assert_eq!(parsed.text_flow, TextFlow::BothSides);
     }
 }

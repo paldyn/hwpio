@@ -438,17 +438,14 @@ impl SvgRenderer {
             RenderNodeType::Equation(eq) => {
                 // 수식 SVG 조각을 bbox 위치에 배치
                 // HWP 저장 영역(bbox)과 레이아웃 산출 크기(layout_box)가 다를 수 있으므로
-                // bbox 너비에 맞춰 스케일링
+                // bbox 너비에 맞춰 스케일링한다. 높이는 줄 높이/여백을 포함한 영역이라
+                // 식 자체를 세로로 늘리면 한컴보다 글자가 찌그러진다.
                 let scale_x = if eq.layout_box.width > 0.0 && node.bbox.width > 0.0 {
                     node.bbox.width / eq.layout_box.width
                 } else {
                     1.0
                 };
-                let scale_y = if eq.layout_box.height > 0.0 && node.bbox.height > 0.0 {
-                    node.bbox.height / eq.layout_box.height
-                } else {
-                    1.0
-                };
+                let scale_y = 1.0_f64;
                 let needs_scale = (scale_x - 1.0).abs() > 0.01 || (scale_y - 1.0).abs() > 0.01;
                 if needs_scale {
                     self.output.push_str(&format!(
@@ -514,6 +511,15 @@ impl SvgRenderer {
             }
             RenderNodeType::TableCell(ref tc) if tc.clip => {
                 let clip_id = format!("cell-clip-{}", node.id);
+                self.defs.push(format!(
+                    "<clipPath id=\"{}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>\n",
+                    clip_id, node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
+                ));
+                self.output
+                    .push_str(&format!("<g clip-path=\"url(#{})\">", clip_id));
+            }
+            RenderNodeType::TextBox => {
+                let clip_id = format!("textbox-clip-{}", node.id);
                 self.defs.push(format!(
                     "<clipPath id=\"{}\"><rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"/></clipPath>\n",
                     clip_id, node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
@@ -726,6 +732,11 @@ impl SvgRenderer {
 
         // 셀 클리핑 그룹 종료
         if matches!(&node.node_type, RenderNodeType::TableCell(tc) if tc.clip) {
+            self.output.push_str("</g>\n");
+        }
+
+        // TextBox 클리핑 그룹 종료
+        if matches!(node.node_type, RenderNodeType::TextBox) {
             self.output.push_str("</g>\n");
         }
 

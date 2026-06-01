@@ -879,6 +879,7 @@ impl LayoutEngine {
                         section_index,
                         cp_idx,
                         Some(cell_context.clone()),
+                        false,
                         is_last_para,
                         0.0,
                         None,
@@ -1124,6 +1125,7 @@ impl LayoutEngine {
                                         control_index: Some(ctrl_idx),
                                         cell_index: Some(cell_idx),
                                         cell_para_index: Some(cp_idx),
+                                        note_ref: None,
                                     }),
                                     BoundingBox::new(eq_x, eq_y, eq_w, eq_h),
                                 );

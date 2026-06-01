@@ -551,8 +551,13 @@ export function onClick(this: any, e: MouseEvent): void {
         try {
           const inFnHit = this.wasm.hitTestInFootnote(pageIdx, pageX, pageY);
           if (inFnHit.hit && inFnHit.fnParaIndex !== undefined && inFnHit.charOffset !== undefined) {
+            this.cursor.clearSelection();
             this.cursor.setFnCursorPosition(inFnHit.fnParaIndex, inFnHit.charOffset);
+            this.cursor.setFnAnchor();
+            this.active = true;
+            this.startTextSelectionDrag(e);
             this.updateCaret();
+            document.addEventListener('mouseup', this.onMouseUpBound, { once: true });
           }
         } catch { /* 무시 */ }
         this.textarea.focus();
@@ -605,7 +610,12 @@ export function onClick(this: any, e: MouseEvent): void {
             );
             this.eventBus.emit('footnoteModeChanged', true);
             if (inFnHit.fnParaIndex !== undefined && inFnHit.charOffset !== undefined) {
+              this.cursor.clearSelection();
               this.cursor.setFnCursorPosition(inFnHit.fnParaIndex, inFnHit.charOffset);
+              this.cursor.setFnAnchor();
+              this.active = true;
+              this.startTextSelectionDrag(e);
+              document.addEventListener('mouseup', this.onMouseUpBound, { once: true });
             }
             this.updateCaret();
             this.textarea.focus();
@@ -834,6 +844,7 @@ export function onClick(this: any, e: MouseEvent): void {
           picHit.cellIdx, picHit.cellParaIdx, (picHit as any).headerFooter,
           (picHit as any).outerTableControlIdx,
           (picHit as any).cellPath,
+          (picHit as any).noteRef,
         );
         this.active = true;
         this.caret.hide();

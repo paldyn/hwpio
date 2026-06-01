@@ -1440,6 +1440,14 @@ fn parse_table(
                     _ => crate::model::shape::TextWrap::Square,
                 };
             }
+            b"textFlow" => {
+                table.common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
+                };
+            }
             _ => {}
         }
     }
@@ -2014,6 +2022,14 @@ fn parse_picture(
                     _ => TextWrap::Square,
                 };
             }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
+                };
+            }
             b"instid" => picture_instance_id = parse_u32(&attr),
             b"href" => {
                 let value = attr_str(&attr);
@@ -2395,6 +2411,14 @@ fn parse_object_element_attrs(
                     "BEHIND_TEXT" => TextWrap::BehindText,
                     "IN_FRONT_OF_TEXT" => TextWrap::InFrontOfText,
                     _ => TextWrap::Square,
+                };
+            }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
                 };
             }
             b"instid" => ids.instid = parse_u32(&attr),
@@ -3227,6 +3251,29 @@ fn parse_shape_object(
                         }
                         polygon_points.push(crate::model::Point { x: px, y: py });
                     }
+                    // [#1200] curve 의 가변 꼭짓점이 `<hp:seg x1 y1 x2 y2>` (점-대-점 chain)
+                    // 으로 인코딩된 경우. `<hc:pt>` 미사용 curve 는 이 경로로 점을 채운다.
+                    // seg 는 제어점이 아닌 sampled 꼭짓점이므로 폴리라인(LineTo)으로 재구성:
+                    // 첫 seg 의 시작점 1회 + 각 seg 의 끝점.
+                    b"seg" => {
+                        let mut x1: i32 = 0;
+                        let mut y1: i32 = 0;
+                        let mut x2: i32 = 0;
+                        let mut y2: i32 = 0;
+                        for attr in ce.attributes().flatten() {
+                            match attr.key.as_ref() {
+                                b"x1" => x1 = parse_i32(&attr),
+                                b"y1" => y1 = parse_i32(&attr),
+                                b"x2" => x2 = parse_i32(&attr),
+                                b"y2" => y2 = parse_i32(&attr),
+                                _ => {}
+                            }
+                        }
+                        if polygon_points.is_empty() {
+                            polygon_points.push(crate::model::Point { x: x1, y: y1 });
+                        }
+                        polygon_points.push(crate::model::Point { x: x2, y: y2 });
+                    }
                     b"startPt" => {
                         for attr in ce.attributes().flatten() {
                             match attr.key.as_ref() {
@@ -3893,6 +3940,16 @@ fn parse_ctrl_footnote(
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"number" => note.number = parse_u16(&attr),
+            // [#1199] prefixChar(코드포인트 숫자) → before_decoration_letter
+            // 누락 시 0 유지(접두 없음). 예: "47928" = 0xBB38 '문'
+            b"prefixChar" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u16>()
+                {
+                    note.before_decoration_letter = v;
+                }
+            }
             b"suffixChar" => {
                 if let Ok(v) = std::str::from_utf8(&attr.value)
                     .unwrap_or("")
@@ -3927,6 +3984,16 @@ fn parse_ctrl_endnote(
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"number" => note.number = parse_u16(&attr),
+            // [#1199] prefixChar(코드포인트 숫자) → before_decoration_letter
+            // 누락 시 0 유지(접두 없음). 예: "47928" = 0xBB38 '문'
+            b"prefixChar" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u16>()
+                {
+                    note.before_decoration_letter = v;
+                }
+            }
             b"suffixChar" => {
                 if let Ok(v) = std::str::from_utf8(&attr.value)
                     .unwrap_or("")
@@ -4840,6 +4907,14 @@ fn parse_hp_chart_element(
                     _ => TextWrap::Square,
                 };
             }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
+                };
+            }
             b"chartIDRef" => {
                 // "Chart/chart1.xml" → 1
                 let s = attr_str(&attr);
@@ -4889,6 +4964,14 @@ fn parse_hp_ole_element(
                     "BEHIND_TEXT" => TextWrap::BehindText,
                     "IN_FRONT_OF_TEXT" => TextWrap::InFrontOfText,
                     _ => TextWrap::Square,
+                };
+            }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
                 };
             }
             b"binaryItemIDRef" => {
@@ -5077,6 +5160,146 @@ mod tests {
             850
         );
         assert_eq!(section.section_def.endnote_shape.note_spacing, 567);
+    }
+
+    /// [#1199] HWPX 미주/각주 ctrl 의 prefixChar(코드포인트 숫자) 가
+    /// before_decoration_letter 로 매핑되어야 한다. 누락 시 마커 접두문자('문')가 탈락.
+    #[test]
+    fn test_parse_note_prefix_char_maps_to_before_decoration_letter() {
+        // prefixChar="47928"(0xBB38 '문'), suffixChar="65289"(0xFF09 '）')
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ctrl>
+        <hp:endNote number="1" prefixChar="47928" suffixChar="65289" instId="100">
+          <hp:subList>
+            <hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>note body</hp:t></hp:run></hp:p>
+          </hp:subList>
+        </hp:endNote>
+      </hp:ctrl>
+      <hp:ctrl>
+        <hp:footNote number="1" prefixChar="47928" suffixChar="65289" instId="200">
+          <hp:subList>
+            <hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>note body</hp:t></hp:run></hp:p>
+          </hp:subList>
+        </hp:footNote>
+      </hp:ctrl>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let controls: Vec<&Control> = section
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.controls.iter())
+            .collect();
+
+        let endnote = controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Endnote(n) => Some(n),
+                _ => None,
+            })
+            .expect("endnote ctrl");
+        assert_eq!(
+            endnote.before_decoration_letter, 47928,
+            "endnote prefixChar"
+        );
+        assert_eq!(endnote.after_decoration_letter, 65289, "endnote suffixChar");
+
+        let footnote = controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Footnote(n) => Some(n),
+                _ => None,
+            })
+            .expect("footnote ctrl");
+        assert_eq!(
+            footnote.before_decoration_letter, 47928,
+            "footnote prefixChar"
+        );
+        assert_eq!(
+            footnote.after_decoration_letter, 65289,
+            "footnote suffixChar"
+        );
+    }
+
+    /// [#1199] prefixChar 속성이 없으면 before_decoration_letter 는 0(접두 없음) 유지 — 회귀 방지.
+    #[test]
+    fn test_parse_note_without_prefix_char_keeps_zero_before_letter() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ctrl>
+        <hp:endNote number="1" suffixChar="41" instId="100">
+          <hp:subList>
+            <hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>x</hp:t></hp:run></hp:p>
+          </hp:subList>
+        </hp:endNote>
+      </hp:ctrl>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let endnote = section
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.controls.iter())
+            .find_map(|c| match c {
+                Control::Endnote(n) => Some(n),
+                _ => None,
+            })
+            .expect("endnote ctrl");
+        assert_eq!(endnote.before_decoration_letter, 0);
+        assert_eq!(endnote.after_decoration_letter, 41); // ')'
+    }
+
+    /// [#1200] curve 도형의 geometry 가 `<hp:seg x1 y1 x2 y2>` (점-대-점 chain)
+    /// 으로 인코딩된 경우 CurveShape.points 가 채워져야 한다. 누락 시 외곽선 미렌더.
+    #[test]
+    fn test_parse_curve_seg_populates_points() {
+        // seg chain: (10,10)->(90,10)->(90,90)->(10,10) (폐곡선)
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:curve id="0" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" href="" groupLevel="0" instid="1">
+        <hp:offset x="0" y="0"/>
+        <hp:orgSz width="100" height="100"/>
+        <hp:curSz width="100" height="100"/>
+        <hp:lineShape color="#000000" width="113" style="SOLID"/>
+        <hp:seg type="LINE" x1="10" y1="10" x2="90" y2="10"/>
+        <hp:seg type="LINE" x1="90" y1="10" x2="90" y2="90"/>
+        <hp:seg type="LINE" x1="90" y1="90" x2="10" y2="10"/>
+      </hp:curve>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let curve = section
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.controls.iter())
+            .find_map(|c| match c {
+                Control::Shape(s) => match s.as_ref() {
+                    crate::model::shape::ShapeObject::Curve(cv) => Some(cv),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("curve shape");
+
+        // 첫 seg 시작점 + 각 seg 끝점 = 4점 chain
+        let pts: Vec<(i32, i32)> = curve.points.iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(pts, vec![(10, 10), (90, 10), (90, 90), (10, 10)]);
     }
 
     #[test]

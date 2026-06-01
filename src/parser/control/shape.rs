@@ -389,6 +389,14 @@ pub(crate) fn parse_common_obj_attr(ctrl_data: &[u8]) -> CommonObjAttr {
         3 => TextWrap::InFrontOfText, // 글 앞으로
         _ => TextWrap::Square,
     };
+    // bit 24-25: TextFlowSide (텍스트 흐르는 방향)
+    common.text_flow = match (attr >> 24) & 0x03 {
+        0 => crate::model::shape::TextFlow::BothSides,
+        1 => crate::model::shape::TextFlow::LeftOnly,
+        2 => crate::model::shape::TextFlow::RightOnly,
+        3 => crate::model::shape::TextFlow::LargestOnly,
+        _ => crate::model::shape::TextFlow::BothSides,
+    };
 
     common.vertical_offset = r.read_u32().unwrap_or(0);
     common.horizontal_offset = r.read_u32().unwrap_or(0);
