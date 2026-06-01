@@ -1314,6 +1314,30 @@ fn issue_1189_2022_nov_pages10_12_rewind_tail_and_equation_scale_match_pdf() {
 }
 
 #[test]
+fn issue_1209_2022_sep_page10_question12_uses_safe_vpos_backtrack() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(9).expect("page 10 render tree");
+
+    let question12_y = min_para_text_y(&tree.root, 567).expect("문12 title");
+    let question12_body_y = min_para_text_y(&tree.root, 568).expect("문12 body");
+    let question13_y = min_para_text_y(&tree.root, 575).expect("문13 title");
+
+    assert!(
+        (390.0..=406.0).contains(&question12_y),
+        "10쪽 문12 제목은 저장 LINE_SEG의 안전한 되감김 위치를 따라야 함: q12_y={question12_y}"
+    );
+    assert!(
+        (12.0..=30.0).contains(&(question12_body_y - question12_y)),
+        "문12 제목과 본문 첫 줄 사이 간격은 한컴/PDF 흐름을 유지해야 함: title={question12_y}, body={question12_body_y}"
+    );
+    assert!(
+        question13_y <= 724.0,
+        "문12 수식 블록이 아래로 밀려 문13을 늦게 시작시키면 안 됨: q13_y={question13_y}"
+    );
+}
+
+#[test]
 fn issue_1139_page13_question20_table_is_not_duplicated() {
     let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
     let doc = HwpDocument::from_bytes(&bytes).expect("parse");

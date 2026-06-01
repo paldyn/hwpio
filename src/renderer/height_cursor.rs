@@ -354,13 +354,24 @@ impl HeightCursor {
             && end_y < y_offset - 8.0
             && y_offset > self.col_area_y + self.col_area_height * 0.90
             && y_offset - end_y <= 80.0;
+        // Compact endnote LINE_SEG sometimes encodes a saved visual gap inside
+        // the previous line spacing. In the active mid-column flow it is safe
+        // to honor that backward target when it stays below the previous
+        // visible content bottom; near the column tail, the configured endnote
+        // note-gap must remain authoritative.
+        let compact_endnote_safe_vpos_backtrack = self.suppress_large_forward_jump
+            && !vpos_rewind
+            && end_y < y_offset - 8.0
+            && end_y >= prev_content_bottom_y
+            && end_y <= self.col_area_y + self.col_area_height
+            && y_offset <= self.col_area_y + self.col_area_height * 0.75;
         if std::env::var("RHWP_VPOS_DEBUG").is_ok() {
             let path = if is_page_path { "page" } else { "lazy" };
             let stale_forward = self.suppress_large_forward_jump && end_y > y_offset + 100.0;
             eprintln!(
-                "VPOS_CORR: path={} pi={} prev_pi={} prev_vpos={} prev_lh={} prev_ls={} vpos_end={} base={} col_y={:.2} y_in={:.2} end_y={:.2} stale_forward={} compact_new_note={} compact_stale_note_gap={} compact_tac_pic_gap={} compact_bottom_rewind={} compact_deep_backtrack={} applied={}",
+                "VPOS_CORR: path={} pi={} prev_pi={} prev_vpos={} prev_lh={} prev_ls={} vpos_end={} base={} col_y={:.2} y_in={:.2} end_y={:.2} stale_forward={} compact_new_note={} compact_stale_note_gap={} compact_tac_pic_gap={} compact_bottom_rewind={} compact_deep_backtrack={} compact_safe_backtrack={} applied={}",
                 path, item_para, prev_pi, seg.vertical_pos, seg.line_height, seg.line_spacing,
-                vpos_end, base, self.col_area_y, y_offset, end_y, stale_forward, compact_endnote_new_note_jump, compact_endnote_stale_note_gap, compact_endnote_tac_picture_gap, compact_endnote_bottom_rewind, compact_endnote_deep_backtrack, (applied || compact_endnote_deep_backtrack) && !stale_forward && !compact_endnote_new_note_jump && !compact_endnote_tac_picture_gap,
+                vpos_end, base, self.col_area_y, y_offset, end_y, stale_forward, compact_endnote_new_note_jump, compact_endnote_stale_note_gap, compact_endnote_tac_picture_gap, compact_endnote_bottom_rewind, compact_endnote_deep_backtrack, compact_endnote_safe_vpos_backtrack, (applied || compact_endnote_deep_backtrack || compact_endnote_safe_vpos_backtrack) && !stale_forward && !compact_endnote_new_note_jump && !compact_endnote_tac_picture_gap,
             );
         }
         let stale_forward = self.suppress_large_forward_jump && end_y > y_offset + 100.0;
@@ -388,7 +399,7 @@ impl HeightCursor {
         }
         if compact_endnote_title_tail_backtrack {
             y_offset - (y_offset - end_y).min(16.0)
-        } else if (applied || compact_endnote_deep_backtrack)
+        } else if (applied || compact_endnote_deep_backtrack || compact_endnote_safe_vpos_backtrack)
             && !stale_forward
             && !compact_endnote_new_note_jump
             && !compact_endnote_tac_picture_gap
