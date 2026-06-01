@@ -1539,6 +1539,31 @@ mod tests {
     use super::symbols::{DecoKind, FontStyleKind};
     use super::*;
 
+    /// [PR #1226] LEFT-RIGHT 구분기호 그룹 뒤 첨자(^/_)가 그룹 전체에 결합돼야 한다.
+    /// 기존엔 LEFT 분기가 try_parse_scripts 를 안 거쳐 `|x|^3` 의 ^3 가 base 없는
+    /// orphan Superscript{base:Empty} 가 됐다(3 이 superscript 높이로 안 올라감).
+    #[test]
+    fn left_right_group_binds_trailing_script() {
+        // |x|^3 → Superscript{ base: Paren, sup: 3 } (orphan 아님)
+        let ast = parse("left | x right | ^3");
+        let s = format!("{:?}", ast);
+        assert!(
+            s.contains("Superscript") && s.contains("Paren") && !s.contains("base: Empty"),
+            "|x|^3 의 ^3 가 Paren 그룹에 결합돼야 함(orphan 금지): {s}"
+        );
+
+        // |x|_3 → Subscript{ base: Paren, sub: 3 }
+        let sub = format!("{:?}", parse("left | x right | _3"));
+        assert!(
+            sub.contains("Subscript") && sub.contains("Paren") && !sub.contains("base: Empty"),
+            "|x|_3 의 _3 가 Paren 그룹에 결합돼야 함: {sub}"
+        );
+
+        // 회귀 가드: x^2 는 영향 없음
+        let x2 = format!("{:?}", parse("x^2"));
+        assert!(x2.contains("Superscript"), "x^2 정상: {x2}");
+    }
+
     #[test]
     fn test_simple_fraction() {
         let ast = parse("1 over 2");
