@@ -522,6 +522,16 @@ fn issue_1139_endnote_spacing_reference_files_match_hancom_page_counts() {
         "raw_unknown은 한컴 UI '미주 사이' 값이어야 함"
     );
     assert_eq!(below20_doc.page_count(), 23, "구분선 아래 20mm 한컴 기준");
+    let below20_page22 = below20_doc.dump_page_items(Some(21));
+    let below20_page23 = below20_doc.dump_page_items(Some(22));
+    assert!(
+        below20_page22.contains("FullParagraph[미주]  pi=1163"),
+        "구분선 아래 20mm PDF 기준 문30 제목은 22쪽 오른쪽 단에서 시작해야 함\n{below20_page22}"
+    );
+    assert!(
+        !below20_page23.contains("FullParagraph[미주]  pi=1163"),
+        "구분선 아래 20mm 23쪽은 문30 후반 꼬리만 남아야 함\n{below20_page23}"
+    );
 
     let between20 =
         std::fs::read("samples/3-09월_교육_통합_2024-미주사이20.hwp").expect("between20");
@@ -538,6 +548,17 @@ fn issue_1139_endnote_spacing_reference_files_match_hancom_page_counts() {
         "raw_unknown은 한컴 UI '미주 사이' 값이어야 함"
     );
     assert_eq!(between20_doc.page_count(), 24, "미주 사이 20mm 한컴 기준");
+    let between20_page23 = between20_doc.dump_page_items(Some(22));
+    let between20_page24 = between20_doc.dump_page_items(Some(23));
+    assert!(
+        between20_page23.contains("FullParagraph[미주]  pi=1129")
+            && between20_page23.contains("FullParagraph[미주]  pi=1163"),
+        "미주 사이 20mm PDF 기준 23쪽에는 문29 시작과 문30 시작이 함께 배치되어야 함\n{between20_page23}"
+    );
+    assert!(
+        !between20_page24.contains("FullParagraph[미주]  pi=1163"),
+        "미주 사이 20mm 24쪽은 문30 시작이 아니라 꼬리 문단만 남아야 함\n{between20_page24}"
+    );
 }
 
 #[test]

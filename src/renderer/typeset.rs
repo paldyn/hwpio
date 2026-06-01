@@ -1891,9 +1891,10 @@ impl TypesetEngine {
             let mut emitted_endnote_separator = false;
             let mut emitted_endnote_count = 0usize;
             let mut last_render_endnote_para_local_idx: Option<usize> = None;
-            let compact_endnote_separator_profile = endnote_shape
-                .map(endnote_has_compact_separator_below)
-                .unwrap_or(true);
+            // 이 플래그는 "시험지 미주 흐름"의 split/rewind 보정 사용 여부다.
+            // 구분선 아래 여백이 20mm처럼 커도 문항 미주 흐름 자체는 같은
+            // 정책을 타야 하므로 separator 크기와 분리한다.
+            let compact_endnote_separator_profile = endnote_shape.is_some();
 
             for en_ref in &endnote_refs {
                 if let Some(para) = paragraphs.get(en_ref.para_index) {
@@ -1912,10 +1913,10 @@ impl TypesetEngine {
                                         color: shape.separator_color,
                                     });
                                     st.current_endnote_flow = true;
-                                    // 한컴의 미주 lineSeg vpos에는 구분선 이후 미주 본문
-                                    // 위치가 이미 반영되어 있다. 페이지 분할 높이에 다시
-                                    // 더하면 3-09월 샘플이 24쪽으로 밀리므로 렌더 단계의
-                                    // 시각 오프셋으로만 소비한다.
+                                    if !endnote_has_compact_separator_below(shape) {
+                                        st.current_height += sep_height;
+                                        st.current_start_height = st.current_height;
+                                    }
                                 }
                             }
                             emitted_endnote_separator = true;
@@ -2042,9 +2043,8 @@ impl TypesetEngine {
                                         .unwrap_or(0);
                                     let extra_gap = (between_notes - prev_spacing).max(0);
                                     if extra_gap > 0 {
-                                        let pagination_gap = (between_notes
-                                            - ENDNOTE_BETWEEN_NOTES_BASE_FLOW_HU)
-                                            .max(0);
+                                        let pagination_gap =
+                                            endnote_between_notes_pagination_margin(shape);
                                         if pagination_gap > 0 {
                                             vpos_offset += pagination_gap;
                                         }
@@ -5643,6 +5643,17 @@ fn endnote_between_notes_margin(shape: &FootnoteShape) -> u16 {
 // 미주 묶음 vpos에 반영할 때 한컴오피스의 24쪽 분기와 맞는다.
 const ENDNOTE_BETWEEN_NOTES_BASE_FLOW_HU: i32 = 1984;
 const ENDNOTE_COMPACT_SEPARATOR_BELOW_MAX_HU: i16 = 1000;
+
+fn endnote_between_notes_pagination_margin(shape: &FootnoteShape) -> i32 {
+    let extra =
+        (endnote_between_notes_margin(shape) as i32 - ENDNOTE_BETWEEN_NOTES_BASE_FLOW_HU).max(0);
+    // HWP5 line-seg vpos에는 커진 미주 사이 간격의 일부가 이미 반영되어
+    // 있다. 초과분 전체를 예약하면 렌더 line_spacing과 중복되고, 전혀
+    // 예약하지 않으면 20mm 저장본의 24쪽 분기가 사라진다. 페이지네이터는
+    // 초과분의 공통 예약 몫만 잡고 나머지는 직전 문단 line_spacing이
+    // 렌더에서 소비한다.
+    extra * 3 / 4
+}
 
 fn endnote_has_compact_separator_below(shape: &FootnoteShape) -> bool {
     endnote_separator_below_margin(shape) <= ENDNOTE_COMPACT_SEPARATOR_BELOW_MAX_HU
