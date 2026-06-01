@@ -5404,6 +5404,27 @@ impl HwpDocument {
         .map_err(|e| e.into())
     }
 
+    /// 내부 클립보드의 내용을 cellPath가 가리키는 중첩 표 셀에 붙여넣는다.
+    ///
+    /// 반환값: JSON `{"ok":true,"cellParaIdx":<idx>,"charOffset":<offset>}`
+    #[wasm_bindgen(js_name = pasteInternalInCellByPath)]
+    pub fn paste_internal_in_cell_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        char_offset: u32,
+    ) -> Result<String, JsValue> {
+        let path = DocumentCore::parse_cell_path(path_json)?;
+        self.paste_internal_in_cell_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
+            char_offset as usize,
+        )
+        .map_err(|e| e.into())
+    }
+
     /// 선택 영역을 HTML 문자열로 변환한다 (본문).
     #[wasm_bindgen(js_name = exportSelectionHtml)]
     pub fn export_selection_html(
@@ -5534,6 +5555,27 @@ impl HwpDocument {
             control_idx as usize,
             cell_idx as usize,
             cell_para_idx as usize,
+            char_offset as usize,
+            html,
+        )
+        .map_err(|e| e.into())
+    }
+
+    /// HTML 문자열을 파싱하여 cellPath가 가리키는 중첩 표 셀에 삽입한다.
+    #[wasm_bindgen(js_name = pasteHtmlInCellByPath)]
+    pub fn paste_html_in_cell_by_path(
+        &mut self,
+        section_idx: u32,
+        parent_para_idx: u32,
+        path_json: &str,
+        char_offset: u32,
+        html: &str,
+    ) -> Result<String, JsValue> {
+        let path = DocumentCore::parse_cell_path(path_json)?;
+        self.paste_html_in_cell_by_path_native(
+            section_idx as usize,
+            parent_para_idx as usize,
+            &path,
             char_offset as usize,
             html,
         )

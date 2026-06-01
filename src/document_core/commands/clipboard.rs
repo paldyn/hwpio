@@ -425,6 +425,53 @@ impl DocumentCore {
         )))
     }
 
+    fn paste_paragraphs_into_cell_paragraphs(
+        cell_paras: &mut Vec<Paragraph>,
+        cell_para_idx: usize,
+        char_offset: usize,
+        clip_paras: &[Paragraph],
+    ) -> Result<(usize, usize), HwpError> {
+        if cell_para_idx >= cell_paras.len() {
+            return Err(HwpError::RenderError(format!(
+                "셀 문단 {} 범위 초과",
+                cell_para_idx
+            )));
+        }
+
+        let clip_count = clip_paras.len();
+        if clip_count == 1 && clip_paras[0].controls.is_empty() {
+            let clip_text = clip_paras[0].text.clone();
+            let new_chars = clip_text.chars().count();
+
+            cell_paras[cell_para_idx].insert_text_at(char_offset, &clip_text);
+
+            let clip_char_shapes = clip_paras[0].char_shapes.clone();
+            let clip_char_offsets = clip_paras[0].char_offsets.clone();
+            Self::apply_clipboard_char_shapes_to_para(
+                &mut cell_paras[cell_para_idx],
+                char_offset,
+                &clip_char_shapes,
+                &clip_char_offsets,
+                new_chars,
+            );
+
+            return Ok((cell_para_idx, char_offset + new_chars));
+        }
+
+        let right_half = cell_paras[cell_para_idx].split_at(char_offset);
+        cell_paras[cell_para_idx].merge_from(&clip_paras[0]);
+
+        let mut insert_idx = cell_para_idx + 1;
+        for clip_para in clip_paras.iter().skip(1) {
+            cell_paras.insert(insert_idx, clip_para.clone());
+            insert_idx += 1;
+        }
+
+        let last_para_idx = insert_idx - 1;
+        let merge_point = cell_paras[last_para_idx].merge_from(&right_half);
+        Ok((last_para_idx, merge_point))
+    }
+
     /// 내부 클립보드의 내용을 표 셀 내부에 붙여넣는다.
     pub fn paste_internal_in_cell_native(
         &mut self,
@@ -440,134 +487,51 @@ impl DocumentCore {
             _ => return Ok("{\"ok\":false,\"error\":\"clipboard empty\"}".to_string()),
         };
 
-        // 셀 접근 검증
-        let cell_para_count = {
+        let (last_para_idx, merge_point) = {
             let section =
-                self.document.sections.get(section_idx).ok_or_else(|| {
+                self.document.sections.get_mut(section_idx).ok_or_else(|| {
                     HwpError::RenderError(format!("구역 {} 범위 초과", section_idx))
                 })?;
-            let para = section.paragraphs.get(parent_para_idx).ok_or_else(|| {
+            section.raw_stream = None;
+            let para = section.paragraphs.get_mut(parent_para_idx).ok_or_else(|| {
                 HwpError::RenderError(format!("문단 {} 범위 초과", parent_para_idx))
             })?;
-            match para.controls.get(control_idx) {
-                Some(Control::Table(t)) => {
-                    let cell = t.cells.get(cell_idx).ok_or_else(|| {
-                        HwpError::RenderError(format!("셀 {} 범위 초과", cell_idx))
-                    })?;
-                    cell.paragraphs.len()
-                }
-                Some(Control::Shape(s)) => {
-                    let tb = super::super::helpers::get_textbox_from_shape(s)
-                        .ok_or_else(|| HwpError::RenderError("글상자 없음".to_string()))?;
-                    tb.paragraphs.len()
-                }
-                Some(Control::Picture(p)) => {
-                    let cap = p
-                        .caption
-                        .as_ref()
-                        .ok_or_else(|| HwpError::RenderError("캡션 없음".to_string()))?;
-                    cap.paragraphs.len()
-                }
-                _ => return Err(HwpError::RenderError("표/글상자/캡션이 아님".to_string())),
-            }
-        };
-        if cell_para_idx >= cell_para_count {
-            return Err(HwpError::RenderError(format!(
-                "셀 문단 {} 범위 초과",
-                cell_para_idx
-            )));
-        }
-
-        self.document.sections[section_idx].raw_stream = None;
-
-        let clip_count = clip_paras.len();
-
-        // 셀 문단에 대한 가변 참조 얻기
-        let cell_paras = {
-            let section = &mut self.document.sections[section_idx];
-            let para = &mut section.paragraphs[parent_para_idx];
-            match &mut para.controls[control_idx] {
-                Control::Table(t) => &mut t.cells[cell_idx].paragraphs,
-                Control::Shape(s) => {
-                    &mut super::super::helpers::get_textbox_from_shape_mut(s)
-                        .unwrap()
+            let control = para.controls.get_mut(control_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("컨트롤 {} 범위 초과", control_idx))
+            })?;
+            let cell_paras = match control {
+                Control::Table(t) => {
+                    &mut t
+                        .cells
+                        .get_mut(cell_idx)
+                        .ok_or_else(|| HwpError::RenderError(format!("셀 {} 범위 초과", cell_idx)))?
                         .paragraphs
                 }
-                Control::Picture(p) => &mut p.caption.as_mut().unwrap().paragraphs,
-                _ => unreachable!(),
-            }
+                Control::Shape(s) => {
+                    &mut super::super::helpers::get_textbox_from_shape_mut(s)
+                        .ok_or_else(|| HwpError::RenderError("글상자 없음".to_string()))?
+                        .paragraphs
+                }
+                Control::Picture(p) => {
+                    &mut p
+                        .caption
+                        .as_mut()
+                        .ok_or_else(|| HwpError::RenderError("캡션 없음".to_string()))?
+                        .paragraphs
+                }
+                _ => return Err(HwpError::RenderError("표/글상자/캡션이 아님".to_string())),
+            };
+            Self::paste_paragraphs_into_cell_paragraphs(
+                cell_paras,
+                cell_para_idx,
+                char_offset,
+                &clip_paras,
+            )?
         };
 
-        if clip_count == 1 && clip_paras[0].controls.is_empty() {
-            // 단일 문단 텍스트 붙여넣기
-            let clip_text = clip_paras[0].text.clone();
-            let new_chars = clip_text.chars().count();
-
-            cell_paras[cell_para_idx].insert_text_at(char_offset, &clip_text);
-
-            // 클립보드 글자 모양 적용
-            let clip_char_shapes = clip_paras[0].char_shapes.clone();
-            let clip_char_offsets = clip_paras[0].char_offsets.clone();
-            Self::apply_clipboard_char_shapes_to_para(
-                &mut cell_paras[cell_para_idx],
-                char_offset,
-                &clip_char_shapes,
-                &clip_char_offsets,
-                new_chars,
-            );
-
-            // 셀 리플로우
-            let _ = cell_paras;
-            self.reflow_cell_paragraph(
-                section_idx,
-                parent_para_idx,
-                control_idx,
-                cell_idx,
-                cell_para_idx,
-            );
-            // 부모 컨트롤 dirty 마킹 + 재페이지네이션
-            match self.document.sections[section_idx].paragraphs[parent_para_idx]
-                .controls
-                .get_mut(control_idx)
-            {
-                Some(Control::Table(t)) => {
-                    t.dirty = true;
-                }
-                _ => {}
-            }
-            self.mark_section_dirty(section_idx);
-            self.paginate_if_needed();
-
-            let new_offset = char_offset + new_chars;
-            self.event_log.push(DocumentEvent::ContentPasted {
-                section: section_idx,
-                para: parent_para_idx,
-            });
-            return Ok(super::super::helpers::json_ok_with(&format!(
-                "\"cellParaIdx\":{},\"charOffset\":{}",
-                cell_para_idx, new_offset
-            )));
-        }
-
-        // 다중 문단 붙여넣기
-        let right_half = cell_paras[cell_para_idx].split_at(char_offset);
-        cell_paras[cell_para_idx].merge_from(&clip_paras[0]);
-
-        let mut insert_idx = cell_para_idx + 1;
-        for i in 1..clip_count {
-            cell_paras.insert(insert_idx, clip_paras[i].clone());
-            insert_idx += 1;
-        }
-
-        let last_para_idx = insert_idx - 1;
-        let merge_point = cell_paras[last_para_idx].merge_from(&right_half);
-
-        // 셀 리플로우 (모든 영향받는 문단)
-        let _ = cell_paras;
         for i in cell_para_idx..=last_para_idx {
             self.reflow_cell_paragraph(section_idx, parent_para_idx, control_idx, cell_idx, i);
         }
-        // 부모 컨트롤 dirty 마킹 + 재페이지네이션
         match self.document.sections[section_idx].paragraphs[parent_para_idx]
             .controls
             .get_mut(control_idx)
@@ -577,6 +541,50 @@ impl DocumentCore {
             }
             _ => {}
         }
+        self.mark_section_dirty(section_idx);
+        self.paginate_if_needed();
+
+        self.event_log.push(DocumentEvent::ContentPasted {
+            section: section_idx,
+            para: parent_para_idx,
+        });
+        Ok(super::super::helpers::json_ok_with(&format!(
+            "\"cellParaIdx\":{},\"charOffset\":{}",
+            last_para_idx, merge_point
+        )))
+    }
+
+    /// 내부 클립보드의 내용을 cellPath가 가리키는 중첩 표 셀에 붙여넣는다.
+    pub fn paste_internal_in_cell_by_path_native(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        path: &[(usize, usize, usize)],
+        char_offset: usize,
+    ) -> Result<String, HwpError> {
+        let clip_paras = match &self.clipboard {
+            Some(c) if !c.paragraphs.is_empty() => c.paragraphs.clone(),
+            _ => return Ok("{\"ok\":false,\"error\":\"clipboard empty\"}".to_string()),
+        };
+        if path.is_empty() {
+            return Err(HwpError::RenderError("경로가 비어있습니다".to_string()));
+        }
+
+        let cell_para_idx = path[path.len() - 1].2;
+        let (last_para_idx, merge_point) = {
+            let cell_paras =
+                self.get_cell_paragraphs_mut_by_path(section_idx, parent_para_idx, path)?;
+            Self::paste_paragraphs_into_cell_paragraphs(
+                cell_paras,
+                cell_para_idx,
+                char_offset,
+                &clip_paras,
+            )?
+        };
+
+        let outer_ctrl = path[0].0;
+        self.mark_cell_control_dirty(section_idx, parent_para_idx, outer_ctrl);
+        self.document.sections[section_idx].raw_stream = None;
         self.mark_section_dirty(section_idx);
         self.paginate_if_needed();
 
