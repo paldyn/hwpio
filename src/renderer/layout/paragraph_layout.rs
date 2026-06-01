@@ -3568,6 +3568,24 @@ impl LayoutEngine {
                     .get(line_idx + 1)
                     .map(|l| l.char_start)
                     .unwrap_or(usize::MAX);
+                // [#1221] 모든 줄이 빈 runs(수식만)이고 줄 char_start 가 비구분(degenerate,
+                // 예: 셀 z-표처럼 줄별 LINE_SEG.text_start 가 전부 0)일 때 char 범위로는
+                // tac→줄 매핑이 깨진다(첫 줄 빈 범위 → 마지막 줄이 모든 수식 흡수, 행 겹침).
+                // 줄 개수 == tac 개수면 순서(line_idx)대로 1:1 매핑한다.
+                let index_based_tac = composed.lines.len() > 1
+                    && composed.lines.len() == tac_offsets_px.len()
+                    && composed.lines.iter().all(|l| l.runs.is_empty())
+                    && composed
+                        .lines
+                        .windows(2)
+                        .any(|w| w[1].char_start <= w[0].char_start);
+                let tac_on_line = |k: usize, pos: usize| -> bool {
+                    if index_based_tac {
+                        k == line_idx
+                    } else {
+                        pos >= line_start_char && pos < line_end_char
+                    }
+                };
                 // [Task #490] paragraph alignment 적용. 셀에 텍스트 없이 수식만 있을 때
                 // (text_len=0 + ctrls=1+) 정렬이 무시되어 좌측 고정되던 결함 수정.
                 // exam_science p1 3번 표 (이온 결합 화합물) 셀 7/11 의 28/36 수식이
@@ -3575,8 +3593,9 @@ impl LayoutEngine {
                 // [Task #489] effective_col_x 적용 (Picture+Square wrap LINE_SEG cs/sw 좁은 영역).
                 let line_tac_width: f64 = tac_offsets_px
                     .iter()
-                    .filter(|(pos, _, _)| *pos >= line_start_char && *pos < line_end_char)
-                    .map(|(_, w, _)| *w)
+                    .enumerate()
+                    .filter(|(k, (pos, _, _))| tac_on_line(*k, *pos))
+                    .map(|(_, (_, w, _))| *w)
                     .sum();
                 let align_offset = match alignment {
                     Alignment::Center | Alignment::Distribute => {
@@ -3586,8 +3605,8 @@ impl LayoutEngine {
                     _ => 0.0,
                 };
                 let mut inline_x = effective_col_x + effective_margin_left + align_offset;
-                for &(tac_pos, tac_w, tac_ci) in &tac_offsets_px {
-                    if tac_pos < line_start_char || tac_pos >= line_end_char {
+                for (tac_k, &(tac_pos, tac_w, tac_ci)) in tac_offsets_px.iter().enumerate() {
+                    if !tac_on_line(tac_k, tac_pos) {
                         continue;
                     }
                     if let Some(p) = para {
