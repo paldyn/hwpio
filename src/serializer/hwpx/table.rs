@@ -572,4 +572,81 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn cell_para_ids_continue_from_context_counter() {
+        // 컨텍스트 카운터를 5 앞당긴 뒤 직렬화하면 셀 문단 id가 5부터 시작해야 함.
+        // 본문 문단이 먼저 id 0~4를 소비한 상황을 모사한다.
+        let doc = Document::default();
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        for _ in 0..5 {
+            ctx.next_para_id();
+        }
+        let t = empty_table(1, 2); // 셀 2개 × 문단 1개 → id=5, id=6 이어야 함
+        let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
+        write_table(&mut w, &t, &mut ctx).unwrap();
+        let xml = String::from_utf8(w.into_inner()).unwrap();
+        assert!(
+            xml.contains(r#"<hp:p id="5""#),
+            "첫 셀 문단은 id=5 여야 함 (카운터 오프셋 5): {}",
+            &xml[..xml.len().min(600)]
+        );
+        assert!(
+            xml.contains(r#"<hp:p id="6""#),
+            "두 번째 셀 문단은 id=6 여야 함"
+        );
+    }
+
+    #[test]
+    fn two_sequential_tables_have_no_para_id_collision() {
+        // 같은 ctx로 표 두 개를 연달아 직렬화 — 두 번째 표가 카운터를 초기화하면
+        // id=0 이 2번 나타나므로 회귀를 탐지할 수 있다.
+        let doc = Document::default();
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
+        write_table(&mut w, &empty_table(2, 2), &mut ctx).unwrap(); // id 0-3
+        write_table(&mut w, &empty_table(2, 2), &mut ctx).unwrap(); // id 4-7
+        let xml = String::from_utf8(w.into_inner()).unwrap();
+
+        assert_eq!(
+            xml.matches(r#"<hp:p id="0""#).count(),
+            1,
+            "id=0 이 중복 — 두 번째 표가 카운터를 재사용했을 가능성"
+        );
+        for expected_id in 0..8u32 {
+            assert!(
+                xml.contains(&format!(r#"<hp:p id="{}""#, expected_id)),
+                "id={} 가 없음 (총 8개 문단이어야 함)",
+                expected_id
+            );
+        }
+    }
+
+    #[test]
+    fn multi_para_cells_all_get_unique_ids() {
+        // 셀당 문단 3개, 2×2 표 → 총 12개 문단, id=0..11 전부 1회씩
+        let doc = Document::default();
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let mut t = empty_table(2, 2);
+        for cell in &mut t.cells {
+            cell.paragraphs.push(Paragraph::default());
+            cell.paragraphs.push(Paragraph::default());
+        }
+        let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
+        write_table(&mut w, &t, &mut ctx).unwrap();
+        let xml = String::from_utf8(w.into_inner()).unwrap();
+
+        let p_count = xml.matches("<hp:p ").count();
+        assert_eq!(p_count, 12, "문단 수가 12여야 함: {}", p_count);
+
+        for expected_id in 0..12u32 {
+            assert_eq!(
+                xml.matches(&format!(r#"<hp:p id="{}""#, expected_id))
+                    .count(),
+                1,
+                "id={} 가 없거나 중복됨",
+                expected_id
+            );
+        }
+    }
 }
