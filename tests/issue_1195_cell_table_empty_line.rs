@@ -81,7 +81,10 @@ fn translate_y(tag: &str) -> Option<f64> {
     let i = tag.find("translate(")? + "translate(".len();
     let rest = &tag[i..];
     let j = rest.find(')')?;
-    let parts: Vec<&str> = rest[..j].split([',', ' ']).filter(|s| !s.is_empty()).collect();
+    let parts: Vec<&str> = rest[..j]
+        .split([',', ' '])
+        .filter(|s| !s.is_empty())
+        .collect();
     parts.get(1).and_then(|s| s.trim().parse().ok())
 }
 

@@ -2741,24 +2741,23 @@ impl LayoutEngine {
                                         // 이미지 TAC 분기(L2231)와 동일하게 para_y_before_compose 에
                                         // (표 line_seg.vpos − 첫 line_seg.vpos) 상대 오프셋을 더한다.
                                         // (para_y_before_compose 에 이미 ls[0].vpos 가 누적되어 있음.)
-                                        let table_anchor_y = if has_preceding_text
-                                            && para.line_segs.len() > 1
-                                        {
-                                            let first_vpos = para
-                                                .line_segs
-                                                .first()
-                                                .map(|f| f.vertical_pos)
-                                                .unwrap_or(0);
-                                            let tbl_vpos = para
-                                                .line_segs
-                                                .last()
-                                                .map(|s| s.vertical_pos)
-                                                .unwrap_or(first_vpos);
-                                            para_y_before_compose
-                                                + hwpunit_to_px(tbl_vpos - first_vpos, self.dpi)
-                                        } else {
-                                            para_y_before_compose
-                                        };
+                                        let table_anchor_y =
+                                            if has_preceding_text && para.line_segs.len() > 1 {
+                                                let first_vpos = para
+                                                    .line_segs
+                                                    .first()
+                                                    .map(|f| f.vertical_pos)
+                                                    .unwrap_or(0);
+                                                let tbl_vpos = para
+                                                    .line_segs
+                                                    .last()
+                                                    .map(|s| s.vertical_pos)
+                                                    .unwrap_or(first_vpos);
+                                                para_y_before_compose
+                                                    + hwpunit_to_px(tbl_vpos - first_vpos, self.dpi)
+                                            } else {
+                                                para_y_before_compose
+                                            };
                                         let ctrl_area = LayoutRect {
                                             x: inline_x,
                                             y: table_anchor_y,
