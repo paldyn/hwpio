@@ -3893,6 +3893,16 @@ fn parse_ctrl_footnote(
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"number" => note.number = parse_u16(&attr),
+            // [#1199] prefixChar(코드포인트 숫자) → before_decoration_letter
+            // 누락 시 0 유지(접두 없음). 예: "47928" = 0xBB38 '문'
+            b"prefixChar" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u16>()
+                {
+                    note.before_decoration_letter = v;
+                }
+            }
             b"suffixChar" => {
                 if let Ok(v) = std::str::from_utf8(&attr.value)
                     .unwrap_or("")
@@ -3927,6 +3937,16 @@ fn parse_ctrl_endnote(
     for attr in e.attributes().flatten() {
         match attr.key.as_ref() {
             b"number" => note.number = parse_u16(&attr),
+            // [#1199] prefixChar(코드포인트 숫자) → before_decoration_letter
+            // 누락 시 0 유지(접두 없음). 예: "47928" = 0xBB38 '문'
+            b"prefixChar" => {
+                if let Ok(v) = std::str::from_utf8(&attr.value)
+                    .unwrap_or("")
+                    .parse::<u16>()
+                {
+                    note.before_decoration_letter = v;
+                }
+            }
             b"suffixChar" => {
                 if let Ok(v) = std::str::from_utf8(&attr.value)
                     .unwrap_or("")
@@ -5077,6 +5097,104 @@ mod tests {
             850
         );
         assert_eq!(section.section_def.endnote_shape.note_spacing, 567);
+    }
+
+    /// [#1199] HWPX 미주/각주 ctrl 의 prefixChar(코드포인트 숫자) 가
+    /// before_decoration_letter 로 매핑되어야 한다. 누락 시 마커 접두문자('문')가 탈락.
+    #[test]
+    fn test_parse_note_prefix_char_maps_to_before_decoration_letter() {
+        // prefixChar="47928"(0xBB38 '문'), suffixChar="65289"(0xFF09 '）')
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ctrl>
+        <hp:endNote number="1" prefixChar="47928" suffixChar="65289" instId="100">
+          <hp:subList>
+            <hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>note body</hp:t></hp:run></hp:p>
+          </hp:subList>
+        </hp:endNote>
+      </hp:ctrl>
+      <hp:ctrl>
+        <hp:footNote number="1" prefixChar="47928" suffixChar="65289" instId="200">
+          <hp:subList>
+            <hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>note body</hp:t></hp:run></hp:p>
+          </hp:subList>
+        </hp:footNote>
+      </hp:ctrl>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let controls: Vec<&Control> = section
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.controls.iter())
+            .collect();
+
+        let endnote = controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Endnote(n) => Some(n),
+                _ => None,
+            })
+            .expect("endnote ctrl");
+        assert_eq!(
+            endnote.before_decoration_letter, 47928,
+            "endnote prefixChar"
+        );
+        assert_eq!(endnote.after_decoration_letter, 65289, "endnote suffixChar");
+
+        let footnote = controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Footnote(n) => Some(n),
+                _ => None,
+            })
+            .expect("footnote ctrl");
+        assert_eq!(
+            footnote.before_decoration_letter, 47928,
+            "footnote prefixChar"
+        );
+        assert_eq!(
+            footnote.after_decoration_letter, 65289,
+            "footnote suffixChar"
+        );
+    }
+
+    /// [#1199] prefixChar 속성이 없으면 before_decoration_letter 는 0(접두 없음) 유지 — 회귀 방지.
+    #[test]
+    fn test_parse_note_without_prefix_char_keeps_zero_before_letter() {
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"
+        xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">
+  <hp:p paraPrIDRef="0" styleIDRef="0">
+    <hp:run charPrIDRef="0">
+      <hp:ctrl>
+        <hp:endNote number="1" suffixChar="41" instId="100">
+          <hp:subList>
+            <hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>x</hp:t></hp:run></hp:p>
+          </hp:subList>
+        </hp:endNote>
+      </hp:ctrl>
+    </hp:run>
+  </hp:p>
+</hs:sec>"##;
+
+        let section = parse_hwpx_section(xml).unwrap();
+        let endnote = section
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.controls.iter())
+            .find_map(|c| match c {
+                Control::Endnote(n) => Some(n),
+                _ => None,
+            })
+            .expect("endnote ctrl");
+        assert_eq!(endnote.before_decoration_letter, 0);
+        assert_eq!(endnote.after_decoration_letter, 41); // ')'
     }
 
     #[test]
