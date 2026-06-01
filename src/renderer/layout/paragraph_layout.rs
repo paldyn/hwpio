@@ -1772,6 +1772,14 @@ impl LayoutEngine {
                 }
                 // treat_as_char 분기점 처리: run 내 tac 위치에서 이미지 폭 삽입
                 // 마지막 run에서는 run_char_end 위치의 TAC도 포함
+                //
+                // [Task #1219] TAC 소스를 줄-경계 정규 집합 `line_tac_offsets`
+                // (= tac_offsets_for_line, 렌더 경로와 동일한 `pos < 다음 줄 시작`
+                // 엄격 미만 규칙)로 통일한다. 전역 tac_offsets_px 를 run 경계로
+                // 재필터링하면 줄 끝 위치(== 다음 줄 선두)의 수식이 현재 줄 폭에
+                // 오포함되어(문26 라인0 에 다음 줄 `a₁=b₁=1` 55px) 거짓 오버플로우
+                // → 본문 한글 압축이 발생했다. line_tac_offsets 는 이미 줄-범위로
+                // 필터링되어 있으므로 run 범위 필터만 적용한다.
                 let run_chars_est: Vec<char> = run.text.chars().collect();
                 let mut seg_start_est = 0usize;
                 let is_last_run_est_tac = run_char_end_est
@@ -1781,7 +1789,7 @@ impl LayoutEngine {
                         .map(|r| r.text.chars().count())
                         .sum::<usize>()
                         + comp_line.char_start;
-                for &(tac_abs_pos, tac_w, _) in tac_offsets_px.iter().filter(|(pos, _, _)| {
+                for &(tac_abs_pos, tac_w, _) in line_tac_offsets.iter().filter(|(pos, _, _)| {
                     *pos >= run_char_pos_est
                         && (*pos < run_char_end_est
                             || (is_last_run_est_tac && *pos == run_char_end_est))
@@ -1877,6 +1885,20 @@ impl LayoutEngine {
                         .sum::<usize>()
                         + comp_line.char_start;
                 for &(fpos, fnum, ctrl_idx) in composed.footnote_positions.iter() {
+                    // [Task #1219 Stage 1b] 선두 미주 마커는 endnote_marker_x_advance
+                    // 가 풀사이즈 선두 마커로 렌더하고 그 폭을 inline_offset 에 이미
+                    // 반영했다(available_width 에서 차감). 렌더 경로는 이 미주의 인라인
+                    // 위첨자를 그리지 않으므로(문26 "공" x=78=선두 마커 끝), 측정에서도
+                    // est_x 에 위첨자 폭을 더하면 이중 계상 → 거짓 오버플로우.
+                    // start_line==0 의 미주(= endnote_marker_x_advance 처리 대상)는 제외.
+                    let is_leading_endnote_marker = start_line == 0
+                        && matches!(
+                            para.and_then(|p| p.controls.get(ctrl_idx)),
+                            Some(Control::Endnote(_))
+                        );
+                    if is_leading_endnote_marker {
+                        continue;
+                    }
                     if fpos >= run_char_pos_est
                         && (fpos < run_char_end_est
                             || (is_last_run_est && fpos == run_char_end_est))
@@ -1902,20 +1924,11 @@ impl LayoutEngine {
             let mut total_text_width = (est_x - est_x_start).max(0.0);
             // TAC 이미지/Shape 폭이 est_x에 미포함된 경우 별도 추가
             // (이미지가 텍스트 끝 위치에 있으면 run 범위 필터에서 제외됨)
-            let total_tac_width_in_line: f64 = tac_offsets_px
-                .iter()
-                .filter(|(pos, _, _)| {
-                    let line_start = comp_line.char_start;
-                    let line_end = line_start
-                        + comp_line
-                            .runs
-                            .iter()
-                            .map(|r| r.text.chars().count())
-                            .sum::<usize>();
-                    *pos >= line_start && *pos <= line_end
-                })
-                .map(|(_, w, _)| w)
-                .sum();
+            //
+            // [Task #1219] 줄-경계 정규 집합 line_tac_offsets 로 통일.
+            // 기존 `pos <= line_end` 는 줄 끝 위치(다음 줄 선두) 수식을 포함하는
+            // 동일 결함을 가졌다. line_tac_offsets 는 이미 줄-범위 집합이므로 폭만 합산.
+            let total_tac_width_in_line: f64 = line_tac_offsets.iter().map(|(_, w, _)| w).sum();
             if total_tac_width_in_line > 0.0 && total_text_width < total_tac_width_in_line {
                 total_text_width += total_tac_width_in_line;
             }
