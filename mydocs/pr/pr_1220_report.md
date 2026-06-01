@@ -34,9 +34,10 @@ wrap-around 누적과 결합 안 함(함정은 그림+누적). 표 호스트 한
 | 전체 테스트 `cargo test --tests` | ✅ **1924 passed, 0 failed** (svg_snapshot / issue_546 wrap_around 회귀 포함) |
 | **exam_science 회귀(double advance)** | ✅ 4쪽/37items/45items 보정 전후 동일 |
 | **문26 겹침 해소(정량)** | ✅ 최하단 ① y 906.3(문제끝줄 904.7 겹침) → 922.8(18px 분리) |
-| **시각 판정** | ✅ **통과** (작업지시자, 4쪽 ①~⑤ 분리 ↔ 한글 2022 PDF) |
+| **시각 판정 (SVG)** | ✅ **통과** (작업지시자, 4쪽 ①~⑤ 분리 ↔ 한글 2022 PDF) |
+| **시각 판정 (rhwp-studio)** | ✅ **통과** (WASM 재빌드 후 편집기 canvas 경로 — SVG/편집기 양쪽 정합) |
 | CI(PR) | ✅ 전부 PASS |
-| WASM | (머지 후 빌드 — 렌더 경로 변경) |
+| WASM | ✅ pkg 빌드 (5,443,309 bytes) — 렌더 경로 변경 노출 |
 
 산출물: `output/poc/pr1220/{before,after}/3-09월_교육_통합_2023_004.svg`.
 
