@@ -273,6 +273,155 @@ fn para_has_treat_as_char_picture_or_shape(para: &Paragraph) -> bool {
     })
 }
 
+fn non_tac_square_picture_common(ctrl: &Control) -> Option<&crate::model::shape::CommonObjAttr> {
+    let common = match ctrl {
+        Control::Picture(pic) => Some(&pic.common),
+        Control::Shape(shape) => {
+            if let crate::model::shape::ShapeObject::Picture(pic) = shape.as_ref() {
+                Some(&pic.common)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }?;
+    (!common.treat_as_char && matches!(common.text_wrap, crate::model::shape::TextWrap::Square))
+        .then_some(common)
+}
+
+fn paragraph_by_global_index<'a>(
+    body_paragraphs: &'a [Paragraph],
+    endnote_paragraphs: &'a [Paragraph],
+    para_index: usize,
+) -> Option<&'a Paragraph> {
+    if para_index < body_paragraphs.len() {
+        body_paragraphs.get(para_index)
+    } else {
+        endnote_paragraphs.get(para_index - body_paragraphs.len())
+    }
+}
+
+fn square_picture_wrap_anchor_for_para(
+    st: &TypesetState,
+    body_paragraphs: &[Paragraph],
+    para: &Paragraph,
+    page_def: &PageDef,
+) -> Option<crate::renderer::pagination::WrapAnchorRef> {
+    if st.wrap_around_cs < 0 {
+        return None;
+    }
+
+    let para_cs = para.line_segs.first().map(|s| s.column_start).unwrap_or(0);
+    let para_sw = para
+        .line_segs
+        .first()
+        .map(|s| s.segment_width as i32)
+        .unwrap_or(0);
+    let is_empty_para = para
+        .text
+        .chars()
+        .all(|ch| ch.is_whitespace() || ch == '\r' || ch == '\n')
+        && para.controls.is_empty();
+    let any_seg_matches = para.line_segs.iter().any(|s| {
+        s.column_start == st.wrap_around_cs && s.segment_width as i32 == st.wrap_around_sw
+    });
+    let body_w =
+        (page_def.width as i32) - (page_def.margin_left as i32) - (page_def.margin_right as i32);
+    let sw0_match = st.wrap_around_sw == 0 && is_empty_para && para_sw > 0 && para_sw < body_w / 2;
+
+    let anchor_para = paragraph_by_global_index(
+        body_paragraphs,
+        &st.endnote_paragraphs,
+        st.wrap_around_table_para,
+    )?;
+    let anchor_image_match = if st.wrap_around_cs == 0 {
+        let body_left = page_def.margin_left as i32;
+        let expected_cs_hu = anchor_para
+            .controls
+            .iter()
+            .find_map(|ctrl| {
+                non_tac_square_picture_common(ctrl).map(|common| {
+                    common.horizontal_offset as i32
+                        + common.width as i32
+                        + 2 * common.margin.right as i32
+                        - body_left
+                })
+            })
+            .unwrap_or(0);
+        expected_cs_hu > 0
+            && (para_cs - expected_cs_hu).abs() < 200
+            && para_sw > 0
+            && para_cs + para_sw <= body_w + 200
+    } else {
+        false
+    };
+    let cs_only_match = st.wrap_around_any_seg && para_cs == st.wrap_around_cs && para_sw > 0;
+    let matched = (para_cs == st.wrap_around_cs && para_sw == st.wrap_around_sw)
+        || (any_seg_matches && (is_empty_para || st.wrap_around_any_seg))
+        || sw0_match
+        || anchor_image_match
+        || cs_only_match;
+    if !matched {
+        return None;
+    }
+
+    let anchor_image_margin_right = anchor_para.controls.iter().find_map(|ctrl| {
+        non_tac_square_picture_common(ctrl).map(|common| common.margin.right as i32)
+    })?;
+    Some(crate::renderer::pagination::WrapAnchorRef {
+        anchor_para_index: st.wrap_around_table_para,
+        anchor_cs: st.wrap_around_cs,
+        anchor_sw: st.wrap_around_sw,
+        anchor_image_margin_right,
+    })
+}
+
+fn maybe_register_square_picture_wrap_anchor(
+    st: &mut TypesetState,
+    body_paragraphs: &[Paragraph],
+    para: &Paragraph,
+    para_index: usize,
+    page_def: &PageDef,
+) {
+    if st.wrap_around_cs < 0 {
+        return;
+    }
+    if let Some(anchor) = square_picture_wrap_anchor_for_para(st, body_paragraphs, para, page_def) {
+        st.current_column_wrap_anchors.insert(para_index, anchor);
+    } else {
+        st.wrap_around_cs = -1;
+        st.wrap_around_sw = -1;
+        st.wrap_around_any_seg = false;
+    }
+}
+
+fn activate_square_picture_wrap_for_para(
+    st: &mut TypesetState,
+    para_index: usize,
+    para: &Paragraph,
+) {
+    if !para
+        .controls
+        .iter()
+        .any(|ctrl| non_tac_square_picture_common(ctrl).is_some())
+    {
+        return;
+    }
+
+    let anchor_cs = para.line_segs.first().map(|s| s.column_start).unwrap_or(0);
+    let anchor_sw = para
+        .line_segs
+        .first()
+        .map(|s| s.segment_width as i32)
+        .unwrap_or(0);
+    if anchor_cs > 0 || anchor_sw > 0 {
+        st.wrap_around_cs = anchor_cs;
+        st.wrap_around_sw = anchor_sw;
+        st.wrap_around_table_para = para_index;
+        st.wrap_around_any_seg = true;
+    }
+}
+
 fn composed_line_char_end(comp: &ComposedParagraph, line_idx: usize) -> usize {
     if let Some(next) = comp.lines.get(line_idx + 1) {
         return next.char_start;
@@ -295,6 +444,21 @@ fn char_pos_in_line(pos: usize, start: usize, end: usize) -> bool {
     } else {
         pos == start
     }
+}
+
+fn line_has_tac_control(comp: &ComposedParagraph, line_idx: usize) -> bool {
+    let Some(line) = comp.lines.get(line_idx) else {
+        return false;
+    };
+    let start = line.char_start;
+    let end = comp
+        .lines
+        .get(line_idx + 1)
+        .map(|next| next.char_start)
+        .unwrap_or(usize::MAX);
+    comp.tac_controls
+        .iter()
+        .any(|(pos, _, _)| char_pos_in_line(*pos, start, end))
 }
 
 fn tac_picture_or_shape_height_px(ctrl: &Control, dpi: f64) -> Option<f64> {
@@ -2447,6 +2611,13 @@ impl TypesetEngine {
                                 st.advance_column_or_new_page();
                                 prev_en_bottom_vpos = None;
                             }
+                            maybe_register_square_picture_wrap_anchor(
+                                &mut st,
+                                paragraphs,
+                                en_para,
+                                en_para_idx,
+                                page_def,
+                            );
                             // advance 후 재평가 — 새 단 첫 미주는 prev=None → 자체 높이.
                             let (_, en_advance) = compute_en_metrics(prev_en_bottom_vpos);
                             let mut split_endnote_emitted = false;
@@ -2518,6 +2689,7 @@ impl TypesetEngine {
                                 }
                                 st.current_height += en_advance;
                             }
+                            activate_square_picture_wrap_for_para(&mut st, en_para_idx, en_para);
                             // 다음 미주의 base 가 될 본 미주 bottom 기록.
                             if split_endnote_emitted {
                                 prev_en_bottom_vpos = None;
@@ -2700,7 +2872,10 @@ impl TypesetEngine {
             let mut prev_line_reserved_tac_picture_height: Option<f64> = None;
             for (line_idx, line) in comp.lines.iter().enumerate() {
                 let runs_all_whitespace = line.runs.iter().all(|r| r.text.trim().is_empty());
-                if has_picture_shape_square_wrap && runs_all_whitespace {
+                let line_has_tac_control = line_has_tac_control(comp, line_idx);
+                // Square wrap host 의 빈 wrap guide 줄은 높이를 제외하되, 같은 줄에
+                // TAC 수식/개체가 있으면 실제 콘텐츠 줄이므로 정상 advance 를 보존한다.
+                if has_picture_shape_square_wrap && runs_all_whitespace && !line_has_tac_control {
                     pairs.push((0.0, 0.0));
                     prev_line_reserved_tac_picture_height = None;
                     continue;

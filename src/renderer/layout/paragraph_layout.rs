@@ -89,6 +89,21 @@ fn char_pos_in_line(pos: usize, start: usize, end: usize) -> bool {
     }
 }
 
+fn line_has_tac_control(comp: &ComposedParagraph, line_idx: usize) -> bool {
+    let Some(line) = comp.lines.get(line_idx) else {
+        return false;
+    };
+    let start = line.char_start;
+    let end = comp
+        .lines
+        .get(line_idx + 1)
+        .map(|next| next.char_start)
+        .unwrap_or(usize::MAX);
+    comp.tac_controls
+        .iter()
+        .any(|(pos, _, _)| char_pos_in_line(*pos, start, end))
+}
+
 fn tac_offsets_for_line(
     comp: &ComposedParagraph,
     tac_offsets_px: &[(usize, f64, usize)],
@@ -4115,7 +4130,11 @@ impl LayoutEngine {
                 max_fs,
                 line_spacing_px,
             );
-            let skip_advance_empty_wrap = has_picture_shape_square_wrap && runs_all_whitespace;
+            // Square wrap host 의 빈 guide 줄은 advance 를 건너뛰지만, 같은 줄에
+            // TAC 수식/개체가 있으면 실제 콘텐츠 줄이므로 높이를 보존한다.
+            let skip_advance_empty_wrap = has_picture_shape_square_wrap
+                && runs_all_whitespace
+                && !line_has_tac_control(composed, line_idx);
             let skip_advance_empty_tac_picture = runs_all_whitespace
                 && current_line_reserved_tac_picture_height.is_none()
                 && prev_line_reserved_tac_picture_height

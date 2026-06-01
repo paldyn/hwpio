@@ -190,6 +190,48 @@ fn min_para_text_y(node: &RenderNode, para_index: usize) -> Option<f64> {
         .min_by(|a, b| a.partial_cmp(b).unwrap())
 }
 
+fn find_text_line_bbox(
+    node: &RenderNode,
+    para_index: usize,
+    line_index: u32,
+) -> Option<BoundingBox> {
+    if let RenderNodeType::TextLine(line) = &node.node_type {
+        if line.para_index == Some(para_index) && line.line_index == Some(line_index) {
+            return Some(node.bbox.clone());
+        }
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_text_line_bbox(child, para_index, line_index))
+}
+
+fn max_equation_bottom_in_region(
+    node: &RenderNode,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+) -> Option<f64> {
+    let own = match &node.node_type {
+        RenderNodeType::Equation(_)
+            if node.bbox.x >= x_min
+                && node.bbox.x < x_max
+                && node.bbox.y >= y_min
+                && node.bbox.y < y_max =>
+        {
+            Some(node.bbox.y + node.bbox.height)
+        }
+        _ => None,
+    };
+    own.into_iter()
+        .chain(
+            node.children.iter().filter_map(|child| {
+                max_equation_bottom_in_region(child, x_min, x_max, y_min, y_max)
+            }),
+        )
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+}
+
 fn max_para_content_bottom(node: &RenderNode, para_index: usize) -> Option<f64> {
     let own = match &node.node_type {
         RenderNodeType::TextLine(line) if line.para_index == Some(para_index) => {
@@ -871,6 +913,43 @@ fn issue_1139_page23_question30_picture_line_is_rendered() {
         picture.width > 250.0 && picture.height > 220.0 && picture.y < 160.0,
         "23쪽 시작 그림 bbox가 PDF 기준 위치/크기에서 벗어남: {:?}",
         picture
+    );
+}
+
+#[test]
+fn issue_1209_2022_sep_page13_question19_square_picture_wraps_following_text() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(12).expect("page 13 render tree");
+
+    let graph = find_image_bbox(&tree.root, 728, 0).expect("문19 그래프");
+    let answer_line = find_text_line_bbox(&tree.root, 729, 0).expect("문19 그래프 옆 첫 문단");
+    let explanation_line =
+        find_text_line_bbox(&tree.root, 730, 0).expect("문19 그래프 옆 설명 첫 줄");
+    let tail_formula_bottom = max_equation_bottom_in_region(
+        &tree.root,
+        answer_line.x - 1.0,
+        graph.x,
+        answer_line.y - 40.0,
+        answer_line.y,
+    )
+    .expect("문19 f(2) 꼬리 수식");
+
+    assert!(
+        answer_line.y < graph.y + graph.height && explanation_line.y < graph.y + graph.height,
+        "검증 대상 문단은 그래프 높이 범위 안에서 둘러싸기 배치되어야 함: graph={graph:?}, answer={answer_line:?}, explanation={explanation_line:?}"
+    );
+    assert!(
+        answer_line.y >= tail_formula_bottom + 1.0,
+        "문19 그래프 anchor 줄의 TAC 수식 높이를 예약해야 다음 문단과 겹치지 않음: formula_bottom={tail_formula_bottom}, answer={answer_line:?}"
+    );
+    assert!(
+        answer_line.x + answer_line.width <= graph.x + 0.5,
+        "문19 그래프 직후 문단은 한컴/PDF처럼 그래프 왼쪽 좁은 영역 안에 배치되어야 함: graph={graph:?}, line={answer_line:?}"
+    );
+    assert!(
+        explanation_line.x + explanation_line.width <= graph.x + 0.5,
+        "문19 설명 첫 줄이 그래프 영역을 침범하면 문단 겹침이 재발함: graph={graph:?}, line={explanation_line:?}"
     );
 }
 
