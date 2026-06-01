@@ -118,6 +118,31 @@ function handleNavigationShortcut(this: any, e: KeyboardEvent): boolean {
   return false;
 }
 
+function positionAfterPasteResult(pos: DocumentPosition, parsed: any): DocumentPosition {
+  const newPos: DocumentPosition = {
+    sectionIndex: pos.sectionIndex,
+    paragraphIndex: parsed.paraIdx ?? pos.paragraphIndex,
+    charOffset: parsed.charOffset ?? pos.charOffset,
+  };
+
+  if (pos.parentParaIndex !== undefined) {
+    const nextCellParaIndex = parsed.cellParaIdx ?? parsed.cellParaIndex ?? pos.cellParaIndex;
+    newPos.parentParaIndex = pos.parentParaIndex;
+    newPos.controlIndex = pos.controlIndex;
+    newPos.cellIndex = pos.cellIndex;
+    newPos.cellParaIndex = nextCellParaIndex;
+    if (pos.cellPath) {
+      newPos.cellPath = pos.cellPath.map((entry, index) =>
+        index === pos.cellPath!.length - 1
+          ? { ...entry, cellParaIndex: nextCellParaIndex ?? entry.cellParaIndex }
+          : entry,
+      );
+    }
+  }
+
+  return newPos;
+}
+
 function pastePlainText(this: any, text: string, hasSelection: boolean): void {
   if (hasSelection) {
     this.deleteSelection();
@@ -1427,7 +1452,11 @@ export function onPaste(this: any, e: ClipboardEvent): void {
       if (hasSelection) this.deleteSelection();
       const p = this.cursor.getPosition();
       let result: string;
-      if (p.parentParaIndex !== undefined) {
+      if (isNestedCellPosition(p)) {
+        result = wasm.pasteInternalInCellByPath(
+          p.sectionIndex, p.parentParaIndex!, JSON.stringify(p.cellPath), p.charOffset,
+        );
+      } else if (p.parentParaIndex !== undefined) {
         result = wasm.pasteInternalInCell(
           p.sectionIndex, p.parentParaIndex, p.controlIndex!,
           p.cellIndex!, p.cellParaIndex!, p.charOffset,
@@ -1437,18 +1466,7 @@ export function onPaste(this: any, e: ClipboardEvent): void {
       }
       const parsed = JSON.parse(result);
       if (parsed.ok) {
-        const newPos: DocumentPosition = {
-          sectionIndex: p.sectionIndex,
-          paragraphIndex: parsed.paraIdx ?? p.paragraphIndex,
-          charOffset: parsed.charOffset ?? p.charOffset,
-        };
-        if (p.parentParaIndex !== undefined) {
-          newPos.parentParaIndex = p.parentParaIndex;
-          newPos.controlIndex = p.controlIndex;
-          newPos.cellIndex = p.cellIndex;
-          newPos.cellParaIndex = parsed.paraIdx ?? p.cellParaIndex;
-        }
-        return newPos;
+        return positionAfterPasteResult(p, parsed);
       }
       return p;
     }});
@@ -1472,16 +1490,15 @@ export function onPaste(this: any, e: ClipboardEvent): void {
 
   // 외부 클립보드: HTML이 있으면 pasteHtml로 표/서식 보존 붙여넣기
   if (html) {
-    if (isNestedCellPosition(this.cursor.getPosition()) && text) {
-      pastePlainText.call(this, text, hasSelection);
-      return;
-    }
-
     this.executeOperation({ kind: 'snapshot', operationType: 'pasteHtml', operation: (wasm: WasmBridge) => {
       if (hasSelection) this.deleteSelection();
       const p = this.cursor.getPosition();
       let result: string;
-      if (p.parentParaIndex !== undefined) {
+      if (isNestedCellPosition(p)) {
+        result = wasm.pasteHtmlInCellByPath(
+          p.sectionIndex, p.parentParaIndex!, JSON.stringify(p.cellPath), p.charOffset, html,
+        );
+      } else if (p.parentParaIndex !== undefined) {
         result = wasm.pasteHtmlInCell(
           p.sectionIndex, p.parentParaIndex, p.controlIndex!,
           p.cellIndex!, p.cellParaIndex!, p.charOffset, html,
@@ -1491,18 +1508,7 @@ export function onPaste(this: any, e: ClipboardEvent): void {
       }
       const parsed = JSON.parse(result);
       if (parsed.ok) {
-        const newPos: DocumentPosition = {
-          sectionIndex: p.sectionIndex,
-          paragraphIndex: parsed.paraIdx ?? p.paragraphIndex,
-          charOffset: parsed.charOffset ?? p.charOffset,
-        };
-        if (p.parentParaIndex !== undefined) {
-          newPos.parentParaIndex = p.parentParaIndex;
-          newPos.controlIndex = p.controlIndex;
-          newPos.cellIndex = p.cellIndex;
-          newPos.cellParaIndex = parsed.paraIdx ?? p.cellParaIndex;
-        }
-        return newPos;
+        return positionAfterPasteResult(p, parsed);
       }
       return p;
     }});

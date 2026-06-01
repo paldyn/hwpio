@@ -463,7 +463,7 @@ impl DocumentCore {
     }
 
     /// 부모 컨트롤(표 또는 글상자)의 dirty를 마킹한다.
-    fn mark_cell_control_dirty(
+    pub(crate) fn mark_cell_control_dirty(
         &mut self,
         section_idx: usize,
         parent_para_idx: usize,
@@ -2609,14 +2609,14 @@ fn find_text_y(node: &crate::renderer::render_tree::RenderNode, text: &str) -> O
 // ─── 중첩 표 path 기반 편집 API ──────────────────────────────────
 
 impl DocumentCore {
-    /// cellPath를 따라가서 최종 셀의 문단에 대한 가변 참조를 얻는다.
+    /// cellPath를 따라가서 최종 셀의 문단 목록에 대한 가변 참조를 얻는다.
     /// path: [(control_index, cell_index, cell_para_index), ...]
-    pub(crate) fn get_cell_paragraph_mut_by_path(
+    pub(crate) fn get_cell_paragraphs_mut_by_path(
         &mut self,
         section_idx: usize,
         parent_para_idx: usize,
         path: &[(usize, usize, usize)],
-    ) -> Result<&mut Paragraph, HwpError> {
+    ) -> Result<&mut Vec<Paragraph>, HwpError> {
         if path.is_empty() {
             return Err(HwpError::RenderError("경로가 비어있습니다".to_string()));
         }
@@ -2644,20 +2644,36 @@ impl DocumentCore {
                 HwpError::RenderError(format!("경로[{}]: 셀 {} 범위 초과", i, cell_idx))
             })?;
             if i == path.len() - 1 {
-                // 마지막 레벨: 이 셀의 문단 반환
-                return cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
-                    HwpError::RenderError(format!(
-                        "경로[{}]: 셀문단 {} 범위 초과",
-                        i, cell_para_idx
-                    ))
-                });
+                return Ok(&mut cell.paragraphs);
             }
-            // 중간 레벨: 이 셀의 문단으로 진입 후 다음 표 탐색
             para = cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
                 HwpError::RenderError(format!("경로[{}]: 셀문단 {} 범위 초과", i, cell_para_idx))
             })?;
         }
         unreachable!()
+    }
+
+    /// cellPath를 따라가서 최종 셀의 문단에 대한 가변 참조를 얻는다.
+    /// path: [(control_index, cell_index, cell_para_index), ...]
+    pub(crate) fn get_cell_paragraph_mut_by_path(
+        &mut self,
+        section_idx: usize,
+        parent_para_idx: usize,
+        path: &[(usize, usize, usize)],
+    ) -> Result<&mut Paragraph, HwpError> {
+        if path.is_empty() {
+            return Err(HwpError::RenderError("경로가 비어있습니다".to_string()));
+        }
+        let last_path_index = path.len() - 1;
+        let cell_para_idx = path[last_path_index].2;
+        let cell_paragraphs =
+            self.get_cell_paragraphs_mut_by_path(section_idx, parent_para_idx, path)?;
+        cell_paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
+            HwpError::RenderError(format!(
+                "경로[{}]: 셀문단 {} 범위 초과",
+                last_path_index, cell_para_idx
+            ))
+        })
     }
 
     /// path 기반 셀 텍스트 삽입 (중첩 표 지원)

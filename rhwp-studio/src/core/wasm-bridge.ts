@@ -1263,6 +1263,11 @@ export class WasmBridge {
     return this.doc.pasteInternalInCell(sec, parentPara, controlIdx, cellIdx, cellParaIdx, charOffset);
   }
 
+  pasteInternalInCellByPath(sec: number, parentPara: number, pathJson: string, charOffset: number): string {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return (this.doc as any).pasteInternalInCellByPath(sec, parentPara, pathJson, charOffset);
+  }
+
   hasInternalClipboard(): boolean {
     if (!this.doc) return false;
     return this.doc.hasInternalClipboard();
@@ -1321,6 +1326,11 @@ export class WasmBridge {
   pasteHtmlInCell(sec: number, parentPara: number, controlIdx: number, cellIdx: number, cellParaIdx: number, charOffset: number, html: string): string {
     if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
     return this.doc.pasteHtmlInCell(sec, parentPara, controlIdx, cellIdx, cellParaIdx, charOffset, html);
+  }
+
+  pasteHtmlInCellByPath(sec: number, parentPara: number, pathJson: string, charOffset: number, html: string): string {
+    if (!this.doc) throw new Error('문서가 로드되지 않았습니다');
+    return (this.doc as any).pasteHtmlInCellByPath(sec, parentPara, pathJson, charOffset, html);
   }
 
   // ─── CharShape (서식) API ──────────────────────────────
