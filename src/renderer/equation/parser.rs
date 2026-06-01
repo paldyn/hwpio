@@ -215,6 +215,9 @@ impl EqParser {
     fn parse_command(&mut self, cmd: &str) -> EqNode {
         let cmd_upper = cmd.to_ascii_uppercase();
         let cu = cmd_upper.as_str();
+        // [#1204] hwpeq 명령은 대소문자 무시 — DECORATIONS/FONT_STYLES 는 소문자 키이므로
+        // 1차 lookup 실패 시 소문자 fallback (`RM`/`BAR` 등 대문자 변형이 leak 되지 않도록).
+        let cmd_lower = cmd.to_ascii_lowercase();
 
         // OVER/ATOP은 parse_expression에서 처리됨 (단독 발생 시)
         if cu == "OVER" {
@@ -491,7 +494,10 @@ impl EqParser {
         }
 
         // 글자 장식
-        if let Some(&deco) = DECORATIONS.get(cmd) {
+        if let Some(&deco) = DECORATIONS
+            .get(cmd)
+            .or_else(|| DECORATIONS.get(cmd_lower.as_str()))
+        {
             let body = self.parse_single_or_group();
             return EqNode::Decoration {
                 kind: deco,
@@ -500,7 +506,10 @@ impl EqParser {
         }
 
         // 글꼴 스타일
-        if let Some(&style) = FONT_STYLES.get(cmd) {
+        if let Some(&style) = FONT_STYLES
+            .get(cmd)
+            .or_else(|| FONT_STYLES.get(cmd_lower.as_str()))
+        {
             // 다음 토큰이 구조 명령어(LEFT, RIGHT 등)이면 body 없이 반환
             // rm P it LEFT(...) 에서 it이 LEFT를 body로 먹지 않도록
             let body = if self.current_type() == TokenType::Command
@@ -609,7 +618,10 @@ impl EqParser {
                 } else if is_function(&val) {
                     EqNode::Function(lookup_function(&val).unwrap_or(&val).to_string())
                 } else {
-                    EqNode::Text(val)
+                    // [#1204-B] decoration/구조 명령(bar, sqrt 등)도 단일 인자/body 로
+                    // 올 수 있다 (`rm bar {...}`). parse_command 로 위임 — 미지 명령은
+                    // parse_command 의 fall-through 가 Text 로 처리하므로 안전.
+                    self.parse_command(&val)
                 }
             }
             TokenType::Number => EqNode::Number(val),
@@ -1727,6 +1739,50 @@ mod tests {
             }
             _ => panic!("Expected FontStyle, got {:?}", ast),
         }
+    }
+
+    // [#1204-B] 글꼴 명령(rm) body 로 온 decoration(bar)이 Text 로 leak 되지 않고
+    // Decoration 으로 파싱되어야 한다.
+    #[test]
+    fn test_font_style_body_decoration_not_leaked() {
+        let ast = parse("rm bar {F prime F}");
+        let s = format!("{:?}", ast);
+        assert!(
+            s.contains("Decoration"),
+            "bar 가 Decoration 으로 파싱돼야 함: {s}"
+        );
+        assert!(
+            !s.contains(r#"Text("bar")"#),
+            "bar 가 텍스트로 leak 되면 안 됨: {s}"
+        );
+    }
+
+    // [#1204] 대문자 글꼴/장식 명령(RM/BAR)도 대소문자 무시로 인식 (leak 방지).
+    #[test]
+    fn test_uppercase_font_and_deco_commands() {
+        let s = format!("{:?}", parse("RM {vec{EC}}"));
+        assert!(!s.contains(r#"Text("RM")"#), "RM 이 leak 되면 안 됨: {s}");
+        assert!(
+            s.contains("FontStyle"),
+            "RM 이 FontStyle 로 인식돼야 함: {s}"
+        );
+        let s2 = format!("{:?}", parse("BAR {AB}"));
+        assert!(
+            s2.contains("Decoration"),
+            "BAR 가 Decoration 으로 인식돼야 함: {s2}"
+        );
+    }
+
+    // [#1204-A] root3 (분리 후 root + 3) 이 Sqrt 로 파싱되어야 한다.
+    #[test]
+    fn test_root_glued_digit_parses_as_sqrt() {
+        let ast = parse("root3 y");
+        let s = format!("{:?}", ast);
+        assert!(s.contains("Sqrt"), "root3 이 Sqrt 로 파싱돼야 함: {s}");
+        assert!(
+            !s.contains(r#"Text("root3")"#),
+            "root3 이 텍스트로 leak 되면 안 됨: {s}"
+        );
     }
 
     #[test]
