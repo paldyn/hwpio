@@ -2,8 +2,8 @@
 
 - 이슈: [paldyn/HanPage#18](https://github.com/paldyn/HanPage/issues/18) · 마일스톤 M100(v1.0.0) · #13 후속
 - 브랜치: `local/task18` (origin/main `a7228f52` 분기) · 머지 타깃: **`main` PR** (#12·#13·#16·#17 선례)
-- PR: [paldyn/HanPage#19](https://github.com/paldyn/HanPage/pull/19) (base `main` ← `task18-mainbin`)
-- 상태: **설정 수정·버전 범프 완료 · 정적 검증 통과 · main PR #19 생성** (머지/릴리스/이슈 클로즈 승인 대기)
+- PR: [#19](https://github.com/paldyn/HanPage/pull/19)(mainBinaryName+버전 범프) · [#21](https://github.com/paldyn/HanPage/pull/21)(0.7.14→0.7.13 환원, 후속 결정)
+- 상태: **완료** — `mainBinaryName="HanPage"` 수정을 **`hanpage-desktop-v0.7.13` 단일 릴리스로 재적용** · 양 플랫폼 본체명 CI 로그 직접 확정 · 이슈 #18 클로즈 ✅ (버전 전략은 §11 참조)
 
 ## 1. 배경 / 목표
 
@@ -80,12 +80,12 @@
 - **태그 스킴**: 차기 데스크톱 릴리스는 `desktop-v*` 가 아니라 **`hanpage-desktop-v*`** 로 태그해야 트리거됨(#13 정의).
 - 크레이트명은 절대 변경하지 않음(#13 결정 유지).
 
-## 9. 잔여 / 후속 (Stage 3 — 승인 후)
+## 9. Stage 3 (완료) — 머지·릴리스·검증
 
-- (승인) PR 머지(main) → **`hanpage-desktop-v0.7.14`** 태그 push → `desktop-release.yml` 트리거.
-- CI 산출 확인: `HanPage_0.7.14_x64-setup.exe`(설치 본체 = `HanPage.exe`) + `HanPage_0.7.14_aarch64.dmg`, 릴리스 표시명 "HanPage Desktop-v0.7.14".
-- 기존 v0.7.13 릴리스는 **유지**(이력 보존).
-- (승인) 이슈 #18 클로즈 + 오늘할일 갱신.
+- PR #19 머지(main, `448fd709`) → **`hanpage-desktop-v0.7.14`** 태그 push → `desktop-release.yml` 트리거.
+- CI 산출 확인: `HanPage_0.7.14_x64-setup.exe` + `HanPage_0.7.14_aarch64.dmg`, 표시명 "HanPage Desktop-v0.7.14".
+- **CI 빌드 로그에서 본체명 직접 확정**: Windows `Built application at: …\release\HanPage.exe` → `makensis to produce …\HanPage_0.7.14_x64-setup.exe`, macOS `Built application at: …/release/HanPage` → `HanPage.app`. `rhwp-desktop` 본체 참조 **0건**(양 플랫폼).
+- 이슈 #18 클로즈(완료 코멘트) + 오늘할일 갱신(PR #20).
 
 ## 10. 커밋
 
@@ -93,4 +93,16 @@
 |------|------|
 | `b460f507` | 수행+구현 계획서 + 오늘할일 |
 | `a4b8ea26` | Stage 1 — mainBinaryName=HanPage 추가 + 버전 0.7.14 범프(4파일) + Stage 1 보고서 |
-| _(본 커밋)_ | Stage 2 — 최종 결과 보고서 |
+| `2b9a829e` | Stage 2 — 최종 결과 보고서 |
+| `448fd709` | PR #19 머지 (mainBinaryName + 0.7.14) |
+| `abb56e3d` | PR #21 머지 — 버전 0.7.14 → 0.7.13 환원 (§11) |
+
+## 11. 버전 전략 변경 (후속 결정)
+
+Stage 1~3 은 새 패치 버전 **0.7.14** 로 범프·발행·검증을 마쳤다. 이후 작업지시자 결정으로 **버전 인플레이션을 피하고 `mainBinaryName` 수정을 `0.7.13` 단일 릴리스로 재적용**하기로 변경했다.
+
+- **사전 1.0·신규 설치 위주·자동 업데이터 미설정**(`tauri.conf.json` 에 updater 없음 → 버전 단조 증가 제약 없음) 맥락에서, 0.7.13 을 "아직 외부 배포 전" 으로 보고 재태그 허용.
+- **수행(PR [#21](https://github.com/paldyn/HanPage/pull/21), `abb56e3d`)**: version 4파일 `0.7.14`→`0.7.13` 환원(`mainBinaryName` 유지) → `hanpage-desktop-v0.7.14` 릴리스/태그 삭제 + 기존 `hanpage-desktop-v0.7.13` 릴리스/태그 삭제 → `hanpage-desktop-v0.7.13` 태그를 `abb56e3d` 로 재생성·push → CI 재빌드.
+- **결과**: 단일 릴리스 **"HanPage Desktop-v0.7.13"**(`HanPage_0.7.13_x64-setup.exe`·`HanPage_0.7.13_aarch64.dmg`). 재빌드 Windows 로그 `Built application at: …\release\HanPage.exe` → `makensis to produce …\HanPage_0.7.13_x64-setup.exe`, `rhwp-desktop.exe` **0건** 재확인.
+- **순(net) 효과**: 타스크 분기점(`a7228f52`) 대비 영속 소스 변경 = **`mainBinaryName: "HanPage"` 1줄**(버전 번호 불변). 트레이드오프: 같은 0.7.13 태그가 시점에 따라 내용물(`rhwp-desktop.exe`→`HanPage.exe`)이 달라지는 릴리스 불변성 위반을 감수.
+- **유지**: #13 이전 옛 태그 스킴 릴리스 `desktop-v0.7.13`(2026-05-30)은 본 변경 범위 밖이라 그대로 둠.
