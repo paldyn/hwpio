@@ -1695,6 +1695,15 @@ export class InputHandler {
     this.updateCaret();
   }
 
+  /** raw IME/iOS 텍스트 입력처럼 command를 거치지 않는 경로의 갱신 라우터. */
+  private afterTextInputEdit(beforePos: DocumentPosition, afterPos: DocumentPosition): void {
+    if (this.shouldUsePageLocalRefresh('insertText', beforePos, afterPos)) {
+      this.afterPageLocalEdit();
+    } else {
+      this.afterEdit();
+    }
+  }
+
   private shouldUsePageLocalRefresh(commandType: string, beforePos: DocumentPosition, afterPos: DocumentPosition): boolean {
     if (this.cursor.isInHeaderFooter() || this.cursor.isInFootnote()) return false;
     return isPageLocalTextEditCommand(commandType, beforePos, afterPos);

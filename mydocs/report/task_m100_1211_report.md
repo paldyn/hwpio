@@ -25,7 +25,12 @@
 
 - `rhwp-studio/src/engine/input-handler.ts`
   - command 실행 전/후 위치를 비교해 셀 내부 단일 text insert/delete만 page-local 경로로 보냄.
+  - command를 거치지 않는 IME/iOS raw 텍스트 입력용 `afterTextInputEdit()` 라우터 추가.
   - header/footer, footnote, snapshot/paste, 문단/표/객체 구조 변경은 기존 `afterEdit()` full refresh 유지.
+
+- `rhwp-studio/src/engine/input-handler-text.ts`
+  - 한글 IME 조합 중 `insertTextAtRaw()` / `deleteTextAt()` 후에도 page-local 라우터를 사용.
+  - iOS composition fallback의 debounce 렌더도 같은 라우터를 사용.
 
 - `rhwp-studio/src/engine/input-edit-invalidation.ts`
   - page-local text edit 판정 helper를 순수 함수로 분리.
@@ -47,6 +52,7 @@ cd rhwp-studio && npm run build
 - `http://127.0.0.1:7700/?url=/samples/exam_social.hwp&filename=exam_social.hwp`
 - 1쪽 상단 `성명` 칸에 `테스트` 입력.
 - 입력 반영 확인, 브라우저 console error 없음.
+- Stage 5 보완 후 한글 입력 경로에서도 browser console error 없음.
 
 ## 잔여 범위
 
