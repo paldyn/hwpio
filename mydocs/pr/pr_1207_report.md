@@ -36,7 +36,8 @@ opt-in·하위 호환(기존 단일 셀 API 보존, cellPath.length>1 게이트)
 | issue_850 회귀 | ✅ 3 passed |
 | rhwp-studio 빌드(TS) | ✅ tsc && vite build |
 | CI(PR) | ✅ 전부 PASS (Build&Test/Canvas visual diff/Analyze×3/CodeQL) |
-| WASM | (머지 후 빌드 — 신규 API 노출) |
+| **동작 테스트** | ✅ **통과** (작업지시자, rhwp-studio 에서 성명 칸 붙여넣기 → 안쪽 셀 삽입 확인) |
+| WASM | ✅ pkg 빌드 — 신규 API(pasteInternalInCellByPath/pasteHtmlInCellByPath) JS 바인딩 노출 확인 |
 
 ## 위험 평가
 
