@@ -1019,6 +1019,26 @@ fn issue_1209_2022_nov_page17_split_endnote_titles_keep_hancom_gap() {
 }
 
 #[test]
+fn issue_1209_2022_nov_page17_question29_keeps_hancom_gap_after_full_para() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+
+    let page17 = doc.dump_page_items(Some(16));
+    assert!(
+        page17.contains("FullParagraph[미주]  pi=812"),
+        "17쪽 오른쪽 단에는 문29 제목이 보여야 함\n{page17}"
+    );
+
+    let tree = doc.build_page_render_tree(16).expect("page 17 render tree");
+    let question29_y = min_para_text_y(&tree.root, 812).expect("문29 title");
+
+    assert!(
+        (806.0..818.0).contains(&question29_y),
+        "17쪽 문29 제목은 직전 full 미주 문단 뒤 PDF/한컴 기준 미주 사이 간격을 유지해야 함: y={question29_y}"
+    );
+}
+
+#[test]
 fn issue_1209_2022_nov_page14_question22_keeps_hancom_endnote_gap() {
     let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
     let doc = HwpDocument::from_bytes(&bytes).expect("parse");
