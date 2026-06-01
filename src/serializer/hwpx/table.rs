@@ -28,7 +28,9 @@ use std::io::Write;
 
 use quick_xml::Writer;
 
-use crate::model::shape::{CommonObjAttr, HorzAlign, HorzRelTo, TextWrap, VertAlign, VertRelTo};
+use crate::model::shape::{
+    CommonObjAttr, HorzAlign, HorzRelTo, TextFlow, TextWrap, VertAlign, VertRelTo,
+};
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
 
 use super::context::SerializeContext;
@@ -54,7 +56,7 @@ pub fn write_table<W: Write>(
     let id_str = table.common.instance_id.to_string();
     let z_order = table.common.z_order.to_string();
     let text_wrap = text_wrap_str(table.common.text_wrap);
-    let text_flow = text_flow_str(table.common.text_wrap);
+    let text_flow = text_flow_str(table.common.text_flow);
     let lock = bool01(false);
     let page_break = table_page_break_str(table.page_break);
     let repeat_header = bool01(table.repeat_header);
@@ -370,12 +372,12 @@ fn text_wrap_str(w: TextWrap) -> &'static str {
     }
 }
 
-/// textFlow: TextWrap 에 따라 결정 (한컴 관찰값 기준).
-fn text_flow_str(w: TextWrap) -> &'static str {
-    use TextWrap::*;
-    match w {
-        Square | Tight | Through => "BOTH_SIDES",
-        _ => "BOTH_SIDES",
+fn text_flow_str(f: TextFlow) -> &'static str {
+    match f {
+        TextFlow::BothSides => "BOTH_SIDES",
+        TextFlow::LeftOnly => "LEFT_ONLY",
+        TextFlow::RightOnly => "RIGHT_ONLY",
+        TextFlow::LargestOnly => "LARGEST_ONLY",
     }
 }
 
@@ -551,5 +553,36 @@ mod tests {
         write_table(&mut w, &t, &mut ctx).unwrap();
         // 99 는 등록되지 않은 borderFill → unresolved
         assert!(ctx.border_fill_ids.unresolved().contains(&99u16));
+    }
+
+    #[test]
+    fn text_flow_default_is_both_sides() {
+        let t = empty_table(1, 1);
+        let xml = serialize(&t);
+        assert!(xml.contains(r#"textFlow="BOTH_SIDES""#), "{}", xml);
+    }
+
+    #[test]
+    fn text_flow_left_only_serialized() {
+        let mut t = empty_table(1, 1);
+        t.common.text_flow = TextFlow::LeftOnly;
+        let xml = serialize(&t);
+        assert!(xml.contains(r#"textFlow="LEFT_ONLY""#), "{}", xml);
+    }
+
+    #[test]
+    fn text_flow_right_only_serialized() {
+        let mut t = empty_table(1, 1);
+        t.common.text_flow = TextFlow::RightOnly;
+        let xml = serialize(&t);
+        assert!(xml.contains(r#"textFlow="RIGHT_ONLY""#), "{}", xml);
+    }
+
+    #[test]
+    fn text_flow_largest_only_serialized() {
+        let mut t = empty_table(1, 1);
+        t.common.text_flow = TextFlow::LargestOnly;
+        let xml = serialize(&t);
+        assert!(xml.contains(r#"textFlow="LARGEST_ONLY""#), "{}", xml);
     }
 }

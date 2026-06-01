@@ -71,8 +71,10 @@ pub struct CommonObjAttr {
     pub horz_rel_to: HorzRelTo,
     /// 가로 정렬 방식
     pub horz_align: HorzAlign,
-    /// 텍스트 흐름 방식
+    /// 텍스트 흐름 방식 (개체 배치 방식 — attr bit 21-23)
     pub text_wrap: TextWrap,
+    /// 텍스트가 흐르는 방향 (attr bit 24-25)
+    pub text_flow: TextFlow,
     /// 너비 기준 (bit 15-17): 0=Paper, 1=Page, 2=Column, 3=Para, 4=Absolute
     pub width_criterion: SizeCriterion,
     /// 높이 기준 (bit 18-19): 0=Paper, 1=Page, 2=Absolute
@@ -140,7 +142,7 @@ pub enum SizeCriterion {
     Absolute,
 }
 
-/// 텍스트 흐름 방식
+/// 텍스트 흐름 방식 (개체 배치 — attr bit 21-23)
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
 pub enum TextWrap {
     #[default]
@@ -150,6 +152,18 @@ pub enum TextWrap {
     TopAndBottom,
     BehindText,
     InFrontOfText,
+}
+
+/// 텍스트가 흐르는 방향 (attr bit 24-25)
+///
+/// HWPX `textFlow` 속성값과 대응한다.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum TextFlow {
+    #[default]
+    BothSides,
+    LeftOnly,
+    RightOnly,
+    LargestOnly,
 }
 
 /// 개체 요소 속성 (그리기 개체 공통)
