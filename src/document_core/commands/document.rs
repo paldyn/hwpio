@@ -103,6 +103,7 @@ impl DocumentCore {
             fallback_font: DEFAULT_FALLBACK_FONT.to_string(),
             layout_engine: LayoutEngine::new(DEFAULT_DPI),
             clipboard: None,
+            paste_cascade_count: 0,
             show_paragraph_marks: false,
             show_control_codes: false,
             show_transparent_borders: false,
