@@ -1440,6 +1440,14 @@ fn parse_table(
                     _ => crate::model::shape::TextWrap::Square,
                 };
             }
+            b"textFlow" => {
+                table.common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
+                };
+            }
             _ => {}
         }
     }
@@ -2014,6 +2022,14 @@ fn parse_picture(
                     _ => TextWrap::Square,
                 };
             }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
+                };
+            }
             b"instid" => picture_instance_id = parse_u32(&attr),
             b"href" => {
                 let value = attr_str(&attr);
@@ -2395,6 +2411,14 @@ fn parse_object_element_attrs(
                     "BEHIND_TEXT" => TextWrap::BehindText,
                     "IN_FRONT_OF_TEXT" => TextWrap::InFrontOfText,
                     _ => TextWrap::Square,
+                };
+            }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
                 };
             }
             b"instid" => ids.instid = parse_u32(&attr),
@@ -4883,6 +4907,14 @@ fn parse_hp_chart_element(
                     _ => TextWrap::Square,
                 };
             }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
+                };
+            }
             b"chartIDRef" => {
                 // "Chart/chart1.xml" → 1
                 let s = attr_str(&attr);
@@ -4932,6 +4964,14 @@ fn parse_hp_ole_element(
                     "BEHIND_TEXT" => TextWrap::BehindText,
                     "IN_FRONT_OF_TEXT" => TextWrap::InFrontOfText,
                     _ => TextWrap::Square,
+                };
+            }
+            b"textFlow" => {
+                common.text_flow = match attr_str(&attr).as_str() {
+                    "LEFT_ONLY" => crate::model::shape::TextFlow::LeftOnly,
+                    "RIGHT_ONLY" => crate::model::shape::TextFlow::RightOnly,
+                    "LARGEST_ONLY" => crate::model::shape::TextFlow::LargestOnly,
+                    _ => crate::model::shape::TextFlow::BothSides,
                 };
             }
             b"binaryItemIDRef" => {
