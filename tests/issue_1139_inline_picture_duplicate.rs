@@ -261,6 +261,22 @@ fn max_para_content_bottom(node: &RenderNode, para_index: usize) -> Option<f64> 
 }
 
 #[test]
+fn issue_1209_test_image_topandbottom_picture_reserves_text_flow() {
+    let bytes = std::fs::read("samples/test-image.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(0).expect("page 1 render tree");
+
+    let image = find_image_bbox(&tree.root, 0, 2).expect("자리차지 그림");
+    let text_line = find_text_line_bbox(&tree.root, 0, 0).expect("자리차지 텍스트 줄");
+    let image_bottom = image.y + image.height;
+
+    assert!(
+        text_line.y + 0.1 >= image_bottom,
+        "자리차지 그림은 한컴처럼 본문과 겹치면 안 됨: image={image:?}, text_line={text_line:?}"
+    );
+}
+
+#[test]
 fn issue_1189_2022_nov_page1_question1_marker_gap_matches_pdf() {
     let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
     let doc = HwpDocument::from_bytes(&bytes).expect("parse");
@@ -950,6 +966,30 @@ fn issue_1209_2022_sep_page13_question19_square_picture_wraps_following_text() {
     assert!(
         explanation_line.x + explanation_line.width <= graph.x + 0.5,
         "문19 설명 첫 줄이 그래프 영역을 침범하면 문단 겹침이 재발함: graph={graph:?}, line={explanation_line:?}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_page8_question29_square_picture_starts_at_wrap_line() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(7).expect("page 8 render tree");
+
+    let picture = find_image_bbox(&tree.root, 429, 21).expect("문29 어울림 그림");
+    let first_full_line = find_text_line_bbox(&tree.root, 429, 0).expect("문29 첫 줄");
+    let first_wrap_line = find_text_line_bbox(&tree.root, 429, 6).expect("문29 그림 옆 첫 좁은 줄");
+
+    assert!(
+        first_full_line.y + first_full_line.height <= picture.y + 1.0,
+        "어울림 그림은 위쪽 full-width 본문 줄을 침범하면 안 됨: picture={picture:?}, first_line={first_full_line:?}"
+    );
+    assert!(
+        (picture.y - first_wrap_line.y).abs() <= 2.0,
+        "어울림 그림 상단은 HWP LINE_SEG가 처음 좁아지는 줄에 맞아야 함: picture={picture:?}, wrap_line={first_wrap_line:?}"
+    );
+    assert!(
+        first_wrap_line.x + first_wrap_line.width <= picture.x + 1.0,
+        "어울림 본문 줄은 그림 왼쪽 좁은 영역을 넘으면 안 됨: picture={picture:?}, wrap_line={first_wrap_line:?}"
     );
 }
 

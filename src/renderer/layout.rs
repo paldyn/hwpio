@@ -17,8 +17,8 @@ use super::pagination::{
 use super::render_tree::*;
 use super::style_resolver::ResolvedStyleSet;
 use super::{
-    format_number, hwpunit_to_px, ArrowStyle, AutoNumberCounter, LineStyle, NumberFormat as NumFmt,
-    PathCommand, ShapeStyle, StrokeDash, TextStyle, DEFAULT_DPI,
+    format_number, hwpunit_to_px, px_to_hwpunit, ArrowStyle, AutoNumberCounter, LineStyle,
+    NumberFormat as NumFmt, PathCommand, ShapeStyle, StrokeDash, TextStyle, DEFAULT_DPI,
 };
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
@@ -51,6 +51,38 @@ struct ColumnItemCtx<'a> {
     wrap_around_paras: &'a [super::pagination::WrapAroundPara],
     /// [Task #604 R3] anchor ↔ wrap text 매칭 메타데이터 (typeset 출력 → layout 소비)
     wrap_anchors: &'a std::collections::HashMap<usize, super::pagination::WrapAnchorRef>,
+}
+
+/// `Square/어울림` 그림이 문단 중간부터 본문을 감싸는 경우, HWP5는
+/// `LINE_SEG`에서 그림 옆으로 좁아지는 첫 줄의 `vertical_pos`를 저장한다.
+/// 개체 자체도 그 줄의 top에 맞춰야 한컴의 “서로 자리를 침범하지 않는”
+/// 어울림 배치가 된다.
+fn square_wrap_first_narrow_line_vpos_px(
+    para: &Paragraph,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> Option<f64> {
+    if para.line_segs.len() < 2 {
+        return None;
+    }
+    let col_w_hu = px_to_hwpunit(col_area.width, dpi);
+    let first_wrap_idx = para
+        .line_segs
+        .iter()
+        .position(|seg| seg.is_in_wrap_zone(col_w_hu))?;
+    if first_wrap_idx == 0 {
+        return None;
+    }
+    let has_full_width_before = para.line_segs[..first_wrap_idx]
+        .iter()
+        .any(|seg| !seg.is_in_wrap_zone(col_w_hu) && seg.segment_width > 0);
+    if !has_full_width_before {
+        return None;
+    }
+    Some(hwpunit_to_px(
+        para.line_segs[first_wrap_idx].vertical_pos,
+        dpi,
+    ))
 }
 
 type ParaFloatLanes = std::collections::HashMap<usize, FloatLaneSet>;
@@ -5446,7 +5478,21 @@ impl LayoutEngine {
                                 .get(para_style_id)
                                 .map(|s| s.alignment)
                                 .unwrap_or(Alignment::Left);
-                            let pic_y = para_start_y.get(&para_index).copied().unwrap_or(y_offset);
+                            let para_base_y =
+                                para_start_y.get(&para_index).copied().unwrap_or(y_offset);
+                            let pic_y = if matches!(
+                                pic.common.text_wrap,
+                                crate::model::shape::TextWrap::Square
+                            ) && matches!(
+                                pic.common.vert_rel_to,
+                                crate::model::shape::VertRelTo::Para
+                            ) {
+                                square_wrap_first_narrow_line_vpos_px(para, col_area, self.dpi)
+                                    .map(|dy| para_base_y + dy)
+                                    .unwrap_or(para_base_y)
+                            } else {
+                                para_base_y
+                            };
                             let pic_container = LayoutRect {
                                 x: col_area.x,
                                 y: pic_y,

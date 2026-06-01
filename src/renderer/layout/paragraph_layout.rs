@@ -22,6 +22,7 @@ use super::{CellContext, LayoutEngine};
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::paragraph::Paragraph;
+use crate::model::shape::{TextWrap, VertRelTo};
 use crate::model::style::{Alignment, HeadType, LineSpacingType, Numbering, UnderlineType};
 
 /// `RHWP_LAYOUT_DEBUG=1` 로 활성화되는 layout 디버그 로깅 여부.
@@ -42,6 +43,26 @@ pub(crate) fn ensure_min_baseline(raw_baseline: f64, max_font_size: f64) -> f64 
     }
     let min_baseline = max_font_size * 0.8;
     raw_baseline.max(min_baseline)
+}
+
+fn has_para_topbottom_float(para: Option<&Paragraph>) -> bool {
+    para.map(|p| {
+        p.controls.iter().any(|ctrl| match ctrl {
+            Control::Picture(pic) => {
+                !pic.common.treat_as_char
+                    && matches!(pic.common.text_wrap, TextWrap::TopAndBottom)
+                    && matches!(pic.common.vert_rel_to, VertRelTo::Para)
+            }
+            Control::Shape(shape) => {
+                let common = shape.common();
+                !common.treat_as_char
+                    && matches!(common.text_wrap, TextWrap::TopAndBottom)
+                    && matches!(common.vert_rel_to, VertRelTo::Para)
+            }
+            _ => false,
+        })
+    })
+    .unwrap_or(false)
 }
 
 fn tac_picture_or_shape_height_for_line(
@@ -1200,7 +1221,6 @@ impl LayoutEngine {
         let has_picture_shape_square_wrap = para
             .map(|p| {
                 p.controls.iter().any(|c| {
-                    use crate::model::shape::TextWrap;
                     let common_opt = match c {
                         Control::Picture(pic) if !pic.common.treat_as_char => Some(&pic.common),
                         Control::Shape(s) if !s.common().treat_as_char => Some(s.common()),
@@ -1212,6 +1232,11 @@ impl LayoutEngine {
                 })
             })
             .unwrap_or(false);
+        // [Task #1209 Stage5] 비-TAC `자리차지(TopAndBottom)` 개체가 같은 문단에
+        // 있으면 한컴은 LINE_SEG.vertical_pos 로 각 줄의 실제 흐름 위치를 저장한다.
+        // 첫 줄 vpos 만 한 번 더하는 fallback 으로는 “텍스트-그림-텍스트”처럼
+        // 한 문단 안에서 그림 위/아래로 흐름이 갈라지는 케이스를 처리할 수 없다.
+        let has_para_topbottom_float = has_para_topbottom_float(para);
         let col_area_w_hu = px_to_hwpunit(col_area.width, self.dpi);
 
         // treat_as_char 컨트롤의 px 폭 목록 (절대 char 위치, px 폭, control_index) — 정렬 보장
@@ -1253,14 +1278,15 @@ impl LayoutEngine {
             }
         }
         // [Task #1012] paragraph 첫 line vpos > 0 인데 spacing_before=0 으로
-        // 위 블록 진입 안한 경우 (test-image.hwp pi=0: TopAndBottom Picture +
-        // 인라인 wrap 조합) — line_seg.vpos 를 직접 y 에 가산하여 텍스트가 wrap
-        // shape 아래로 위치하도록 함. wrap 메커니즘이 별도로 처리하지 못하는
-        // case 의 fallback. start_line==0 + column-top + para_index==0 으로 한정.
+        // 위 블록 진입 안한 경우 (test-image.hwp page 1: TopAndBottom Picture)
+        // line_seg.vpos 를 직접 y 에 가산하여 텍스트가 wrap shape 아래로
+        // 위치하도록 함. wrap 메커니즘이 별도로 처리하지 못하는 case 의
+        // fallback. start_line==0 + column-top + para_index==0 으로 한정.
         if start_line == 0
             && spacing_before == 0.0
             && is_column_top
             && para_index == 0
+            && !has_para_topbottom_float
             && !suppress_column_top_vpos_fallback
         {
             let vpos0_px = para
@@ -1402,6 +1428,29 @@ impl LayoutEngine {
                 None
             }
         };
+        let para_topbottom_line_vpos_base: Option<(i32, f64)> = {
+            if cell_ctx.is_none() && has_para_topbottom_float {
+                para.and_then(|p| {
+                    let range = p.line_segs.get(start_line..end)?;
+                    if range.iter().any(|seg| seg.vertical_pos > 0)
+                        && range
+                            .windows(2)
+                            .all(|w| w[1].vertical_pos >= w[0].vertical_pos)
+                    {
+                        let base_vpos = if start_line == 0 {
+                            0
+                        } else {
+                            range.first().map(|seg| seg.vertical_pos).unwrap_or(0)
+                        };
+                        Some((base_vpos, y))
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        };
         let mut endnote_line_vpos_y_end: Option<f64> = None;
         let mut prev_line_reserved_tac_picture_height: Option<f64> = None;
         for line_idx in start_line..end {
@@ -1409,6 +1458,11 @@ impl LayoutEngine {
             let mut current_line_reserved_tac_picture_height: Option<f64> = None;
             if let (Some((base_vpos, base_y)), Some(seg)) = (
                 endnote_line_vpos_base,
+                para.and_then(|p| p.line_segs.get(line_idx)),
+            ) {
+                y = base_y + hwpunit_to_px(seg.vertical_pos - base_vpos, self.dpi);
+            } else if let (Some((base_vpos, base_y)), Some(seg)) = (
+                para_topbottom_line_vpos_base,
                 para.and_then(|p| p.line_segs.get(line_idx)),
             ) {
                 y = base_y + hwpunit_to_px(seg.vertical_pos - base_vpos, self.dpi);
