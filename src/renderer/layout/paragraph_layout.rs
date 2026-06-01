@@ -16,13 +16,13 @@ use super::text_measurement::{
 };
 use super::utils::{
     expand_numbering_format, extract_shape_transform, find_bin_data,
-    numbering_format_to_number_format, resolve_numbering_id,
+    numbering_format_to_number_format, picture_display_size_hu, resolve_numbering_id,
 };
 use super::{CellContext, LayoutEngine};
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::paragraph::Paragraph;
-use crate::model::shape::{TextWrap, VertRelTo};
+use crate::model::shape::{CommonObjAttr, HorzAlign, HorzRelTo, TextWrap, VertRelTo};
 use crate::model::style::{Alignment, HeadType, LineSpacingType, Numbering, UnderlineType};
 
 /// `RHWP_LAYOUT_DEBUG=1` 로 활성화되는 layout 디버그 로깅 여부.
@@ -45,19 +45,52 @@ pub(crate) fn ensure_min_baseline(raw_baseline: f64, max_font_size: f64) -> f64 
     raw_baseline.max(min_baseline)
 }
 
-fn has_para_topbottom_float(para: Option<&Paragraph>) -> bool {
+fn para_float_horz_intersects_column(
+    common: &CommonObjAttr,
+    width_hu: i32,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> bool {
+    if !matches!(common.horz_rel_to, HorzRelTo::Column | HorzRelTo::Para) {
+        return true;
+    }
+
+    let width_px = hwpunit_to_px(width_hu, dpi);
+    let h_offset_px = hwpunit_to_px(common.horizontal_offset as i32, dpi);
+    let left = match common.horz_align {
+        HorzAlign::Left | HorzAlign::Inside => col_area.x + h_offset_px,
+        HorzAlign::Center => col_area.x + (col_area.width - width_px) / 2.0 + h_offset_px,
+        HorzAlign::Right | HorzAlign::Outside => {
+            col_area.x + col_area.width - width_px - h_offset_px
+        }
+    };
+    let right = left + width_px;
+
+    right > col_area.x + 0.5 && left < col_area.x + col_area.width - 0.5
+}
+
+fn has_para_topbottom_float_affecting_column(
+    para: Option<&Paragraph>,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> bool {
     para.map(|p| {
         p.controls.iter().any(|ctrl| match ctrl {
             Control::Picture(pic) => {
                 !pic.common.treat_as_char
                     && matches!(pic.common.text_wrap, TextWrap::TopAndBottom)
                     && matches!(pic.common.vert_rel_to, VertRelTo::Para)
+                    && {
+                        let (width_hu, _) = picture_display_size_hu(pic);
+                        para_float_horz_intersects_column(&pic.common, width_hu, col_area, dpi)
+                    }
             }
             Control::Shape(shape) => {
                 let common = shape.common();
                 !common.treat_as_char
                     && matches!(common.text_wrap, TextWrap::TopAndBottom)
                     && matches!(common.vert_rel_to, VertRelTo::Para)
+                    && para_float_horz_intersects_column(common, common.width as i32, col_area, dpi)
             }
             _ => false,
         })
@@ -1236,7 +1269,8 @@ impl LayoutEngine {
         // 있으면 한컴은 LINE_SEG.vertical_pos 로 각 줄의 실제 흐름 위치를 저장한다.
         // 첫 줄 vpos 만 한 번 더하는 fallback 으로는 “텍스트-그림-텍스트”처럼
         // 한 문단 안에서 그림 위/아래로 흐름이 갈라지는 케이스를 처리할 수 없다.
-        let has_para_topbottom_float = has_para_topbottom_float(para);
+        let has_para_topbottom_float =
+            has_para_topbottom_float_affecting_column(para, col_area, self.dpi);
         let col_area_w_hu = px_to_hwpunit(col_area.width, self.dpi);
 
         // treat_as_char 컨트롤의 px 폭 목록 (절대 char 위치, px 폭, control_index) — 정렬 보장
