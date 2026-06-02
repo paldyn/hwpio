@@ -18,7 +18,9 @@ use crate::paint::{
 };
 use crate::renderer::composer::expand_pua_display_text;
 use crate::renderer::layout::compute_char_positions;
-use crate::renderer::render_tree::{BoundingBox, FieldMarkerType, ShapeTransform, TextRunNode};
+use crate::renderer::render_tree::{
+    BoundingBox, FieldMarkerType, RenderLayerInfo, ShapeTransform, TextRunNode,
+};
 use crate::renderer::{
     ArrowStyle, GradientFillInfo, LineRenderType, LineStyle, PathCommand, PatternFillInfo,
     ShadowStyle, ShapeStyle, StrokeDash, TabLeaderInfo, TextStyle,
@@ -278,6 +280,10 @@ impl LayerNode {
         write_bbox(buf, self.bounds);
         if let Some(source_node_id) = self.source_node_id {
             let _ = write!(buf, ",\"sourceNodeId\":{}", source_node_id);
+        }
+        if let Some(layer) = self.layer {
+            buf.push_str(",\"layer\":");
+            write_render_layer_info(buf, layer);
         }
 
         match &self.kind {
@@ -2407,6 +2413,25 @@ fn text_wrap_str(value: crate::model::shape::TextWrap) -> &'static str {
     }
 }
 
+fn write_render_layer_info(buf: &mut String, layer: RenderLayerInfo) {
+    buf.push('{');
+    if let Some(text_wrap) = layer.text_wrap {
+        let _ = write!(
+            buf,
+            "\"textWrap\":{}",
+            json_escape(text_wrap_str(text_wrap))
+        );
+    } else {
+        buf.push_str("\"textWrap\":null");
+    }
+    let _ = write!(
+        buf,
+        ",\"zOrder\":{},\"stableIndex\":{}",
+        layer.z_order, layer.stable_index
+    );
+    buf.push('}');
+}
+
 fn render_profile_str(value: RenderProfile) -> &'static str {
     match value {
         RenderProfile::FastPreview => "fastPreview",
@@ -2429,6 +2454,7 @@ fn form_type_str(value: FormType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::shape::TextWrap;
     use crate::paint::{
         BitmapGlyphFiltering, BitmapGlyphPayload, BitmapGlyphScalingPolicy, CacheHint, ClipKind,
         ColorGlyphFormat, ColorLayersPayload, ColorPaintGraphNode, ColorPaintGraphNodeKind,
@@ -2447,7 +2473,7 @@ mod tests {
     use crate::renderer::equation::layout::{LayoutBox, LayoutKind};
     use crate::renderer::render_tree::{
         EquationNode, FieldMarkerType, ImageNode, PathNode, PlaceholderNode, RawSvgNode,
-        TextRunNode,
+        RenderLayerInfo, TextRunNode,
     };
 
     #[test]
@@ -3454,13 +3480,20 @@ mod tests {
             vec![clip],
             CacheHint::StaticSubtree,
             GroupKind::Column(2),
-        );
+        )
+        .with_layer(Some(RenderLayerInfo::new(
+            Some(TextWrap::BehindText),
+            7,
+            42,
+        )));
 
         let json = PageLayerTree::new(10.0, 10.0, root).to_json();
 
         assert!(json.contains("\"groupKind\":{\"kind\":\"column\",\"index\":2}"));
         assert!(json.contains("\"cacheHint\":\"staticSubtree\""));
         assert!(json.contains("\"clipKind\":\"body\""));
+        assert!(json
+            .contains("\"layer\":{\"textWrap\":\"behindText\",\"zOrder\":7,\"stableIndex\":42}"));
     }
 
     #[test]

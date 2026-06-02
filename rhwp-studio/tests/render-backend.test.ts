@@ -19,8 +19,9 @@ import {
 import {
   CANVASKIT_REPLAY_PLANES,
   layerPaintOpReplayPlane,
+  renderLayerReplayPlane,
 } from '../src/view/canvaskit/replay-plane.ts';
-import type { LayerPaintOp } from '../src/core/types.ts';
+import type { LayerInfo, LayerPaintOp } from '../src/core/types.ts';
 import { glyphOutlinePayloadResourceKey, glyphOutlinePayloadStatus } from '../src/view/glyph-outline-payload-status.ts';
 
 test('render backend resolver keeps Canvas2D as the default and accepts skia aliases', () => {
@@ -110,10 +111,33 @@ test('CanvasKit replay plane helper classifies PageLayerTree ops by wrap', () =>
   }
 });
 
+test('CanvasKit replay plane helper lets LayerNode metadata override non-image ops', () => {
+  const bbox = { x: 0, y: 0, width: 10, height: 10 };
+  const rect: LayerPaintOp = { type: 'rectangle', bbox, style: { fillColor: '#ff0000' } };
+  const behind: LayerInfo = { textWrap: 'behindText', zOrder: 1, stableIndex: 1 };
+  const front: LayerInfo = { textWrap: 'inFrontOfText', zOrder: 2, stableIndex: 2 };
+  const flow: LayerInfo = { textWrap: 'topAndBottom', zOrder: 3, stableIndex: 3 };
+
+  assert.equal(renderLayerReplayPlane(behind), 'behindText');
+  assert.equal(renderLayerReplayPlane(front), 'inFrontOfText');
+  assert.equal(renderLayerReplayPlane(flow), 'flow');
+  assert.equal(layerPaintOpReplayPlane(rect, behind), 'behindText');
+  assert.equal(layerPaintOpReplayPlane(rect, front), 'inFrontOfText');
+});
+
 test('CanvasKit renderer source replays the root once per replay plane', () => {
   const source = readFileSync(new URL('../src/view/canvaskit-renderer.ts', import.meta.url), 'utf8');
   assert.match(source, /for \(const replayPlane of CANVASKIT_REPLAY_PLANES\)/);
-  assert.match(source, /layerPaintOpReplayPlane\(op\) !== replayPlane/);
+  assert.match(source, /layerPaintOpReplayPlane\(op,\s*activeLayer\) !== replayPlane/);
+});
+
+test('PageRenderer uses filtered canvas layers for background, behind, and front planes', () => {
+  const source = readFileSync(new URL('../src/view/page-renderer.ts', import.meta.url), 'utf8');
+  assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'background'\)/);
+  assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'behind'\)/);
+  assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'front'\)/);
+  assert.match(source, /layer\.style\.background\s*=\s*'transparent'/);
+  assert.match(source, /collectLayerPlaneSummary\(root,\s*summary,\s*null\)/);
 });
 
 test('CanvasKit replay bridge fallback keeps compat on direct replay contract', () => {

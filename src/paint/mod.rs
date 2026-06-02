@@ -43,7 +43,10 @@ pub use paint_op::{
     TextVariantKind, TextVariantQuality,
 };
 pub use profile::RenderProfile;
-pub use replay_order::{paint_op_replay_plane, PaintReplayPlane};
+pub use replay_order::{
+    paint_op_replay_plane, paint_op_replay_plane_with_layer, render_layer_replay_plane,
+    PaintReplayPlane,
+};
 pub use resources::{
     font_blob_resource_key, image_resource_key, resource_digest_hex, svg_resource_key,
     FontBlobResourceId, ImageResourceId, ResourceArena, SvgResourceId, RESOURCE_KEY_ALGORITHM,

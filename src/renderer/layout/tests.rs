@@ -1470,3 +1470,32 @@ fn task296_inline_tab_type_decimal() {
     let ext = [100u16, 0, 0x0400, 0, 0, 0, 9];
     assert_eq!(super::text_measurement::inline_tab_type(&ext), 4);
 }
+
+#[test]
+fn task1197_paper_nodes_sort_by_plane_z_order_and_stable_index() {
+    fn node(id: u32, text_wrap: TextWrap, z_order: i32, stable_index: u32) -> RenderNode {
+        RenderNode::new(
+            id,
+            RenderNodeType::Column(0),
+            BoundingBox::new(0.0, 0.0, 1.0, 1.0),
+        )
+        .with_layer(RenderLayerInfo::new(Some(text_wrap), z_order, stable_index))
+    }
+
+    let mut nodes = vec![
+        node(1, TextWrap::InFrontOfText, 0, 0),
+        node(2, TextWrap::BehindText, 11, 2),
+        node(3, TextWrap::BehindText, 1, 3),
+        node(4, TextWrap::TopAndBottom, 0, 0),
+        node(5, TextWrap::BehindText, 11, 1),
+    ];
+
+    LayoutEngine::sort_paper_render_nodes(&mut nodes);
+
+    let order: Vec<u32> = nodes.iter().map(|node| node.id).collect();
+    assert_eq!(
+        order,
+        vec![3, 5, 2, 4, 1],
+        "BehindText는 z-order/stable 순서로 먼저, flow, InFrontOfText 순으로 정렬"
+    );
+}

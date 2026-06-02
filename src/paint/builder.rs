@@ -37,7 +37,8 @@ impl LayerBuilder {
             self.build_children(&tree.root),
             self.cache_hint_for(&tree.root.node_type),
             GroupKind::Generic,
-        );
+        )
+        .with_layer(tree.root.layer);
 
         PageLayerTree::with_profile(page_width, page_height, root, self.profile)
             .with_output_options(self.output_options)
@@ -109,20 +110,23 @@ impl LayerBuilder {
         };
 
         if let Some(ops) = own_ops {
-            let own_leaf = LayerNode::leaf(node.bbox, Some(node.id), ops);
+            let own_leaf = LayerNode::leaf(node.bbox, Some(node.id), ops).with_layer(node.layer);
             return if node.children.is_empty() {
                 Some(own_leaf)
             } else {
                 let mut children = Vec::with_capacity(node.children.len() + 1);
                 children.push(own_leaf);
                 children.extend(self.build_children(node));
-                Some(LayerNode::group(
-                    node.bbox,
-                    Some(node.id),
-                    children,
-                    self.cache_hint_for(&node.node_type),
-                    self.group_kind_for(&node.node_type),
-                ))
+                Some(
+                    LayerNode::group(
+                        node.bbox,
+                        Some(node.id),
+                        children,
+                        self.cache_hint_for(&node.node_type),
+                        self.group_kind_for(&node.node_type),
+                    )
+                    .with_layer(node.layer),
+                )
             };
         }
 
@@ -137,13 +141,10 @@ impl LayerBuilder {
                     self.cache_hint_for(&node.node_type),
                     GroupKind::Body,
                 );
-                Some(LayerNode::clip_rect(
-                    node.bbox,
-                    Some(node.id),
-                    *clip,
-                    child,
-                    ClipKind::Body,
-                ))
+                Some(
+                    LayerNode::clip_rect(node.bbox, Some(node.id), *clip, child, ClipKind::Body)
+                        .with_layer(node.layer),
+                )
             }
             RenderNodeType::TableCell(cell) if cell.clip => {
                 let child = LayerNode::group(
@@ -153,13 +154,16 @@ impl LayerBuilder {
                     self.cache_hint_for(&node.node_type),
                     GroupKind::TableCell(cell.clone()),
                 );
-                Some(LayerNode::clip_rect(
-                    node.bbox,
-                    Some(node.id),
-                    node.bbox,
-                    child,
-                    ClipKind::TableCell,
-                ))
+                Some(
+                    LayerNode::clip_rect(
+                        node.bbox,
+                        Some(node.id),
+                        node.bbox,
+                        child,
+                        ClipKind::TableCell,
+                    )
+                    .with_layer(node.layer),
+                )
             }
             RenderNodeType::TextBox => {
                 let child = LayerNode::group(
@@ -169,21 +173,27 @@ impl LayerBuilder {
                     self.cache_hint_for(&node.node_type),
                     GroupKind::TextBox,
                 );
-                Some(LayerNode::clip_rect(
+                Some(
+                    LayerNode::clip_rect(
+                        node.bbox,
+                        Some(node.id),
+                        node.bbox,
+                        child,
+                        ClipKind::TextBox,
+                    )
+                    .with_layer(node.layer),
+                )
+            }
+            _ => Some(
+                LayerNode::group(
                     node.bbox,
                     Some(node.id),
-                    node.bbox,
-                    child,
-                    ClipKind::TextBox,
-                ))
-            }
-            _ => Some(LayerNode::group(
-                node.bbox,
-                Some(node.id),
-                self.build_children(node),
-                self.cache_hint_for(&node.node_type),
-                self.group_kind_for(&node.node_type),
-            )),
+                    self.build_children(node),
+                    self.cache_hint_for(&node.node_type),
+                    self.group_kind_for(&node.node_type),
+                )
+                .with_layer(node.layer),
+            ),
         }
     }
 
@@ -291,13 +301,14 @@ fn text_run_ops(
 mod tests {
     use super::*;
     use crate::model::control::FormType;
+    use crate::model::shape::TextWrap;
     use crate::renderer::composer::CharOverlapInfo;
     use crate::renderer::equation::layout::{LayoutBox, LayoutKind};
     use crate::renderer::render_tree::{
         BoundingBox, EllipseNode, EquationNode, FieldMarkerType, FootnoteMarkerNode,
         FormObjectNode, ImageNode, LineNode, PageBackgroundNode, PageNode, PathNode,
-        PlaceholderNode, RawSvgNode, RectangleNode, RenderNode, RenderNodeType, TableCellNode,
-        TableNode, TextLineNode, TextRunNode,
+        PlaceholderNode, RawSvgNode, RectangleNode, RenderLayerInfo, RenderNode, RenderNodeType,
+        TableCellNode, TableNode, TextLineNode, TextRunNode,
     };
     use crate::renderer::{LineStyle, PathCommand, ShapeStyle, TabLeaderInfo, TextStyle};
 
@@ -338,6 +349,37 @@ mod tests {
             }
             other => panic!("expected root group, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn copies_render_layer_metadata_to_layer_node() {
+        let mut tree = PageRenderTree::new(0, 100.0, 100.0);
+        let layer = RenderLayerInfo::new(Some(TextWrap::BehindText), 7, 42);
+        let table = RenderNode::new(
+            1,
+            RenderNodeType::Table(TableNode {
+                row_count: 1,
+                col_count: 1,
+                border_fill_id: 0,
+                section_index: Some(0),
+                para_index: Some(0),
+                control_index: Some(0),
+            }),
+            BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+        )
+        .with_layer(layer);
+        tree.root.children.push(table);
+
+        let mut builder = LayerBuilder::new(RenderProfile::Screen);
+        let layer_tree = builder.build(&tree);
+        let LayerNodeKind::Group { children, .. } = &layer_tree.root.kind else {
+            panic!("expected root group");
+        };
+        let copied = children[0].layer.expect("table layer copied");
+
+        assert_eq!(copied.text_wrap, Some(TextWrap::BehindText));
+        assert_eq!(copied.z_order, 7);
+        assert_eq!(copied.stable_index, 42);
     }
 
     #[test]

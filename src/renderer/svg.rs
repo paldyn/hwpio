@@ -191,16 +191,27 @@ impl SvgRenderer {
         self.render_node(&tree.root);
     }
 
-    /// [Issue #1167] 노드의 z-order plane 키 (작을수록 먼저=아래).
+    /// [Issue #1167/#1197] 노드의 z-order plane 키 (작을수록 먼저=아래).
     /// PaintOp `paint_op_replay_plane()` 과 동일 의미:
-    /// 페이지 배경(0) → BehindText 그림(1) → 일반 Flow 콘텐츠(2) → InFrontOfText 그림(3).
+    /// 페이지 배경(0) → BehindText 객체(1) → 일반 Flow 콘텐츠(2) → InFrontOfText 객체(3).
     /// 페이지 배경(흰 바탕·테두리·배경 워터마크)은 반드시 가장 먼저 그려야 한다.
     /// 그러지 않으면 root 레벨에서 BehindText 워터마크가 PageBackground 보다 앞으로
     /// 정렬되어, 흰 배경 rect 가 워터마크를 덮어버린다(#1167 1차 회귀).
-    /// 그 외 노드(텍스트·표·일반 그림 등)는 모두 Flow(2) 로 본문 흐름에 둔다.
+    /// #1197부터는 RenderNode.layer 가 있으면 표/도형도 이미지와 같은 plane 계약을 따른다.
     fn node_z_plane(node: &RenderNode) -> u8 {
+        if matches!(&node.node_type, RenderNodeType::PageBackground(_)) {
+            return 0;
+        }
+        if let Some(layer) = node.layer {
+            if let Some(text_wrap) = layer.text_wrap {
+                return match text_wrap {
+                    crate::model::shape::TextWrap::BehindText => 1,
+                    crate::model::shape::TextWrap::InFrontOfText => 3,
+                    _ => 2,
+                };
+            }
+        }
         match &node.node_type {
-            RenderNodeType::PageBackground(_) => 0,
             RenderNodeType::Image(img) => match img.text_wrap {
                 Some(crate::model::shape::TextWrap::BehindText) => 1,
                 Some(crate::model::shape::TextWrap::InFrontOfText) => 3,
@@ -210,7 +221,16 @@ impl SvgRenderer {
         }
     }
 
-    /// [Issue #1167] 자식 중 BehindText/InFrontOfText 그림이 섞여 있어 plane
+    fn node_z_sort_key(node: &RenderNode) -> (u8, i32, u32) {
+        let layer = node.layer;
+        (
+            Self::node_z_plane(node),
+            layer.map(|l| l.z_order).unwrap_or(0),
+            layer.map(|l| l.stable_index).unwrap_or(0),
+        )
+    }
+
+    /// [Issue #1167/#1197] 자식 중 BehindText/InFrontOfText 객체가 섞여 있어 plane
     /// 재정렬이 필요한지. 대부분의 노드는 Flow 만 가지므로 정렬 비용을 피한다.
     fn children_need_plane_reorder(node: &RenderNode) -> bool {
         node.children.iter().any(|c| Self::node_z_plane(c) != 2)
@@ -677,7 +697,7 @@ impl SvgRenderer {
         //  정정됨 — PR #1163 / #1017. 본 변경은 SVG 경로 정합.)
         if Self::children_need_plane_reorder(node) {
             let mut ordered: Vec<&RenderNode> = node.children.iter().collect();
-            ordered.sort_by_key(|c| Self::node_z_plane(c));
+            ordered.sort_by_key(|c| Self::node_z_sort_key(c));
             for child in ordered {
                 self.render_node(child);
             }
