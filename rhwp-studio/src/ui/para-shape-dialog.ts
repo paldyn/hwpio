@@ -32,6 +32,7 @@ import {
   buildTabSettingsTab, buildBorderTab,
   type TabState, type TabSettingsResult, type BorderTabResult,
 } from './para-shape-tab-builders';
+import { enableDialogDrag } from './dialog-drag';
 
 /** 정렬 아이콘 (SVG 아이콘 — 서식바와 동일) */
 const ALIGN_OPTIONS: { value: string; label: string; cssClass: string }[] = [
@@ -248,7 +249,7 @@ export class ParaShapeDialog {
       if (e.target === this.overlay) this.hide();
     });
 
-    this.enableDrag(titleBar);
+    enableDialogDrag(this.dialog, titleBar);
   }
 
   private switchTab(idx: number): void {
@@ -919,29 +920,6 @@ export class ParaShapeDialog {
     }
     if (this.onApply) this.onApply(mods);
     this.hide();
-  }
-
-  // ════════════════════════════════════════════════════════
-  //  드래그
-  // ════════════════════════════════════════════════════════
-
-  private enableDrag(titleEl: HTMLElement): void {
-    let offsetX = 0, offsetY = 0, isDragging = false;
-    titleEl.addEventListener('mousedown', (e) => {
-      if ((e.target as HTMLElement).closest('.dialog-close')) return;
-      isDragging = true;
-      const rect = this.dialog.getBoundingClientRect();
-      offsetX = e.clientX - rect.left;
-      offsetY = e.clientY - rect.top;
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      this.dialog.style.left = `${e.clientX - offsetX}px`;
-      this.dialog.style.top = `${e.clientY - offsetY}px`;
-      this.dialog.style.margin = '0';
-    });
-    document.addEventListener('mouseup', () => { isDragging = false; });
   }
 
 }

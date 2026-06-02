@@ -16,12 +16,13 @@ use super::text_measurement::{
 };
 use super::utils::{
     expand_numbering_format, extract_shape_transform, find_bin_data,
-    numbering_format_to_number_format, resolve_numbering_id,
+    numbering_format_to_number_format, picture_display_size_hu, resolve_numbering_id,
 };
 use super::{CellContext, LayoutEngine};
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::paragraph::Paragraph;
+use crate::model::shape::{CommonObjAttr, HorzAlign, HorzRelTo, TextWrap, VertRelTo};
 use crate::model::style::{Alignment, HeadType, LineSpacingType, Numbering, UnderlineType};
 
 /// `RHWP_LAYOUT_DEBUG=1` 로 활성화되는 layout 디버그 로깅 여부.
@@ -42,6 +43,59 @@ pub(crate) fn ensure_min_baseline(raw_baseline: f64, max_font_size: f64) -> f64 
     }
     let min_baseline = max_font_size * 0.8;
     raw_baseline.max(min_baseline)
+}
+
+fn para_float_horz_intersects_column(
+    common: &CommonObjAttr,
+    width_hu: i32,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> bool {
+    if !matches!(common.horz_rel_to, HorzRelTo::Column | HorzRelTo::Para) {
+        return true;
+    }
+
+    let width_px = hwpunit_to_px(width_hu, dpi);
+    let h_offset_px = hwpunit_to_px(common.horizontal_offset as i32, dpi);
+    let left = match common.horz_align {
+        HorzAlign::Left | HorzAlign::Inside => col_area.x + h_offset_px,
+        HorzAlign::Center => col_area.x + (col_area.width - width_px) / 2.0 + h_offset_px,
+        HorzAlign::Right | HorzAlign::Outside => {
+            col_area.x + col_area.width - width_px - h_offset_px
+        }
+    };
+    let right = left + width_px;
+
+    right > col_area.x + 0.5 && left < col_area.x + col_area.width - 0.5
+}
+
+fn has_para_topbottom_float_affecting_column(
+    para: Option<&Paragraph>,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> bool {
+    para.map(|p| {
+        p.controls.iter().any(|ctrl| match ctrl {
+            Control::Picture(pic) => {
+                !pic.common.treat_as_char
+                    && matches!(pic.common.text_wrap, TextWrap::TopAndBottom)
+                    && matches!(pic.common.vert_rel_to, VertRelTo::Para)
+                    && {
+                        let (width_hu, _) = picture_display_size_hu(pic);
+                        para_float_horz_intersects_column(&pic.common, width_hu, col_area, dpi)
+                    }
+            }
+            Control::Shape(shape) => {
+                let common = shape.common();
+                !common.treat_as_char
+                    && matches!(common.text_wrap, TextWrap::TopAndBottom)
+                    && matches!(common.vert_rel_to, VertRelTo::Para)
+                    && para_float_horz_intersects_column(common, common.width as i32, col_area, dpi)
+            }
+            _ => false,
+        })
+    })
+    .unwrap_or(false)
 }
 
 fn tac_picture_or_shape_height_for_line(
@@ -87,6 +141,21 @@ fn char_pos_in_line(pos: usize, start: usize, end: usize) -> bool {
     } else {
         pos == start
     }
+}
+
+fn line_has_tac_control(comp: &ComposedParagraph, line_idx: usize) -> bool {
+    let Some(line) = comp.lines.get(line_idx) else {
+        return false;
+    };
+    let start = line.char_start;
+    let end = comp
+        .lines
+        .get(line_idx + 1)
+        .map(|next| next.char_start)
+        .unwrap_or(usize::MAX);
+    comp.tac_controls
+        .iter()
+        .any(|(pos, _, _)| char_pos_in_line(*pos, start, end))
 }
 
 fn tac_offsets_for_line(
@@ -1185,7 +1254,6 @@ impl LayoutEngine {
         let has_picture_shape_square_wrap = para
             .map(|p| {
                 p.controls.iter().any(|c| {
-                    use crate::model::shape::TextWrap;
                     let common_opt = match c {
                         Control::Picture(pic) if !pic.common.treat_as_char => Some(&pic.common),
                         Control::Shape(s) if !s.common().treat_as_char => Some(s.common()),
@@ -1197,6 +1265,12 @@ impl LayoutEngine {
                 })
             })
             .unwrap_or(false);
+        // [Task #1209 Stage5] 비-TAC `자리차지(TopAndBottom)` 개체가 같은 문단에
+        // 있으면 한컴은 LINE_SEG.vertical_pos 로 각 줄의 실제 흐름 위치를 저장한다.
+        // 첫 줄 vpos 만 한 번 더하는 fallback 으로는 “텍스트-그림-텍스트”처럼
+        // 한 문단 안에서 그림 위/아래로 흐름이 갈라지는 케이스를 처리할 수 없다.
+        let has_para_topbottom_float =
+            has_para_topbottom_float_affecting_column(para, col_area, self.dpi);
         let col_area_w_hu = px_to_hwpunit(col_area.width, self.dpi);
 
         // treat_as_char 컨트롤의 px 폭 목록 (절대 char 위치, px 폭, control_index) — 정렬 보장
@@ -1238,14 +1312,15 @@ impl LayoutEngine {
             }
         }
         // [Task #1012] paragraph 첫 line vpos > 0 인데 spacing_before=0 으로
-        // 위 블록 진입 안한 경우 (test-image.hwp pi=0: TopAndBottom Picture +
-        // 인라인 wrap 조합) — line_seg.vpos 를 직접 y 에 가산하여 텍스트가 wrap
-        // shape 아래로 위치하도록 함. wrap 메커니즘이 별도로 처리하지 못하는
-        // case 의 fallback. start_line==0 + column-top + para_index==0 으로 한정.
+        // 위 블록 진입 안한 경우 (test-image.hwp page 1: TopAndBottom Picture)
+        // line_seg.vpos 를 직접 y 에 가산하여 텍스트가 wrap shape 아래로
+        // 위치하도록 함. wrap 메커니즘이 별도로 처리하지 못하는 case 의
+        // fallback. start_line==0 + column-top + para_index==0 으로 한정.
         if start_line == 0
             && spacing_before == 0.0
             && is_column_top
             && para_index == 0
+            && !has_para_topbottom_float
             && !suppress_column_top_vpos_fallback
         {
             let vpos0_px = para
@@ -1387,6 +1462,29 @@ impl LayoutEngine {
                 None
             }
         };
+        let para_topbottom_line_vpos_base: Option<(i32, f64)> = {
+            if cell_ctx.is_none() && has_para_topbottom_float {
+                para.and_then(|p| {
+                    let range = p.line_segs.get(start_line..end)?;
+                    if range.iter().any(|seg| seg.vertical_pos > 0)
+                        && range
+                            .windows(2)
+                            .all(|w| w[1].vertical_pos >= w[0].vertical_pos)
+                    {
+                        let base_vpos = if start_line == 0 {
+                            0
+                        } else {
+                            range.first().map(|seg| seg.vertical_pos).unwrap_or(0)
+                        };
+                        Some((base_vpos, y))
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            }
+        };
         let mut endnote_line_vpos_y_end: Option<f64> = None;
         let mut prev_line_reserved_tac_picture_height: Option<f64> = None;
         for line_idx in start_line..end {
@@ -1394,6 +1492,11 @@ impl LayoutEngine {
             let mut current_line_reserved_tac_picture_height: Option<f64> = None;
             if let (Some((base_vpos, base_y)), Some(seg)) = (
                 endnote_line_vpos_base,
+                para.and_then(|p| p.line_segs.get(line_idx)),
+            ) {
+                y = base_y + hwpunit_to_px(seg.vertical_pos - base_vpos, self.dpi);
+            } else if let (Some((base_vpos, base_y)), Some(seg)) = (
+                para_topbottom_line_vpos_base,
                 para.and_then(|p| p.line_segs.get(line_idx)),
             ) {
                 y = base_y + hwpunit_to_px(seg.vertical_pos - base_vpos, self.dpi);
@@ -4115,7 +4218,11 @@ impl LayoutEngine {
                 max_fs,
                 line_spacing_px,
             );
-            let skip_advance_empty_wrap = has_picture_shape_square_wrap && runs_all_whitespace;
+            // Square wrap host 의 빈 guide 줄은 advance 를 건너뛰지만, 같은 줄에
+            // TAC 수식/개체가 있으면 실제 콘텐츠 줄이므로 높이를 보존한다.
+            let skip_advance_empty_wrap = has_picture_shape_square_wrap
+                && runs_all_whitespace
+                && !line_has_tac_control(composed, line_idx);
             let skip_advance_empty_tac_picture = runs_all_whitespace
                 && current_line_reserved_tac_picture_height.is_none()
                 && prev_line_reserved_tac_picture_height

@@ -1802,9 +1802,9 @@ fn dump_controls(args: &[String]) {
     let wrap_str = |w: &TextWrap| -> &str {
         match w {
             TextWrap::Square => "어울림",
-            TextWrap::Tight => "자리차지",
-            TextWrap::Through => "글뒤로",
-            TextWrap::TopAndBottom => "위아래",
+            TextWrap::Tight => "빈 공간 채움",
+            TextWrap::Through => "통과",
+            TextWrap::TopAndBottom => "자리차지",
             TextWrap::BehindText => "글뒤로",
             TextWrap::InFrontOfText => "글앞으로",
         }
@@ -1847,6 +1847,18 @@ fn dump_controls(args: &[String]) {
             wrap_str(&c.text_wrap),
             c.treat_as_char,
             c.z_order
+        );
+        println!(
+            "{}  바깥 여백: left={:.2}mm({}) right={:.2}mm({}) top={:.2}mm({}) bottom={:.2}mm({})",
+            indent,
+            hu_to_mm_i(c.margin.left as i32),
+            c.margin.left,
+            hu_to_mm_i(c.margin.right as i32),
+            c.margin.right,
+            hu_to_mm_i(c.margin.top as i32),
+            c.margin.top,
+            hu_to_mm_i(c.margin.bottom as i32),
+            c.margin.bottom
         );
     };
 
@@ -2619,6 +2631,8 @@ fn dump_controls(args: &[String]) {
                                 cap_text
                             );
                         }
+                        let shape_indent = format!("{}  ", prefix);
+                        dump_shape_attr(sa, &shape_indent);
                         dump_common(&pic.common, "  ");
                     }
                     Control::Header(h) => {

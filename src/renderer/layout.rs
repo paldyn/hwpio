@@ -17,8 +17,8 @@ use super::pagination::{
 use super::render_tree::*;
 use super::style_resolver::ResolvedStyleSet;
 use super::{
-    format_number, hwpunit_to_px, ArrowStyle, AutoNumberCounter, LineStyle, NumberFormat as NumFmt,
-    PathCommand, ShapeStyle, StrokeDash, TextStyle, DEFAULT_DPI,
+    format_number, hwpunit_to_px, px_to_hwpunit, ArrowStyle, AutoNumberCounter, LineStyle,
+    NumberFormat as NumFmt, PathCommand, ShapeStyle, StrokeDash, TextStyle, DEFAULT_DPI,
 };
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
@@ -51,6 +51,38 @@ struct ColumnItemCtx<'a> {
     wrap_around_paras: &'a [super::pagination::WrapAroundPara],
     /// [Task #604 R3] anchor ↔ wrap text 매칭 메타데이터 (typeset 출력 → layout 소비)
     wrap_anchors: &'a std::collections::HashMap<usize, super::pagination::WrapAnchorRef>,
+}
+
+/// `Square/어울림` 그림이 문단 중간부터 본문을 감싸는 경우, HWP5는
+/// `LINE_SEG`에서 그림 옆으로 좁아지는 첫 줄의 `vertical_pos`를 저장한다.
+/// 개체 자체도 그 줄의 top에 맞춰야 한컴의 “서로 자리를 침범하지 않는”
+/// 어울림 배치가 된다.
+fn square_wrap_first_narrow_line_vpos_px(
+    para: &Paragraph,
+    col_area: &LayoutRect,
+    dpi: f64,
+) -> Option<f64> {
+    if para.line_segs.len() < 2 {
+        return None;
+    }
+    let col_w_hu = px_to_hwpunit(col_area.width, dpi);
+    let first_wrap_idx = para
+        .line_segs
+        .iter()
+        .position(|seg| seg.is_in_wrap_zone(col_w_hu))?;
+    if first_wrap_idx == 0 {
+        return None;
+    }
+    let has_full_width_before = para.line_segs[..first_wrap_idx]
+        .iter()
+        .any(|seg| !seg.is_in_wrap_zone(col_w_hu) && seg.segment_width > 0);
+    if !has_full_width_before {
+        return None;
+    }
+    Some(hwpunit_to_px(
+        para.line_segs[first_wrap_idx].vertical_pos,
+        dpi,
+    ))
 }
 
 type ParaFloatLanes = std::collections::HashMap<usize, FloatLaneSet>;
@@ -2624,6 +2656,8 @@ impl LayoutEngine {
         let col_width_hu = (col_area.width / self.dpi * 7200.0).round() as i32;
         let mut prev_tac_seg_applied = false;
         let mut tac_seg_applied_para: Option<usize> = None;
+        let mut prev_endnote_title_gap_px = 0.0;
+        let mut prev_endnote_title_gap_from_continued_partial = false;
 
         // 고정값 줄간격 TAC 표 병행 (Task #9): 표 하단 비교용
         let mut fix_table_start_y: f64 = 0.0;
@@ -2809,12 +2843,35 @@ impl LayoutEngine {
                 }
             }
 
+            let current_is_endnote_question_title = col_content.endnote_flow
+                && paragraphs
+                    .get(item_para)
+                    .map(|p| p.text.trim_start().starts_with('문'))
+                    .unwrap_or(false);
+            let y_before_vpos = y_offset;
             if !shape_jumped && !prev_tac_seg_applied {
                 // [Task #1027 Stage C] inter-item VPOS_CORR 보정을 HeightCursor 에 위임 (동작 동일).
                 // 이전 문단 overlay-shape/분할표 bypass, page/lazy base 산출, sb 차감,
                 // ≤8px 백워드 클램프를 모두 캡슐화 (Stage A/B 함수 결합). 렌더러·페이지네이터 공유.
                 y_offset = hcursor.vpos_adjust(y_offset, item_para, paragraphs, styles);
             } // !shape_jumped
+            let should_preserve_endnote_title_gap = current_is_endnote_question_title
+                && prev_endnote_title_gap_px > 0.0
+                && (prev_endnote_title_gap_from_continued_partial
+                    || y_offset > y_before_vpos + 0.5);
+            if should_preserve_endnote_title_gap {
+                // Compact 미주에서 다음 문제 제목이 오면 LINE_SEG의 절대 vpos가
+                // 현재 쪽/단 기준과 어긋나 직전 미주 내용 뒤의 "미주 사이"
+                // 간격이 사라질 수 있다. 직전 paragraph 조각의 trailing
+                // line_spacing을 공통 gap으로 보존하고, 후속 항목도 같은 기준을
+                // 따르도록 vpos base를 함께 이동한다.
+                let min_y = y_before_vpos + prev_endnote_title_gap_px;
+                if y_offset < min_y {
+                    let delta = min_y - y_offset;
+                    y_offset = min_y;
+                    hcursor.shift_vpos_base_for_rendered_delta(delta);
+                }
+            }
             let current_vpos_rewinds_from_prev = hcursor
                 .prev_layout_para
                 .and_then(|prev_pi| {
@@ -2830,10 +2887,23 @@ impl LayoutEngine {
                 })
                 .unwrap_or(false);
 
-            if matches!(
+            let next_is_endnote_question_title = col_content.endnote_flow
+                && col_content
+                    .items
+                    .get(item_ordinal + 1)
+                    .and_then(|next_item| match next_item {
+                        PageItem::FullParagraph { para_index }
+                        | PageItem::PartialParagraph { para_index, .. } => Some(*para_index),
+                        _ => None,
+                    })
+                    .and_then(|pi| paragraphs.get(pi))
+                    .map(|p| p.text.trim_start().starts_with('문'))
+                    .unwrap_or(false);
+            if (matches!(
                 item,
                 PageItem::PartialParagraph { start_line, .. } if *start_line > 0
-            ) || current_vpos_rewinds_from_prev
+            ) && !next_is_endnote_question_title)
+                || current_vpos_rewinds_from_prev
             {
                 // 이어지는 partial paragraph는 이전 쪽/단에서 시작한 문단의 나머지다.
                 // 다음 항목과의 간격은 원본 절대 vpos 차이가 아니라 현재 쪽의 순차 y를
@@ -2954,6 +3024,34 @@ impl LayoutEngine {
             prev_tac_seg_applied = was_tac || tac_seg_applied_para == Some(item_para);
             // [Task #991] 다음 반복의 vpos 보정용 — 직전 항목이 분할 표였는지 기록.
             hcursor.prev_item_was_partial_table = matches!(item, PageItem::PartialTable { .. });
+            let mut next_endnote_title_gap_from_continued_partial = false;
+            prev_endnote_title_gap_px = if col_content.endnote_flow {
+                match item {
+                    PageItem::FullParagraph { para_index } => paragraphs
+                        .get(*para_index)
+                        .and_then(|p| p.line_segs.last())
+                        .filter(|seg| seg.line_spacing > 1000 && seg.line_height <= 1500)
+                        .map(|seg| hwpunit_to_px(seg.line_spacing.max(0), self.dpi))
+                        .unwrap_or(0.0),
+                    PageItem::PartialParagraph {
+                        para_index,
+                        start_line,
+                        end_line,
+                    } if *start_line > 0 => paragraphs
+                        .get(*para_index)
+                        .and_then(|p| p.line_segs.get(end_line.saturating_sub(1)))
+                        .map(|seg| {
+                            next_endnote_title_gap_from_continued_partial = true;
+                            hwpunit_to_px(seg.line_spacing.max(0), self.dpi)
+                        })
+                        .unwrap_or(0.0),
+                    _ => 0.0,
+                }
+            } else {
+                0.0
+            };
+            prev_endnote_title_gap_from_continued_partial =
+                next_endnote_title_gap_from_continued_partial;
 
             // 고정값 줄간격 TAC 표 병행 (Task #9)
             if was_tac {
@@ -5380,7 +5478,21 @@ impl LayoutEngine {
                                 .get(para_style_id)
                                 .map(|s| s.alignment)
                                 .unwrap_or(Alignment::Left);
-                            let pic_y = para_start_y.get(&para_index).copied().unwrap_or(y_offset);
+                            let para_base_y =
+                                para_start_y.get(&para_index).copied().unwrap_or(y_offset);
+                            let pic_y = if matches!(
+                                pic.common.text_wrap,
+                                crate::model::shape::TextWrap::Square
+                            ) && matches!(
+                                pic.common.vert_rel_to,
+                                crate::model::shape::VertRelTo::Para
+                            ) {
+                                square_wrap_first_narrow_line_vpos_px(para, col_area, self.dpi)
+                                    .map(|dy| para_base_y + dy)
+                                    .unwrap_or(para_base_y)
+                            } else {
+                                para_base_y
+                            };
                             let pic_container = LayoutRect {
                                 x: col_area.x,
                                 y: pic_y,

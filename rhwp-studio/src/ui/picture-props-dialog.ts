@@ -13,6 +13,7 @@
 import type { PictureProperties, ShapeProperties, CellPath } from '@/core/types';
 import type { WasmBridge } from '@/core/wasm-bridge';
 import type { EventBus } from '@/core/event-bus';
+import { enableDialogDrag } from './dialog-drag';
 
 /** HWPUNIT ↔ mm 변환 상수 (1 inch = 25.4 mm = 7200 HWPUNIT) */
 const HWP_PER_MM = 7200 / 25.4; // ≈ 283.46
@@ -350,7 +351,7 @@ export class PicturePropsDialog {
       if (e.target === this.overlay) this.hide();
     });
 
-    this.enableDrag(titleBar);
+    enableDialogDrag(this.dialog, titleBar);
   }
 
   private switchTab(idx: number): void {
@@ -2534,6 +2535,7 @@ export class PicturePropsDialog {
     mainRow.appendChild(rightCol);
     dlg.appendChild(mainRow);
     overlay.appendChild(dlg);
+    enableDialogDrag(dlg, titleBar);
 
     // Escape / 오버레이 클릭
     overlay.addEventListener('keydown', (e) => {
@@ -2545,32 +2547,6 @@ export class PicturePropsDialog {
 
     document.body.appendChild(overlay);
     setTimeout(() => textarea.focus(), 50);
-  }
-
-  // ════════════════════════════════════════════════════════
-  //  드래그
-  // ════════════════════════════════════════════════════════
-
-  private enableDrag(titleEl: HTMLElement): void {
-    let offsetX = 0, offsetY = 0, isDragging = false;
-    titleEl.addEventListener('mousedown', (e) => {
-      if ((e.target as HTMLElement).closest('.dialog-close')) return;
-      isDragging = true;
-      const rect = this.dialog.getBoundingClientRect();
-      offsetX = e.clientX - rect.left;
-      offsetY = e.clientY - rect.top;
-      this.dialog.style.position = 'fixed';
-      this.dialog.style.left = `${rect.left}px`;
-      this.dialog.style.top = `${rect.top}px`;
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      this.dialog.style.left = `${e.clientX - offsetX}px`;
-      this.dialog.style.top = `${e.clientY - offsetY}px`;
-      this.dialog.style.margin = '0';
-    });
-    document.addEventListener('mouseup', () => { isDragging = false; });
   }
 
   // ════════════════════════════════════════════════════════

@@ -190,6 +190,48 @@ fn min_para_text_y(node: &RenderNode, para_index: usize) -> Option<f64> {
         .min_by(|a, b| a.partial_cmp(b).unwrap())
 }
 
+fn find_text_line_bbox(
+    node: &RenderNode,
+    para_index: usize,
+    line_index: u32,
+) -> Option<BoundingBox> {
+    if let RenderNodeType::TextLine(line) = &node.node_type {
+        if line.para_index == Some(para_index) && line.line_index == Some(line_index) {
+            return Some(node.bbox.clone());
+        }
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_text_line_bbox(child, para_index, line_index))
+}
+
+fn max_equation_bottom_in_region(
+    node: &RenderNode,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+) -> Option<f64> {
+    let own = match &node.node_type {
+        RenderNodeType::Equation(_)
+            if node.bbox.x >= x_min
+                && node.bbox.x < x_max
+                && node.bbox.y >= y_min
+                && node.bbox.y < y_max =>
+        {
+            Some(node.bbox.y + node.bbox.height)
+        }
+        _ => None,
+    };
+    own.into_iter()
+        .chain(
+            node.children.iter().filter_map(|child| {
+                max_equation_bottom_in_region(child, x_min, x_max, y_min, y_max)
+            }),
+        )
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+}
+
 fn max_para_content_bottom(node: &RenderNode, para_index: usize) -> Option<f64> {
     let own = match &node.node_type {
         RenderNodeType::TextLine(line) if line.para_index == Some(para_index) => {
@@ -216,6 +258,22 @@ fn max_para_content_bottom(node: &RenderNode, para_index: usize) -> Option<f64> 
                 .filter_map(|child| max_para_content_bottom(child, para_index)),
         )
         .max_by(|a, b| a.partial_cmp(b).unwrap())
+}
+
+#[test]
+fn issue_1209_test_image_topandbottom_picture_reserves_text_flow() {
+    let bytes = std::fs::read("samples/test-image.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(0).expect("page 1 render tree");
+
+    let image = find_image_bbox(&tree.root, 0, 2).expect("자리차지 그림");
+    let text_line = find_text_line_bbox(&tree.root, 0, 0).expect("자리차지 텍스트 줄");
+    let image_bottom = image.y + image.height;
+
+    assert!(
+        text_line.y + 0.1 >= image_bottom,
+        "자리차지 그림은 한컴처럼 본문과 겹치면 안 됨: image={image:?}, text_line={text_line:?}"
+    );
 }
 
 #[test]
@@ -522,6 +580,16 @@ fn issue_1139_endnote_spacing_reference_files_match_hancom_page_counts() {
         "raw_unknown은 한컴 UI '미주 사이' 값이어야 함"
     );
     assert_eq!(below20_doc.page_count(), 23, "구분선 아래 20mm 한컴 기준");
+    let below20_page22 = below20_doc.dump_page_items(Some(21));
+    let below20_page23 = below20_doc.dump_page_items(Some(22));
+    assert!(
+        below20_page22.contains("FullParagraph[미주]  pi=1163"),
+        "구분선 아래 20mm PDF 기준 문30 제목은 22쪽 오른쪽 단에서 시작해야 함\n{below20_page22}"
+    );
+    assert!(
+        !below20_page23.contains("FullParagraph[미주]  pi=1163"),
+        "구분선 아래 20mm 23쪽은 문30 후반 꼬리만 남아야 함\n{below20_page23}"
+    );
 
     let between20 =
         std::fs::read("samples/3-09월_교육_통합_2024-미주사이20.hwp").expect("between20");
@@ -538,6 +606,17 @@ fn issue_1139_endnote_spacing_reference_files_match_hancom_page_counts() {
         "raw_unknown은 한컴 UI '미주 사이' 값이어야 함"
     );
     assert_eq!(between20_doc.page_count(), 24, "미주 사이 20mm 한컴 기준");
+    let between20_page23 = between20_doc.dump_page_items(Some(22));
+    let between20_page24 = between20_doc.dump_page_items(Some(23));
+    assert!(
+        between20_page23.contains("FullParagraph[미주]  pi=1129")
+            && between20_page23.contains("FullParagraph[미주]  pi=1163"),
+        "미주 사이 20mm PDF 기준 23쪽에는 문29 시작과 문30 시작이 함께 배치되어야 함\n{between20_page23}"
+    );
+    assert!(
+        !between20_page24.contains("FullParagraph[미주]  pi=1163"),
+        "미주 사이 20mm 24쪽은 문30 시작이 아니라 꼬리 문단만 남아야 함\n{between20_page24}"
+    );
 }
 
 #[test]
@@ -854,6 +933,67 @@ fn issue_1139_page23_question30_picture_line_is_rendered() {
 }
 
 #[test]
+fn issue_1209_2022_sep_page13_question19_square_picture_wraps_following_text() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(12).expect("page 13 render tree");
+
+    let graph = find_image_bbox(&tree.root, 728, 0).expect("문19 그래프");
+    let answer_line = find_text_line_bbox(&tree.root, 729, 0).expect("문19 그래프 옆 첫 문단");
+    let explanation_line =
+        find_text_line_bbox(&tree.root, 730, 0).expect("문19 그래프 옆 설명 첫 줄");
+    let tail_formula_bottom = max_equation_bottom_in_region(
+        &tree.root,
+        answer_line.x - 1.0,
+        graph.x,
+        answer_line.y - 40.0,
+        answer_line.y,
+    )
+    .expect("문19 f(2) 꼬리 수식");
+
+    assert!(
+        answer_line.y < graph.y + graph.height && explanation_line.y < graph.y + graph.height,
+        "검증 대상 문단은 그래프 높이 범위 안에서 둘러싸기 배치되어야 함: graph={graph:?}, answer={answer_line:?}, explanation={explanation_line:?}"
+    );
+    assert!(
+        answer_line.y >= tail_formula_bottom + 1.0,
+        "문19 그래프 anchor 줄의 TAC 수식 높이를 예약해야 다음 문단과 겹치지 않음: formula_bottom={tail_formula_bottom}, answer={answer_line:?}"
+    );
+    assert!(
+        answer_line.x + answer_line.width <= graph.x + 0.5,
+        "문19 그래프 직후 문단은 한컴/PDF처럼 그래프 왼쪽 좁은 영역 안에 배치되어야 함: graph={graph:?}, line={answer_line:?}"
+    );
+    assert!(
+        explanation_line.x + explanation_line.width <= graph.x + 0.5,
+        "문19 설명 첫 줄이 그래프 영역을 침범하면 문단 겹침이 재발함: graph={graph:?}, line={explanation_line:?}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_page8_question29_square_picture_starts_at_wrap_line() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(7).expect("page 8 render tree");
+
+    let picture = find_image_bbox(&tree.root, 429, 21).expect("문29 어울림 그림");
+    let first_full_line = find_text_line_bbox(&tree.root, 429, 0).expect("문29 첫 줄");
+    let first_wrap_line = find_text_line_bbox(&tree.root, 429, 6).expect("문29 그림 옆 첫 좁은 줄");
+
+    assert!(
+        first_full_line.y + first_full_line.height <= picture.y + 1.0,
+        "어울림 그림은 위쪽 full-width 본문 줄을 침범하면 안 됨: picture={picture:?}, first_line={first_full_line:?}"
+    );
+    assert!(
+        (picture.y - first_wrap_line.y).abs() <= 2.0,
+        "어울림 그림 상단은 HWP LINE_SEG가 처음 좁아지는 줄에 맞아야 함: picture={picture:?}, wrap_line={first_wrap_line:?}"
+    );
+    assert!(
+        first_wrap_line.x + first_wrap_line.width <= picture.x + 1.0,
+        "어울림 본문 줄은 그림 왼쪽 좁은 영역을 넘으면 안 됨: picture={picture:?}, wrap_line={first_wrap_line:?}"
+    );
+}
+
+#[test]
 fn issue_1139_2023_page4_question26_square_table_uses_anchor_line() {
     let bytes = std::fs::read("samples/3-09월_교육_통합_2023.hwp").expect("sample");
     let doc = HwpDocument::from_bytes(&bytes).expect("parse");
@@ -981,7 +1121,7 @@ fn issue_1189_2022_nov_page17_internal_rewind_keeps_formula_tail_on_next_page() 
     collect_equation_bboxes_containing(&tree.root, "CQRT", &mut cqrt_lines);
     let cqrt_line = cqrt_lines
         .into_iter()
-        .find(|bbox| bbox.x > 400.0 && bbox.y > 430.0 && bbox.y < 460.0)
+        .find(|bbox| bbox.x > 400.0 && bbox.y > 440.0 && bbox.y < 500.0)
         .expect("문28 CQRT line");
     let mut g_theta_candidates = Vec::new();
     collect_equation_bboxes_containing(&tree.root, ">g</text>", &mut g_theta_candidates);
@@ -996,6 +1136,77 @@ fn issue_1189_2022_nov_page17_internal_rewind_keeps_formula_tail_on_next_page() 
     assert!(
         (g_theta.y - cqrt_line.y).abs() < 2.0 && cqrt_line.x > g_theta.x,
         "문28의 g(theta)와 =□CQRT-△CST는 같은 줄에서 좌→우로 이어져야 함: g={g_theta:?}, cqrt={cqrt_line:?}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_nov_page17_split_endnote_titles_keep_hancom_gap() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+
+    let tree = doc.build_page_render_tree(16).expect("page 17 render tree");
+    let question27_y = min_para_text_y(&tree.root, 787).expect("문27 title");
+    let question28_y = min_para_text_y(&tree.root, 801).expect("문28 title");
+
+    assert!(
+        (240.0..256.0).contains(&question27_y),
+        "17쪽 왼쪽 단 문27 제목은 앞쪽에서 이어진 미주 본문 뒤 한컴/PDF 간격을 유지해야 함: y={question27_y}"
+    );
+    assert!(
+        (204.0..216.0).contains(&question28_y),
+        "17쪽 오른쪽 단 문28 제목도 앞쪽에서 이어진 미주 본문 뒤 한컴/PDF 간격을 유지해야 함: y={question28_y}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_nov_page17_question29_keeps_hancom_gap_after_full_para() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+
+    let page17 = doc.dump_page_items(Some(16));
+    assert!(
+        page17.contains("FullParagraph[미주]  pi=812"),
+        "17쪽 오른쪽 단에는 문29 제목이 보여야 함\n{page17}"
+    );
+
+    let tree = doc.build_page_render_tree(16).expect("page 17 render tree");
+    let question29_y = min_para_text_y(&tree.root, 812).expect("문29 title");
+
+    assert!(
+        (806.0..818.0).contains(&question29_y),
+        "17쪽 문29 제목은 직전 full 미주 문단 뒤 PDF/한컴 기준 미주 사이 간격을 유지해야 함: y={question29_y}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_nov_page14_question22_keeps_hancom_endnote_gap() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+
+    let page14 = doc.dump_page_items(Some(13));
+    assert!(
+        page14.contains("FullParagraph[미주]  pi=631")
+            && page14.contains("FullParagraph[미주]  pi=632"),
+        "14쪽 문22 앞뒤 미주 문단이 같은 왼쪽 단 흐름에 있어야 함\n{page14}"
+    );
+
+    let tree = doc.build_page_render_tree(13).expect("page 14 render tree");
+    let prev_bottom = max_para_content_bottom(&tree.root, 631).expect("문21 tail content");
+    let question22_y = min_para_text_y(&tree.root, 632).expect("문22 title");
+    let gap = question22_y - prev_bottom;
+
+    assert!(
+        (22.0..34.0).contains(&gap),
+        "14쪽 문22 시작 전에는 한컴/PDF 기준 미주 사이 간격이 보존되어야 함: prev_bottom={prev_bottom}, question22_y={question22_y}, gap={gap}"
+    );
+
+    let question22_tail_bottom = max_para_content_bottom(&tree.root, 643).expect("문22 tail");
+    let question23_y = min_para_text_y(&tree.root, 644).expect("문23 title");
+    let question23_gap = question23_y - question22_tail_bottom;
+
+    assert!(
+        (20.0..34.0).contains(&question23_gap),
+        "빈 spacer 뒤 문23 제목도 한컴/PDF 기준 미주 사이 간격을 유지해야 함: tail_bottom={question22_tail_bottom}, question23_y={question23_y}, gap={question23_gap}"
     );
 }
 
@@ -1099,6 +1310,30 @@ fn issue_1189_2022_nov_pages10_12_rewind_tail_and_equation_scale_match_pdf() {
     assert!(
         group.contains(",1.0000)"),
         "수식 bbox 높이로 Y축을 확대하면 12쪽 하단 주석 수식이 찌그러짐\n{group}"
+    );
+}
+
+#[test]
+fn issue_1209_2022_sep_page10_question12_uses_safe_vpos_backtrack() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(9).expect("page 10 render tree");
+
+    let question12_y = min_para_text_y(&tree.root, 567).expect("문12 title");
+    let question12_body_y = min_para_text_y(&tree.root, 568).expect("문12 body");
+    let question13_y = min_para_text_y(&tree.root, 575).expect("문13 title");
+
+    assert!(
+        (390.0..=406.0).contains(&question12_y),
+        "10쪽 문12 제목은 저장 LINE_SEG의 안전한 되감김 위치를 따라야 함: q12_y={question12_y}"
+    );
+    assert!(
+        (12.0..=30.0).contains(&(question12_body_y - question12_y)),
+        "문12 제목과 본문 첫 줄 사이 간격은 한컴/PDF 흐름을 유지해야 함: title={question12_y}, body={question12_body_y}"
+    );
+    assert!(
+        question13_y <= 724.0,
+        "문12 수식 블록이 아래로 밀려 문13을 늦게 시작시키면 안 됨: q13_y={question13_y}"
     );
 }
 
