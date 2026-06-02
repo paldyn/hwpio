@@ -4153,7 +4153,13 @@ impl LayoutEngine {
                 let line_bottom = if skip_advance_empty_line {
                     y
                 } else {
-                    let trailing = if line_idx + 1 < end {
+                    // [Task #1236] 다줄 미주 문단의 마지막 줄: 다음 문단이 **같은 미주**
+                    // 연속이면 trailing 줄간격을 포함해 풀이 줄간격을 균일하게 한다
+                    // (간헐적 좁아짐 해소). 미주 마지막 문단(=문제 경계)이면 0 유지해
+                    // between-notes margin 과 중복 가산되지 않게 한다.
+                    let trailing = if line_idx + 1 < end
+                        || self.endnote_para_has_same_endnote_successor(para_index)
+                    {
                         line_spacing_px
                     } else {
                         0.0
