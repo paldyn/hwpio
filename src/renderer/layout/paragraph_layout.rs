@@ -158,6 +158,68 @@ fn line_has_tac_control(comp: &ComposedParagraph, line_idx: usize) -> bool {
         .any(|(pos, _, _)| char_pos_in_line(*pos, start, end))
 }
 
+/// [Task #1239] 모든 줄이 수식만(빈 runs)이고 char_start 가 비구분(연속 동일/감소)일 때,
+/// **같은 char_start 의 줄들에 같은 char position 의 연속 TAC 를 순서대로 분배**해
+/// tac_idx → line_idx 매핑을 만든다.
+///
+/// 연속 인라인 수식이 한컴 LINE_SEG 로 별도 줄에 배치된 경우(풀이 정렬식 "S=…=…=…"),
+/// 사이에 텍스트 char 가 없어 `control_text_positions` 가 둘을 같은 position 으로 복원 →
+/// char 위치 기반 줄 배정이 같은 줄로 병합하던 문제(#1239)를 해소한다.
+/// (#1221 의 줄수==tac수 1:1 매핑을 m:n 으로 일반화.) None 이면 char 기반 매핑을 사용한다.
+///
+/// `tac_offsets_px` 는 호출부에서 pos 오름차순 정렬되어 있다고 가정한다.
+fn equation_only_tac_line_assignment(
+    comp: &ComposedParagraph,
+    tac_offsets_px: &[(usize, f64, usize)],
+) -> Option<Vec<usize>> {
+    let n_lines = comp.lines.len();
+    if n_lines <= 1 || tac_offsets_px.is_empty() {
+        return None;
+    }
+    if !comp.lines.iter().all(|l| l.runs.is_empty()) {
+        return None;
+    }
+    // char_start 가 비구분(연속 동일/감소) 일 때만 char 기반이 깨진 케이스 → 분배 적용.
+    let degenerate = comp
+        .lines
+        .windows(2)
+        .any(|w| w[1].char_start <= w[0].char_start);
+    if !degenerate {
+        return None;
+    }
+    let mut assign = vec![n_lines - 1; tac_offsets_px.len()];
+    let mut li = 0usize;
+    let mut k = 0usize;
+    while k < tac_offsets_px.len() {
+        let pos = tac_offsets_px[k].0;
+        // pos 보다 작은 char_start 줄 건너뜀
+        while li < n_lines && comp.lines[li].char_start < pos {
+            li += 1;
+        }
+        // 같은 pos 의 연속 TAC 묶음
+        let tac_start = k;
+        while k < tac_offsets_px.len() && tac_offsets_px[k].0 == pos {
+            k += 1;
+        }
+        let tac_count = k - tac_start;
+        // char_start == pos 인 줄 묶음
+        let line_start = li;
+        while li < n_lines && comp.lines[li].char_start == pos {
+            li += 1;
+        }
+        let line_count = li - line_start;
+        for t in 0..tac_count {
+            assign[tac_start + t] = if line_count == 0 {
+                line_start.min(n_lines - 1)
+            } else {
+                // TAC 수가 줄 수보다 많으면 나머지는 마지막 줄에 모음(예: "S =∫₀³" 1줄 2TAC).
+                line_start + t.min(line_count - 1)
+            };
+        }
+    }
+    Some(assign)
+}
+
 fn tac_offsets_for_line(
     comp: &ComposedParagraph,
     tac_offsets_px: &[(usize, f64, usize)],
@@ -3684,20 +3746,14 @@ impl LayoutEngine {
                     .get(line_idx + 1)
                     .map(|l| l.char_start)
                     .unwrap_or(usize::MAX);
-                // [#1221] 모든 줄이 빈 runs(수식만)이고 줄 char_start 가 비구분(degenerate,
-                // 예: 셀 z-표처럼 줄별 LINE_SEG.text_start 가 전부 0)일 때 char 범위로는
-                // tac→줄 매핑이 깨진다(첫 줄 빈 범위 → 마지막 줄이 모든 수식 흡수, 행 겹침).
-                // 줄 개수 == tac 개수면 순서(line_idx)대로 1:1 매핑한다.
-                let index_based_tac = composed.lines.len() > 1
-                    && composed.lines.len() == tac_offsets_px.len()
-                    && composed.lines.iter().all(|l| l.runs.is_empty())
-                    && composed
-                        .lines
-                        .windows(2)
-                        .any(|w| w[1].char_start <= w[0].char_start);
+                // [#1221/#1239] 모든 줄이 빈 runs(수식만)이고 줄 char_start 가 비구분일 때
+                // char 범위로는 tac→줄 매핑이 깨진다(빈 줄 흡수/행 겹침). 같은 char_start 줄들에
+                // 같은 position 의 연속 TAC 를 순서대로 분배한다(#1221 1:1 의 m:n 일반화).
+                let eq_tac_assignment =
+                    equation_only_tac_line_assignment(composed, &tac_offsets_px);
                 let tac_on_line = |k: usize, pos: usize| -> bool {
-                    if index_based_tac {
-                        k == line_idx
+                    if let Some(ref assign) = eq_tac_assignment {
+                        assign.get(k).copied() == Some(line_idx)
                     } else {
                         pos >= line_start_char && pos < line_end_char
                     }
