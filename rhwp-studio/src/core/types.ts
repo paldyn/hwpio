@@ -855,11 +855,18 @@ export interface LayerResources {
   svgKeys?: string[];
 }
 
+export interface LayerInfo {
+  textWrap?: string | null;
+  zOrder: number;
+  stableIndex: number;
+}
+
 export type LayerNode = LayerGroupNode | LayerClipNode | LayerLeafNode;
 
 export interface LayerGroupNode {
   kind: 'group';
   bounds: LayerBounds;
+  layer?: LayerInfo;
   groupKind?: { kind: string; [key: string]: unknown };
   cacheHint?: LayerCacheHint;
   children: LayerNode[];
@@ -868,6 +875,7 @@ export interface LayerGroupNode {
 export interface LayerClipNode {
   kind: 'clipRect';
   bounds: LayerBounds;
+  layer?: LayerInfo;
   clip: LayerBounds;
   clipKind: 'body' | 'tableCell' | 'textBox' | 'generic';
   child: LayerNode;
@@ -876,6 +884,7 @@ export interface LayerClipNode {
 export interface LayerLeafNode {
   kind: 'leaf';
   bounds: LayerBounds;
+  layer?: LayerInfo;
   ops: LayerPaintOp[];
 }
 

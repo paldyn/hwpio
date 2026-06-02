@@ -213,16 +213,16 @@ fn parse_image_dimensions_canvas(data: &[u8]) -> Option<(u32, u32)> {
 ///
 /// 다층 레이어 렌더링 필터 (Task #516, Stage 5.2 옵션 A).
 ///
-/// 페이지를 다중 layer 로 분리할 때 어떤 wrap 모드의 그림을 렌더링할지 결정.
-/// `All` 은 기존 단일 평면 동작 (모든 그림 포함). `FlowOnly` 는 본문 layer 용
-/// (BehindText/InFrontOfText 제외). `WrapOnly` 는 overlay layer 용 (해당 wrap 만).
+/// 페이지를 다중 layer 로 분리할 때 어떤 replay plane 을 렌더링할지 결정.
+/// `All` 은 기존 단일 평면 동작이다. `FlowOnly` 는 본문 layer 용
+/// (BehindText/InFrontOfText 제외). `WrapOnly` 는 overlay layer 용 (해당 plane 만).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LayerFilter {
-    /// 모든 그림 (기본 — 기존 동작 보존)
+    /// 모든 PaintOp (기본 — 기존 동작 보존)
     All,
-    /// 본문 layer — BehindText / InFrontOfText 그림 제외
+    /// 본문 layer — BehindText / InFrontOfText plane 제외
     FlowOnly,
-    /// Overlay layer — 특정 wrap 모드 그림만 (BehindText 또는 InFrontOfText)
+    /// Overlay layer — 특정 wrap plane 만 (BehindText 또는 InFrontOfText)
     WrapOnly(crate::model::shape::TextWrap),
 }
 
@@ -285,7 +285,7 @@ pub struct WebCanvasRenderer {
     scale: f64,
     /// 다층 레이어 필터 (Task #516, 기본 All 은 기존 동작 보존)
     pub layer_filter: LayerFilter,
-    /// BehindText overlay 를 DOM layer 로 합성할 때 flow Canvas 의 페이지 배경을
+    /// BehindText plane 을 별도 canvas layer 로 합성할 때 flow Canvas 의 페이지 배경을
     /// 투명하게 둘지 여부.
     transparent_page_background: bool,
 }
@@ -358,8 +358,13 @@ impl WebCanvasRenderer {
     pub fn render_layer_tree(&mut self, tree: &PageLayerTree) {
         self.show_paragraph_marks = tree.output_options.show_paragraph_marks;
         self.show_control_codes = tree.output_options.show_control_codes;
-        self.transparent_page_background = matches!(self.layer_filter, LayerFilter::FlowOnly)
-            && layer_tree_contains_replay_plane(&tree.root, PaintReplayPlane::BehindText);
+        self.transparent_page_background = match self.layer_filter {
+            LayerFilter::All => false,
+            LayerFilter::FlowOnly => {
+                layer_tree_contains_replay_plane(&tree.root, PaintReplayPlane::BehindText)
+            }
+            LayerFilter::WrapOnly(_) => true,
+        };
         self.begin_page(tree.page_width, tree.page_height);
         self.render_layer_node(&tree.root, None);
         self.transparent_page_background = false;
@@ -1994,8 +1999,8 @@ impl Renderer for WebCanvasRenderer {
             let _ = self.ctx.scale(self.scale, self.scale);
         }
         self.ctx.clear_rect(0.0, 0.0, width, height);
-        // 캔버스 초기화 (흰색 배경). BehindText DOM overlay 를 쓰는 flow layer 는
-        // 페이지 배경을 별도 HTML layer 로 두어야 하므로 투명하게 유지한다.
+        // 캔버스 초기화 (흰색 배경). 분리된 flow/behind/front layer 는
+        // HTML 합성 순서가 페이지 배경을 담당하므로 투명하게 유지한다.
         if self.should_render_page_background() {
             self.ctx.set_fill_style_str("#ffffff");
             self.ctx.fill_rect(0.0, 0.0, width, height);

@@ -21,6 +21,7 @@ import type {
   LayerAffineTransform,
   LayerGlyphOutlineOp,
   LayerImageOp,
+  LayerInfo,
   LayerLeafNode,
   LayerLineOp,
   LayerNode,
@@ -231,18 +232,20 @@ export class CanvasKitLayerRenderer {
     node: LayerNode,
     profile: LayerRenderProfile,
     replayPlane: CanvasKitReplayPlane,
+    inheritedLayer: LayerInfo | null = null,
   ): void {
+    const activeLayer = node.layer ?? inheritedLayer;
     if (node.kind === 'group') {
       for (const child of node.children) {
-        this.renderNode(canvas, child, profile, replayPlane);
+        this.renderNode(canvas, child, profile, replayPlane, activeLayer);
       }
       return;
     }
     if (node.kind === 'clipRect') {
-      this.renderClipNode(canvas, node, profile, replayPlane);
+      this.renderClipNode(canvas, node, profile, replayPlane, activeLayer);
       return;
     }
-    this.renderLeaf(canvas, node, replayPlane);
+    this.renderLeaf(canvas, node, replayPlane, activeLayer);
   }
 
   private renderClipNode(
@@ -250,6 +253,7 @@ export class CanvasKitLayerRenderer {
     node: LayerClipNode,
     profile: LayerRenderProfile,
     replayPlane: CanvasKitReplayPlane,
+    inheritedLayer: LayerInfo | null,
   ): void {
     const pad = canvaskitClipRightPad(this.renderMode, profile, node.clipKind);
     const clip = {
@@ -258,13 +262,19 @@ export class CanvasKitLayerRenderer {
     };
     canvas.save();
     canvas.clipRect(this.rect(clip), this.canvasKit.ClipOp?.Intersect ?? 0, true);
-    this.renderNode(canvas, node.child, profile, replayPlane);
+    this.renderNode(canvas, node.child, profile, replayPlane, inheritedLayer);
     canvas.restore();
   }
 
-  private renderLeaf(canvas: SkCanvas, node: LayerLeafNode, replayPlane: CanvasKitReplayPlane): void {
+  private renderLeaf(
+    canvas: SkCanvas,
+    node: LayerLeafNode,
+    replayPlane: CanvasKitReplayPlane,
+    inheritedLayer: LayerInfo | null,
+  ): void {
+    const activeLayer = node.layer ?? inheritedLayer;
     for (const op of node.ops) {
-      if (layerPaintOpReplayPlane(op) !== replayPlane) {
+      if (layerPaintOpReplayPlane(op, activeLayer) !== replayPlane) {
         continue;
       }
       this.renderOp(canvas, op);
