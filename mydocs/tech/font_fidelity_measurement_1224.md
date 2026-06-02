@@ -5,6 +5,10 @@
 
 > **명명 참고**: 구현계획서에서 `font_emfill_comparison_1224.md` 로 예고했으나, 실측 결과
 > 근본 원인이 em-fill(크기)이 아니라 **획 두께(weight/density)** 로 판명되어 정확한 이름으로 작성한다.
+>
+> **후속 보완**: 본 Stage 1에서는 `Noto Sans KR Light (wght 300)`를 1차 후보로 선정했으나,
+> Stage 3의 실제 rsvg 페이지밀도 검증에서 `Noto Sans KR ExtraLight (wght 200)`가
+> PDF 기준에 더 근접함을 확인해 최종 구현 후보로 재확정했다.
 
 ## 1. 측정 목적
 
@@ -71,6 +75,10 @@ Noto Sans CJK KR(현 폴백) 밀도를 페이지 실측 0.378 에 고정하고, 
 이는 0.67 이 크기 지표가 아님을 역으로 입증한다(§3 결론과 정합).
 
 ## 5. 선정 — Noto Sans KR Light (wght 300)
+
+> 후속 Stage 3에서 실제 페이지 렌더 밀도를 재측정한 결과 최종 구현은
+> `Noto Sans KR ExtraLight (wght 200)`로 변경되었다. 본 절은 Stage 1 당시의 1차 후보
+> 선정 근거를 보존하기 위한 기록이다.
 
 | 기준 | 평가 |
 |------|------|

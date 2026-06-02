@@ -10,6 +10,11 @@
 `src/renderer/mod.rs::generic_fallback` 의 sans-serif 체인 2곳(빈 family 분기 + 일반 sans
 분기)에 **`'Noto Sans KR Light'` 를 무거운 `'Noto Sans KR'` 직전에 삽입**.
 
+> **후속 보완**: Stage 2 당시에는 Stage 1 측정 결과에 따라 `Light(wght 300)`로 진행했으나,
+> Stage 3의 실제 rsvg 페이지밀도 검증에서 `ExtraLight(wght 200)`가 한컴 돋움/PDF 기준에
+> 더 근접함을 확인해 최종 구현은 `Noto Sans KR ExtraLight`로 재확정했다. 이 문서는
+> Stage 2 시점의 변경 기록을 보존한다.
+
 변경 전:
 ```
 …,'Apple SD Gothic Neo','Noto Sans KR','Pretendard',…
