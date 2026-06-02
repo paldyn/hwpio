@@ -83,3 +83,52 @@ fn textbox_picture_emits_cellpath_sentinel() {
         "문단44 picture0 의 sentinel cellPath 불일치 (관측: {found:?})"
     );
 }
+
+/// Stage 2: 글상자 안 picture 속성을 by_path API 로 조회/변경(round-trip)할 수 있는지.
+/// getter `resolve_paragraph_by_path` + setter `resolve_cell_paragraph_mut`(Shape arm)
+/// 가 글상자 path(마지막 세그먼트=Shape)를 해석하는지 검증.
+#[test]
+fn picture_in_textbox_get_set_by_path() {
+    let mut doc = load_sample();
+    // 섹션0 문단25 글상자(사각형 control 0, 글상자 문단 0) 안 picture.
+    // cell_path_json 키는 parse_cell_path_json 규약(controlIdx/cellIdx/cellParaIdx).
+    let cell_path = r#"[{"controlIdx":0,"cellIdx":0,"cellParaIdx":0}]"#;
+
+    // 첫 picture (inner ctrl 0) 조회
+    let before = doc
+        .get_cell_picture_properties_by_path_native(0, 25, cell_path, 0)
+        .expect("글상자 picture 속성 조회 실패");
+    let bv: serde_json::Value = serde_json::from_str(&before).unwrap();
+    let w0 = bv["width"].as_u64().expect("width 부재");
+    let h0 = bv["height"].as_u64().expect("height 부재");
+    assert!(w0 > 0 && h0 > 0, "조회된 크기가 0: {before}");
+
+    // width 변경 → set
+    let new_w = w0 + 12345;
+    let props = format!(r#"{{"width":{new_w}}}"#);
+    let ok = doc
+        .set_cell_picture_properties_by_path_native(0, 25, cell_path, 0, &props)
+        .expect("글상자 picture 속성 변경 실패");
+    assert!(ok.contains("\"ok\":true"), "set 응답 비정상: {ok}");
+
+    // 재조회 — 변경 반영 확인
+    let after = doc
+        .get_cell_picture_properties_by_path_native(0, 25, cell_path, 0)
+        .expect("변경 후 재조회 실패");
+    let av: serde_json::Value = serde_json::from_str(&after).unwrap();
+    assert_eq!(
+        av["width"].as_u64(),
+        Some(new_w),
+        "width 변경 미반영: {after}"
+    );
+
+    // 두 번째 picture(inner ctrl 1)도 분리 조회되는지 (inner_control_idx 정합 회귀)
+    let p1 = doc
+        .get_cell_picture_properties_by_path_native(0, 25, cell_path, 1)
+        .expect("글상자 두번째 picture 조회 실패");
+    let p1v: serde_json::Value = serde_json::from_str(&p1).unwrap();
+    assert!(
+        p1v["width"].as_u64().unwrap_or(0) > 0,
+        "두번째 picture 크기 0: {p1}"
+    );
+}

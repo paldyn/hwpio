@@ -1,6 +1,6 @@
 //! 그림 속성/삽입/삭제 + 표 생성 + 셀 bbox 관련 native 메서드
 
-use super::super::helpers::get_textbox_from_shape;
+use super::super::helpers::{get_textbox_from_shape, get_textbox_from_shape_mut};
 use crate::document_core::DocumentCore;
 use crate::error::HwpError;
 use crate::model::control::Control;
@@ -708,7 +708,9 @@ impl DocumentCore {
 
     /// [Task #1151 v7] section + parent_para_idx + path → target paragraph (mut).
     /// 2 개 set_cell_*_by_path_native (Picture / Shape) 의 공통 traversal.
-    /// immutable 버전은 cursor_nav.rs 의 `resolve_paragraph_by_path` 가 담당.
+    /// immutable 버전은 cursor_nav.rs 의 `resolve_paragraph_by_path` 가 담당하며,
+    /// [Task #1171] 이후 표 셀과 글상자(Shape text_box, cell_index=0 sentinel) 를 모두
+    /// 처리하도록 immutable 짝과 동일하게 맞춘다.
     fn resolve_cell_paragraph_mut<'a>(
         section: &'a mut crate::model::document::Section,
         parent_para_idx: usize,
@@ -721,24 +723,46 @@ impl DocumentCore {
             let ctrl = current_para.controls.get_mut(ctrl_idx).ok_or_else(|| {
                 HwpError::RenderError(format!("경로[{}]: controls[{}] 범위 초과", i, ctrl_idx))
             })?;
-            let table = match ctrl {
-                crate::model::control::Control::Table(t) => t,
+            current_para = match ctrl {
+                crate::model::control::Control::Table(t) => {
+                    let cell = t.cells.get_mut(cell_idx).ok_or_else(|| {
+                        HwpError::RenderError(format!("경로[{}]: cells[{}] 범위 초과", i, cell_idx))
+                    })?;
+                    cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
+                        HwpError::RenderError(format!(
+                            "경로[{}]: paragraphs[{}] 범위 초과",
+                            i, cell_para_idx
+                        ))
+                    })?
+                }
+                // [Task #1171] 글상자(Shape text_box) — cell_index=0 sentinel.
+                crate::model::control::Control::Shape(shape) => {
+                    if cell_idx != 0 {
+                        return Err(HwpError::RenderError(format!(
+                            "경로[{}]: 글상자의 cell_index는 0이어야 합니다 ({})",
+                            i, cell_idx
+                        )));
+                    }
+                    let text_box = get_textbox_from_shape_mut(shape).ok_or_else(|| {
+                        HwpError::RenderError(format!(
+                            "경로[{}]: controls[{}]가 텍스트 글상자가 아닙니다",
+                            i, ctrl_idx
+                        ))
+                    })?;
+                    text_box.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
+                        HwpError::RenderError(format!(
+                            "경로[{}]: 글상자문단 {} 범위 초과",
+                            i, cell_para_idx
+                        ))
+                    })?
+                }
                 _ => {
                     return Err(HwpError::RenderError(format!(
-                        "경로[{}]: controls[{}] 가 표가 아닙니다",
+                        "경로[{}]: controls[{}] 가 표/글상자가 아닙니다",
                         i, ctrl_idx
                     )))
                 }
             };
-            let cell = table.cells.get_mut(cell_idx).ok_or_else(|| {
-                HwpError::RenderError(format!("경로[{}]: cells[{}] 범위 초과", i, cell_idx))
-            })?;
-            current_para = cell.paragraphs.get_mut(cell_para_idx).ok_or_else(|| {
-                HwpError::RenderError(format!(
-                    "경로[{}]: paragraphs[{}] 범위 초과",
-                    i, cell_para_idx
-                ))
-            })?;
         }
         Ok(current_para)
     }
@@ -3109,11 +3133,9 @@ impl DocumentCore {
         inner_control_idx: usize,
     ) -> Result<String, HwpError> {
         let path = Self::parse_cell_path_json(cell_path_json)?;
-        let cell = self.resolve_cell_by_path(section_idx, parent_para_idx, &path)?;
-        let last_cell_para_idx = path.last().unwrap().2;
-        let cell_para = cell.paragraphs.get(last_cell_para_idx).ok_or_else(|| {
-            HwpError::RenderError(format!("셀 내 문단 {} 범위 초과", last_cell_para_idx))
-        })?;
+        // [Task #1171] 표 셀과 글상자(Shape text_box) 를 모두 처리하는 resolver 사용.
+        // (기존 resolve_cell_by_path 는 마지막 세그먼트가 표 셀이어야 했음.)
+        let cell_para = self.resolve_paragraph_by_path(section_idx, parent_para_idx, &path)?;
         let ctrl = cell_para.controls.get(inner_control_idx).ok_or_else(|| {
             HwpError::RenderError(format!("셀 내 컨트롤 {} 범위 초과", inner_control_idx))
         })?;
