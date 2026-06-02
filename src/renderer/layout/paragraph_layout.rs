@@ -169,6 +169,7 @@ fn line_has_tac_control(comp: &ComposedParagraph, line_idx: usize) -> bool {
 ///
 /// `tac_offsets_px` 는 호출부에서 pos 오름차순 정렬되어 있다고 가정한다.
 fn equation_only_tac_line_assignment(
+    para: Option<&Paragraph>,
     comp: &ComposedParagraph,
     tac_offsets_px: &[(usize, f64, usize)],
 ) -> Option<Vec<usize>> {
@@ -208,12 +209,28 @@ fn equation_only_tac_line_assignment(
             li += 1;
         }
         let line_count = li - line_start;
+        let line_candidates: Vec<usize> = (line_start..li).collect();
+        let filtered_candidates: Vec<usize> = line_candidates
+            .iter()
+            .copied()
+            .filter(|idx| {
+                !line_is_leading_empty_equation_tac_guide(para, comp, tac_offsets_px, *idx)
+            })
+            .collect();
+        let line_targets = if filtered_candidates.is_empty() {
+            &line_candidates
+        } else {
+            &filtered_candidates
+        };
         for t in 0..tac_count {
             assign[tac_start + t] = if line_count == 0 {
                 line_start.min(n_lines - 1)
+            } else if line_targets.is_empty() {
+                line_start.min(n_lines - 1)
             } else {
                 // TAC 수가 줄 수보다 많으면 나머지는 마지막 줄에 모음(예: "S =∫₀³" 1줄 2TAC).
-                line_start + t.min(line_count - 1)
+                // 단, 미주 수식 문단의 선행 guide 줄처럼 TAC가 없는 빈 줄은 후보에서 제외한다.
+                line_targets[t.min(line_targets.len() - 1)]
             };
         }
     }
@@ -3857,7 +3874,7 @@ impl LayoutEngine {
                 // char 범위로는 tac→줄 매핑이 깨진다(빈 줄 흡수/행 겹침). 같은 char_start 줄들에
                 // 같은 position 의 연속 TAC 를 순서대로 분배한다(#1221 1:1 의 m:n 일반화).
                 let eq_tac_assignment =
-                    equation_only_tac_line_assignment(composed, &tac_offsets_px);
+                    equation_only_tac_line_assignment(para, composed, &tac_offsets_px);
                 let tac_on_line = |k: usize, pos: usize| -> bool {
                     if let Some(ref assign) = eq_tac_assignment {
                         assign.get(k).copied() == Some(line_idx)
