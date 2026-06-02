@@ -116,17 +116,16 @@ export class PageRenderer {
     const transform = canvas.style.transform;
 
     // BehindText 가 있는 페이지는 flow Canvas 를 투명 배경으로 두고,
-    // 별도 페이지 배경 layer → BehindText → flow Canvas 순서로 합성한다.
+    // 실제 pageBackground layer → BehindText → flow Canvas 순서로 합성한다.
     // Canvas 내부의 흰 배경은 WASM flow 렌더에서 생략된다.
     if (layers.hasBehind) {
       canvas.style.background = 'transparent';
       canvas.style.zIndex = '2';
 
-      const background = document.createElement('div');
+      const background = this.createFilteredCanvasLayer(pageIdx, canvas, renderScale, 'background');
       background.dataset.rhwpOverlay = `background-${pageIdx}`;
       background.dataset.rhwpOverlayPage = String(pageIdx);
       this.applyPageLayerBox(background, top, left, transform, cssWidth, cssHeight);
-      background.style.background = 'var(--color-surface)';
       background.style.zIndex = '0';
       parent.insertBefore(background, canvas);
     } else {
@@ -161,7 +160,7 @@ export class PageRenderer {
     pageIdx: number,
     sourceCanvas: HTMLCanvasElement,
     renderScale: number,
-    layerKind: 'behind' | 'front',
+    layerKind: 'background' | 'behind' | 'front',
   ): HTMLCanvasElement {
     const layer = document.createElement('canvas');
     layer.width = sourceCanvas.width;
@@ -350,7 +349,7 @@ export class PageRenderer {
       `[data-rhwp-overlay-page="${pageIdx}"][data-rhwp-layer-kind]`,
     ).forEach((layerCanvas) => {
       const kind = layerCanvas.dataset.rhwpLayerKind;
-      if (kind === 'behind' || kind === 'front') {
+      if (kind === 'background' || kind === 'behind' || kind === 'front') {
         layerCanvas.width = flowCanvas.width;
         layerCanvas.height = flowCanvas.height;
         this.wasm.renderPageToCanvasFiltered(pageIdx, layerCanvas, renderScale, kind);

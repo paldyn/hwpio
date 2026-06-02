@@ -399,8 +399,9 @@ impl HwpDocument {
     /// 다층 레이어 필터를 적용한 Canvas 렌더링 (Task #516, Stage 5.2).
     ///
     /// `layer_kind`:
-    /// - `"all"` → 모든 그림 렌더 (기본 `renderPageToCanvas` 와 동일)
-    /// - `"flow"` → 본문 layer (BehindText / InFrontOfText 그림 제외)
+    /// - `"all"` → 모든 PaintOp 렌더 (기본 `renderPageToCanvas` 와 동일)
+    /// - `"background"` → page background layer
+    /// - `"flow"` → 본문 layer (BehindText / InFrontOfText plane 제외)
     /// - `"behind"` → BehindText overlay layer
     /// - `"front"` → InFrontOfText overlay layer
     ///
@@ -420,12 +421,13 @@ impl HwpDocument {
 
         let filter = match layer_kind {
             "all" => LayerFilter::All,
+            "background" => LayerFilter::BackgroundOnly,
             "flow" => LayerFilter::FlowOnly,
             "behind" => LayerFilter::WrapOnly(TextWrap::BehindText),
             "front" => LayerFilter::WrapOnly(TextWrap::InFrontOfText),
             _ => {
                 return Err(JsValue::from_str(
-                    "invalid layer_kind: 'all' | 'flow' | 'behind' | 'front'",
+                    "invalid layer_kind: 'all' | 'background' | 'flow' | 'behind' | 'front'",
                 ))
             }
         };

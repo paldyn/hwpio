@@ -220,6 +220,8 @@ fn parse_image_dimensions_canvas(data: &[u8]) -> Option<(u32, u32)> {
 pub enum LayerFilter {
     /// 모든 PaintOp (기본 — 기존 동작 보존)
     All,
+    /// Page background layer
+    BackgroundOnly,
     /// 본문 layer — BehindText / InFrontOfText plane 제외
     FlowOnly,
     /// Overlay layer — 특정 wrap plane 만 (BehindText 또는 InFrontOfText)
@@ -324,6 +326,7 @@ impl WebCanvasRenderer {
     /// PaintOp replay plane 이 현재 layer_filter 와 일치하는지 판정.
     ///
     /// - `LayerFilter::All`: 모든 op 렌더 (기본)
+    /// - `LayerFilter::BackgroundOnly`: page background plane 만
     /// - `LayerFilter::FlowOnly`: BehindText / InFrontOfText plane 제외 (본문 layer)
     /// - `LayerFilter::WrapOnly(w)`: 해당 wrap plane 만 (overlay layer)
     fn should_render_op(&self, op: &PaintOp, layer: Option<RenderLayerInfo>) -> bool {
@@ -331,6 +334,7 @@ impl WebCanvasRenderer {
         let replay_plane = paint_op_replay_plane_with_layer(op, layer);
         match self.layer_filter {
             LayerFilter::All => true,
+            LayerFilter::BackgroundOnly => replay_plane == PaintReplayPlane::Background,
             LayerFilter::FlowOnly => !matches!(
                 replay_plane,
                 PaintReplayPlane::BehindText | PaintReplayPlane::InFrontOfText
@@ -360,6 +364,7 @@ impl WebCanvasRenderer {
         self.show_control_codes = tree.output_options.show_control_codes;
         self.transparent_page_background = match self.layer_filter {
             LayerFilter::All => false,
+            LayerFilter::BackgroundOnly => false,
             LayerFilter::FlowOnly => {
                 layer_tree_contains_replay_plane(&tree.root, PaintReplayPlane::BehindText)
             }

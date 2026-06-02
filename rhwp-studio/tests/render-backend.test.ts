@@ -131,8 +131,9 @@ test('CanvasKit renderer source replays the root once per replay plane', () => {
   assert.match(source, /layerPaintOpReplayPlane\(op,\s*activeLayer\) !== replayPlane/);
 });
 
-test('PageRenderer uses filtered canvas layers for non-image behind and front planes', () => {
+test('PageRenderer uses filtered canvas layers for background, behind, and front planes', () => {
   const source = readFileSync(new URL('../src/view/page-renderer.ts', import.meta.url), 'utf8');
+  assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'background'\)/);
   assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'behind'\)/);
   assert.match(source, /createFilteredCanvasLayer\(pageIdx,\s*canvas,\s*renderScale,\s*'front'\)/);
   assert.match(source, /collectLayerPlaneSummary\(root,\s*summary,\s*null\)/);
