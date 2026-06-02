@@ -739,6 +739,33 @@ export function onClick(this: any, e: MouseEvent): void {
       }
     }
 
+    // [Task #1171] 글상자(Shape text_box) 내부 클릭이 아래 텍스트 편집 진입으로 단락되기
+    // 전에 글상자 안 picture 를 선제 hit-test 한다. picture 우선(작업지시자 확정): 글상자
+    // 안 picture 위 클릭은 항상 picture 객체선택 (표 셀 안 picture 와 동작 일관).
+    // cellPath 동반(글상자/셀 중첩) image/equation 만 가로채고, picture 없는 글상자 영역
+    // 클릭은 아래 텍스트 편집으로 fall-through.
+    if (hit.isTextBox) {
+      const tbPic = this.findPictureAtClick(pageIdx, pageX, pageY);
+      if (tbPic && (tbPic.type === 'image' || tbPic.type === 'equation') && (tbPic as any).cellPath) {
+        this.cursor.clearSelection();
+        this.exitPictureObjectSelectionIfNeeded();
+        this.cursor.enterPictureObjectSelectionDirect(
+          tbPic.sec, tbPic.ppi, tbPic.ci, tbPic.type,
+          tbPic.cellIdx, tbPic.cellParaIdx, (tbPic as any).headerFooter,
+          (tbPic as any).outerTableControlIdx,
+          (tbPic as any).cellPath,
+          (tbPic as any).noteRef,
+        );
+        this.active = true;
+        this.caret.hide();
+        this.selectionRenderer.clear();
+        this.renderPictureObjectSelection();
+        this.eventBus.emit('picture-object-selection-changed', true);
+        this.textarea.focus();
+        return;
+      }
+    }
+
     // 글상자 내부 텍스트/빈 영역 직접 히트 → 바로 캐럿 진입 (한컴 UX).
     // [Task #919] hit_test_native 가 글상자 안 빈 영역에서도 isTextBox=true 반환.
     if (hit.isTextBox) {
