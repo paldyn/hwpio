@@ -37,6 +37,17 @@ PR #1242를 현재 `local/devel` 기준 검증 브랜치에 병합했다.
 | `docker compose --env-file .env.docker run --rm wasm` | 통과 | WASM package 생성 |
 | `npm run build` (`rhwp-studio`) | 통과 | Vite build 통과 |
 
+`local/devel` 병합 후 재확인:
+
+| 항목 | 결과 | 비고 |
+|---|---|---|
+| `git diff --check HEAD` | 통과 | whitespace/path 검증 |
+| `cargo fmt --all --check` | 통과 | formatting |
+| `cargo test --lib hwpx` | 통과 | 188 passed |
+| `cargo test --test issue_1100_exam_social_hwpx_header` | 통과 | 3 passed |
+| `cargo test --test issue_1113_header_autonum_placeholder` | 통과 | 1 passed |
+| `cargo test --test hwpx_roundtrip_integration` | 통과 | 18 passed |
+
 ## 3. 시각 판정
 
 PR 본문과 이슈 #1201의 핵심 재현 샘플은 다음 파일이다.
@@ -79,7 +90,6 @@ PR 본문과 이슈 #1201의 핵심 재현 샘플은 다음 파일이다.
 
 ## 5. 남은 절차
 
-1. 본 보고서와 검토 문서를 커밋한다.
-2. `local/pr1242-verify`를 `local/devel`에 병합한다.
-3. `local/devel` 기준 테스트 후 `origin/devel`로 push한다.
-4. PR #1242에 메인테이너 코멘트를 남기고, 연결 이슈 #1201 종료 상태를 확인한다.
+1. 본 보고서의 병합 후 재검증 결과를 커밋한다.
+2. `origin/devel`로 push한다.
+3. PR #1242에 메인테이너 코멘트를 남기고, 연결 이슈 #1201 종료 상태를 확인한다.
