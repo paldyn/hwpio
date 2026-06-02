@@ -3,9 +3,12 @@
 ## 개요
 
 - 이슈: [#1209](https://github.com/edwardkim/rhwp/issues/1209)
+- PR: [#1232](https://github.com/edwardkim/rhwp/pull/1232)
 - 브랜치: `local/task_m100_1209`
+- PR 원격 브랜치: `jangster77:task_m100_1209`
 - 기준: `upstream/devel` `f83c43b5`
-- 최종 커밋: `c49597f9` (`task 1209: Stage8 단 바깥 TopAndBottom 흐름 보정`)
+- 최종 코드 커밋: `c49597f9` (`task 1209: Stage8 단 바깥 TopAndBottom 흐름 보정`)
+- PR 준비 커밋: `fcf1c937` (`task 1209: PR 준비 보고서 작성`)
 
 Task #1139/#1189 후속으로 미주 간격, 문단/그림 배치, 어울림 그림 줄 흐름, 모달 드래그 동작을 보정했다. 마지막 PR 준비 중 `issue_1082_endnote_multicolumn_drift` 회귀를 발견해 Stage8에서 현재 단 바깥의 문단 기준 `TopAndBottom` 그림이 줄 위치 보정에 참여하지 않도록 공통 가로 교차 조건을 추가했다.
 
@@ -40,7 +43,7 @@ Task #1139/#1189 후속으로 미주 간격, 문단/그림 배치, 어울림 그
 - `wasm-pack build --target web --out-dir pkg` 통과. `wasm-bindgen` prebuilt 미지원으로 cargo install fallback 경고가 있었으나 산출물 생성 완료.
 - `npm run build` (`rhwp-studio`) 통과. Vite chunk size 경고는 기존 production build 경고 범주.
 
-## PR 초안
+## PR 생성
 
 제목:
 
@@ -76,5 +79,5 @@ Closes #1209
 
 ## 남은 절차
 
-- 작업지시자 승인 후 PR용 원격 브랜치(`task_m100_1209` 또는 `feature/task_m100_1209`)로 push한다.
-- 같은 흐름에서 일반 Open PR을 생성한다.
+- PR URL이 `https://github.com/edwardkim/rhwp/pull/1232` 형태인지 확인했다.
+- CI 결과를 확인한다.
