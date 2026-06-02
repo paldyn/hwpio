@@ -1600,7 +1600,10 @@ impl DocumentCore {
                             node.bbox.x, node.bbox.y, node.bbox.width, node.bbox.height,
                             si, pi, ci, cell_str, outer_table_str
                         ));
-                        return;
+                        // [Task #1171] return 하지 않고 자식으로 재귀 — 사각형 글상자(text_box)
+                        // 안 중첩 picture/도형이 cellPath(cell_index=0 sentinel)로 수집되도록 한다.
+                        // 장식 노드(테두리 등)는 section/para/control 좌표가 None 이라 컨트롤로
+                        // 방출되지 않는다(좌표 가드). Table 핸들러와 동일하게 자식 탐색.
                     }
                 }
                 RenderNodeType::Line(line_node) => {

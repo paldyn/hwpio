@@ -2181,6 +2181,23 @@ impl LayoutEngine {
                         );
                     }
                     Control::Picture(pic) => {
+                        // [Task #1171] 글상자 내부 picture — cellPath sentinel(cell_index=0)을
+                        // 빌드해 ImageNode.cell_context 로 전달. text-run(1963행)/표 경로와 동일 패턴.
+                        // 식별자: (바깥 Shape control_index, cell_index=0, 글상자 문단 pi). innerControlIdx 는
+                        // layout_picture 의 control_index 인자(= ctrl_idx_in_para)로 별도 전달된다.
+                        let pic_cell_ctx = CellContext {
+                            parent_para_index: para_index,
+                            path: {
+                                let mut p = parent_cell_path.to_vec();
+                                p.push(CellPathEntry {
+                                    control_index,
+                                    cell_index: 0,
+                                    cell_para_index: pi,
+                                    text_direction: 0,
+                                });
+                                p
+                            },
+                        };
                         if pic.common.treat_as_char {
                             // 인라인 이미지: 텍스트 내 삽입 위치까지의 advance를 반영하여 배치
                             advance_to_control(&mut inline_x);
@@ -2211,7 +2228,7 @@ impl LayoutEngine {
                                 Some(section_index),
                                 Some(para_index),
                                 Some(ctrl_idx_in_para),
-                                None, // 글상자 내부는 cell_ctx 미적용 (TODO: 셀 안 글상자는 후속)
+                                Some(&pic_cell_ctx),
                             );
                             inline_x += clamped_w;
                         } else {
@@ -2233,7 +2250,7 @@ impl LayoutEngine {
                                 Some(section_index),
                                 Some(para_index),
                                 Some(ctrl_idx_in_para),
-                                None,
+                                Some(&pic_cell_ctx),
                             );
                             let pic_h = hwpunit_to_px(pic.common.height as i32, self.dpi);
                             max_inline_height = max_inline_height.max(pic_h);

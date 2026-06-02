@@ -19,6 +19,29 @@ export function findPictureAtClick(this: any,
 ): { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line'; cellIdx?: number; cellParaIdx?: number; outerTableControlIdx?: number; cellPath?: Array<{ controlIndex: number; cellIndex: number; cellParaIndex: number }>; noteRef?: any; x1?: number; y1?: number; x2?: number; y2?: number; headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } } | null {
   try {
     const layout = this.wasm.getPageControlLayout(pageIdx);
+    // [Task #1171] picture 우선: 클릭이 컨테이너 Shape(글상자) 와 그 안의 nested picture
+    // (cellPath 동반 image/equation) 둘 다에 들어가면 picture 를 우선 선택한다.
+    // collect_controls 가 Shape 를 자식 picture 보다 먼저 방출하므로, 이 우선 패스가 없으면
+    // 아래 1차 패스가 Shape 를 먼저 hit 한다(이슈의 핵심 결함). Shape 와 picture 가 함께
+    // hit 될 때만 동작하므로, 겹치는 Shape 가 없는 표 셀 picture 는 영향 없음.
+    // BehindText 는 기존 2차 패스 정책 유지로 제외.
+    {
+      let shapeHit = false;
+      let nestedPic: any = null;
+      for (const ctrl of layout.controls) {
+        if (ctrl.secIdx === undefined || ctrl.wrap === 'behindText') continue;
+        const inBox = pageX >= ctrl.x && pageX <= ctrl.x + ctrl.w &&
+          pageY >= ctrl.y && pageY <= ctrl.y + ctrl.h;
+        if (!inBox) continue;
+        if (ctrl.type === 'shape') shapeHit = true;
+        else if ((ctrl.type === 'image' || ctrl.type === 'equation') && ctrl.cellPath && !nestedPic) {
+          nestedPic = ctrl;
+        }
+      }
+      if (shapeHit && nestedPic) {
+        return { sec: nestedPic.secIdx, ppi: nestedPic.paraIdx, ci: nestedPic.controlIdx, type: nestedPic.type, cellIdx: nestedPic.cellIdx, cellParaIdx: nestedPic.cellParaIdx, outerTableControlIdx: nestedPic.outerTableControlIdx, cellPath: nestedPic.cellPath, noteRef: nestedPic.noteRef, headerFooter: nestedPic.headerFooter };
+      }
+    }
     // Task #516 결함 3 (옵션 3-C): BehindText 그림은 텍스트 영역 위에서는 후순위.
     // 1차 패스: BehindText 가 아닌 그림 우선 hit-test.
     // 2차 패스: BehindText 그림은 텍스트 hit-test 결과가 비어 있을 때만 hit.
