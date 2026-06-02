@@ -15,8 +15,8 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 use super::layer_renderer::{LayerRenderResult, LayerRenderer};
 use super::pua_oldhangul::map_pua_old_hangul;
 use super::render_tree::{
-    BoundingBox, FormObjectNode, PageRenderTree, RenderNode, RenderNodeType, ShapeTransform,
-    LEGACY_IMAGE_WATERMARK_OPACITY, REAL_PICTURE_WATERMARK_BRIGHTNESS,
+    BoundingBox, FormObjectNode, PageRenderTree, RenderLayerInfo, RenderNode, RenderNodeType,
+    ShapeTransform, LEGACY_IMAGE_WATERMARK_OPACITY, REAL_PICTURE_WATERMARK_BRIGHTNESS,
     REAL_PICTURE_WATERMARK_CONTRAST, REAL_PICTURE_WATERMARK_FILL_OPACITY,
     REAL_PICTURE_WATERMARK_PAGE_OPACITY, REAL_PICTURE_WATERMARK_SATURATION,
 };
@@ -26,7 +26,10 @@ use super::{
 };
 use crate::model::style::ImageFillMode;
 use crate::model::style::UnderlineType;
-use crate::paint::{ClipKind, GroupKind, LayerNode, LayerNodeKind, PageLayerTree, PaintOp};
+use crate::paint::{
+    paint_op_replay_plane_with_layer, ClipKind, GroupKind, LayerNode, LayerNodeKind, PageLayerTree,
+    PaintOp, PaintReplayPlane,
+};
 
 /// Hanyang-PUA 옛한글 코드포인트를 KS X 1026-1:2007 자모 시퀀스로 확장 (Task #528).
 fn expand_pua_old_hangul_canvas(text: &str) -> String {
@@ -230,15 +233,37 @@ impl Default for LayerFilter {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn layer_tree_contains_image_wrap(node: &LayerNode, target: crate::model::shape::TextWrap) -> bool {
+fn replay_plane_for_wrap(target: crate::model::shape::TextWrap) -> PaintReplayPlane {
+    use crate::model::shape::TextWrap;
+    match target {
+        TextWrap::BehindText => PaintReplayPlane::BehindText,
+        TextWrap::InFrontOfText => PaintReplayPlane::InFrontOfText,
+        _ => PaintReplayPlane::Flow,
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn layer_tree_contains_replay_plane(node: &LayerNode, target: PaintReplayPlane) -> bool {
+    layer_tree_contains_replay_plane_with_layer(node, target, None)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn layer_tree_contains_replay_plane_with_layer(
+    node: &LayerNode,
+    target: PaintReplayPlane,
+    inherited_layer: Option<RenderLayerInfo>,
+) -> bool {
+    let active_layer = node.layer.or(inherited_layer);
     match &node.kind {
         LayerNodeKind::Group { children, .. } => children
             .iter()
-            .any(|child| layer_tree_contains_image_wrap(child, target)),
-        LayerNodeKind::ClipRect { child, .. } => layer_tree_contains_image_wrap(child, target),
-        LayerNodeKind::Leaf { ops } => ops.iter().any(
-            |op| matches!(op, PaintOp::Image { image, .. } if image.text_wrap == Some(target)),
-        ),
+            .any(|child| layer_tree_contains_replay_plane_with_layer(child, target, active_layer)),
+        LayerNodeKind::ClipRect { child, .. } => {
+            layer_tree_contains_replay_plane_with_layer(child, target, active_layer)
+        }
+        LayerNodeKind::Leaf { ops } => ops
+            .iter()
+            .any(|op| paint_op_replay_plane_with_layer(op, active_layer) == target),
     }
 }
 
@@ -296,20 +321,27 @@ impl WebCanvasRenderer {
         self.layer_filter = filter;
     }
 
-    /// 그림의 wrap 모드가 현재 layer_filter 와 일치하는지 판정 (Task #516).
+    /// PaintOp replay plane 이 현재 layer_filter 와 일치하는지 판정.
     ///
-    /// - `LayerFilter::All`: 모든 그림 렌더 (기본)
-    /// - `LayerFilter::FlowOnly`: BehindText / InFrontOfText 제외 (본문 layer)
-    /// - `LayerFilter::WrapOnly(w)`: 해당 wrap 만 (overlay layer)
-    fn should_render_image(&self, image_wrap: Option<crate::model::shape::TextWrap>) -> bool {
+    /// - `LayerFilter::All`: 모든 op 렌더 (기본)
+    /// - `LayerFilter::FlowOnly`: BehindText / InFrontOfText plane 제외 (본문 layer)
+    /// - `LayerFilter::WrapOnly(w)`: 해당 wrap plane 만 (overlay layer)
+    fn should_render_op(&self, op: &PaintOp, layer: Option<RenderLayerInfo>) -> bool {
         use crate::model::shape::TextWrap;
+        let replay_plane = paint_op_replay_plane_with_layer(op, layer);
         match self.layer_filter {
             LayerFilter::All => true,
-            LayerFilter::FlowOnly => match image_wrap {
-                Some(TextWrap::BehindText) | Some(TextWrap::InFrontOfText) => false,
-                _ => true,
-            },
-            LayerFilter::WrapOnly(target) => image_wrap == Some(target),
+            LayerFilter::FlowOnly => !matches!(
+                replay_plane,
+                PaintReplayPlane::BehindText | PaintReplayPlane::InFrontOfText
+            ),
+            LayerFilter::WrapOnly(TextWrap::BehindText) => {
+                replay_plane == PaintReplayPlane::BehindText
+            }
+            LayerFilter::WrapOnly(TextWrap::InFrontOfText) => {
+                replay_plane == PaintReplayPlane::InFrontOfText
+            }
+            LayerFilter::WrapOnly(target) => replay_plane == replay_plane_for_wrap(target),
         }
     }
 
@@ -327,12 +359,9 @@ impl WebCanvasRenderer {
         self.show_paragraph_marks = tree.output_options.show_paragraph_marks;
         self.show_control_codes = tree.output_options.show_control_codes;
         self.transparent_page_background = matches!(self.layer_filter, LayerFilter::FlowOnly)
-            && layer_tree_contains_image_wrap(
-                &tree.root,
-                crate::model::shape::TextWrap::BehindText,
-            );
+            && layer_tree_contains_replay_plane(&tree.root, PaintReplayPlane::BehindText);
         self.begin_page(tree.page_width, tree.page_height);
-        self.render_layer_node(&tree.root);
+        self.render_layer_node(&tree.root, None);
         self.transparent_page_background = false;
     }
 
@@ -956,7 +985,8 @@ impl WebCanvasRenderer {
         }
     }
 
-    fn render_layer_node(&mut self, node: &LayerNode) {
+    fn render_layer_node(&mut self, node: &LayerNode, inherited_layer: Option<RenderLayerInfo>) {
+        let active_layer = node.layer.or(inherited_layer);
         match &node.kind {
             LayerNodeKind::Group {
                 children,
@@ -964,7 +994,7 @@ impl WebCanvasRenderer {
                 ..
             } => {
                 for child in children {
-                    self.render_layer_node(child);
+                    self.render_layer_node(child, active_layer);
                 }
                 if self.show_control_codes {
                     let label = match group_kind {
@@ -993,7 +1023,7 @@ impl WebCanvasRenderer {
                     self.ctx.begin_path();
                     self.ctx.rect(clip.x, clip.y, clip.width + 4.0, clip.height);
                     self.ctx.clip();
-                    self.render_layer_node(child);
+                    self.render_layer_node(child, active_layer);
                     self.ctx.restore();
 
                     let body_left = clip.x;
@@ -1052,12 +1082,12 @@ impl WebCanvasRenderer {
                                 LayerNodeKind::Group { children, .. } => {
                                     for child in children {
                                         if is_overflow_control(child) {
-                                            self.render_layer_node(child);
+                                            self.render_layer_node(child, active_layer);
                                         }
                                     }
                                 }
                                 _ if is_overflow_control(column) => {
-                                    self.render_layer_node(column);
+                                    self.render_layer_node(column, active_layer);
                                 }
                                 _ => {}
                             }
@@ -1075,7 +1105,7 @@ impl WebCanvasRenderer {
                         node.bounds.height,
                     );
                     self.ctx.clip();
-                    self.render_layer_node(child);
+                    self.render_layer_node(child, active_layer);
                     self.ctx.restore();
                 }
                 ClipKind::TextBox => {
@@ -1083,7 +1113,7 @@ impl WebCanvasRenderer {
                     self.ctx.begin_path();
                     self.ctx.rect(clip.x, clip.y, clip.width, clip.height);
                     self.ctx.clip();
-                    self.render_layer_node(child);
+                    self.render_layer_node(child, active_layer);
                     self.ctx.restore();
                 }
                 ClipKind::Generic => {
@@ -1091,17 +1121,16 @@ impl WebCanvasRenderer {
                     self.ctx.begin_path();
                     self.ctx.rect(clip.x, clip.y, clip.width, clip.height);
                     self.ctx.clip();
-                    self.render_layer_node(child);
+                    self.render_layer_node(child, active_layer);
                     self.ctx.restore();
                 }
             },
             LayerNodeKind::Leaf { ops } => {
                 for op in ops {
-                    // Task #516 Stage 5.2: 다층 레이어 필터 — 그림의 wrap 모드에 따라 skip
-                    if let PaintOp::Image { image, .. } = op {
-                        if !self.should_render_image(image.text_wrap) {
-                            continue;
-                        }
+                    // Task #1197: 다층 레이어 필터 — RenderNode.layer 또는 이미지 wrap 기반
+                    // replay plane 에 따라 skip.
+                    if !self.should_render_op(op, active_layer) {
+                        continue;
                     }
                     let render_node = match op {
                         PaintOp::PageBackground { .. } if !self.should_render_page_background() => {

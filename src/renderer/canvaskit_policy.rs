@@ -5,14 +5,17 @@ use crate::model::image::ImageEffect;
 use crate::model::shape::TextWrap;
 use crate::model::style::{ImageFillMode, UnderlineType};
 use crate::paint::{
-    paint_op_replay_plane, CacheHint, ClipKind, LayerNode, LayerNodeKind, PageLayerTree, PaintOp,
-    PaintReplayPlane, ResolvedImageKind, ResolvedImagePayload, TextDecorationKind, TextVariantKind,
+    paint_op_replay_plane_with_layer, CacheHint, ClipKind, LayerNode, LayerNodeKind, PageLayerTree,
+    PaintOp, PaintReplayPlane, ResolvedImageKind, ResolvedImagePayload, TextDecorationKind,
+    TextVariantKind,
 };
 use crate::renderer::layer_renderer::{
     analyze_text_variant_selection, TextVariantSelectionOptions, VariantSelectedReason,
     VariantSelectionBackend,
 };
-use crate::renderer::render_tree::{FieldMarkerType, ImageNode, PageBackgroundNode, TextRunNode};
+use crate::renderer::render_tree::{
+    FieldMarkerType, ImageNode, PageBackgroundNode, RenderLayerInfo, TextRunNode,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -186,7 +189,7 @@ pub fn analyze_canvaskit_replay_plan(
         })
         .collect::<BTreeMap<_, _>>();
     let mut builder = CanvasKitReplayPlanBuilder::new(mode, selected_variants);
-    builder.visit_node(&tree.root, "root");
+    builder.visit_node(&tree.root, "root", None);
     let text_variants = variant_reports
         .into_iter()
         .map(|report| CanvasKitTextVariantReport {
@@ -253,7 +256,13 @@ impl CanvasKitReplayPlanBuilder {
         }
     }
 
-    fn visit_node(&mut self, node: &LayerNode, path: &str) {
+    fn visit_node(
+        &mut self,
+        node: &LayerNode,
+        path: &str,
+        inherited_layer: Option<RenderLayerInfo>,
+    ) {
+        let active_layer = node.layer.or(inherited_layer);
         match &node.kind {
             LayerNodeKind::Group {
                 children,
@@ -264,7 +273,7 @@ impl CanvasKitReplayPlanBuilder {
                     self.push_cache_hint_item(path, *cache_hint);
                 }
                 for (index, child) in children.iter().enumerate() {
-                    self.visit_node(child, &format!("{path}/group/{index}"));
+                    self.visit_node(child, &format!("{path}/group/{index}"), active_layer);
                 }
             }
             LayerNodeKind::ClipRect {
@@ -280,11 +289,11 @@ impl CanvasKitReplayPlanBuilder {
                     compat_overlay_allowed: false,
                     detail: Some(clip_kind_detail(*clip_kind).to_string()),
                 });
-                self.visit_node(child, &format!("{path}/clip/child"));
+                self.visit_node(child, &format!("{path}/clip/child"), active_layer);
             }
             LayerNodeKind::Leaf { ops } => {
                 for (index, op) in ops.iter().enumerate() {
-                    self.push(self.item_for_op(op, format!("{path}/leaf/{index}")));
+                    self.push(self.item_for_op(op, format!("{path}/leaf/{index}"), active_layer));
                 }
             }
         }
@@ -317,7 +326,12 @@ impl CanvasKitReplayPlanBuilder {
         });
     }
 
-    fn item_for_op(&self, op: &PaintOp, path: String) -> CanvasKitReplayItem {
+    fn item_for_op(
+        &self,
+        op: &PaintOp,
+        path: String,
+        layer: Option<RenderLayerInfo>,
+    ) -> CanvasKitReplayItem {
         let mut item = match op {
             PaintOp::PageBackground { background, .. } => {
                 self.page_background_item(path, background)
@@ -378,7 +392,7 @@ impl CanvasKitReplayPlanBuilder {
                 TextVariantKind::GlyphOutline,
             ),
         };
-        item.replay_plane = Some(paint_op_replay_plane(op));
+        item.replay_plane = Some(paint_op_replay_plane_with_layer(op, layer));
         item
     }
 
@@ -755,11 +769,12 @@ fn selected_reason_as_str(reason: VariantSelectedReason) -> &'static str {
 mod tests {
     use super::*;
     use crate::model::style::ImageFillMode;
-    use crate::paint::{LayerNode, ResolvedImageKind, ResolvedImagePayload};
+    use crate::paint::{GroupKind, LayerNode, ResolvedImageKind, ResolvedImagePayload};
     use crate::renderer::render_tree::{
-        BoundingBox, FootnoteMarkerNode, ImageNode, PageBackgroundImage,
+        BoundingBox, FootnoteMarkerNode, ImageNode, PageBackgroundImage, RectangleNode,
+        RenderLayerInfo,
     };
-    use crate::renderer::{GradientFillInfo, TextStyle};
+    use crate::renderer::{GradientFillInfo, ShapeStyle, TextStyle};
 
     fn bbox() -> BoundingBox {
         BoundingBox::new(0.0, 0.0, 20.0, 20.0)
@@ -965,6 +980,51 @@ mod tests {
                 Some(PaintReplayPlane::BehindText),
                 Some(PaintReplayPlane::Flow),
                 Some(PaintReplayPlane::InFrontOfText),
+            ]
+        );
+    }
+
+    #[test]
+    fn replay_plan_uses_layer_metadata_for_non_image_ops() {
+        let layered_rect = LayerNode::leaf(
+            bbox(),
+            None,
+            vec![PaintOp::Rectangle {
+                bbox: bbox(),
+                rect: RectangleNode::new(0.0, ShapeStyle::default(), None),
+            }],
+        )
+        .with_layer(Some(RenderLayerInfo::new(Some(TextWrap::BehindText), 1, 1)));
+        let flow_text = LayerNode::leaf(
+            bbox(),
+            None,
+            vec![PaintOp::TextRun {
+                bbox: bbox(),
+                run: text_run("A"),
+            }],
+        );
+        let tree = PageLayerTree::new(
+            100.0,
+            100.0,
+            LayerNode::group(
+                bbox(),
+                None,
+                vec![flow_text, layered_rect],
+                CacheHint::None,
+                GroupKind::Generic,
+            ),
+        );
+
+        let plan = analyze_canvaskit_replay_plan(&tree, CanvasKitReplayMode::Default);
+
+        assert_eq!(
+            plan.items
+                .iter()
+                .map(|item| item.replay_plane)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(PaintReplayPlane::Flow),
+                Some(PaintReplayPlane::BehindText)
             ]
         );
     }

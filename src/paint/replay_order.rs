@@ -2,6 +2,7 @@ use serde::Serialize;
 
 use crate::model::shape::TextWrap;
 use crate::paint::paint_op::PaintOp;
+use crate::renderer::render_tree::RenderLayerInfo;
 
 /// Logical replay planes for PageLayerTree direct paint backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -32,8 +33,21 @@ impl PaintReplayPlane {
 }
 
 pub fn paint_op_replay_plane(op: &PaintOp) -> PaintReplayPlane {
+    paint_op_replay_plane_with_layer(op, None)
+}
+
+pub fn paint_op_replay_plane_with_layer(
+    op: &PaintOp,
+    layer: Option<RenderLayerInfo>,
+) -> PaintReplayPlane {
+    if matches!(op, PaintOp::PageBackground { .. }) {
+        return PaintReplayPlane::Background;
+    }
+    if layer.and_then(|layer| layer.text_wrap).is_some() {
+        return render_layer_replay_plane(layer);
+    }
+
     match op {
-        PaintOp::PageBackground { .. } => PaintReplayPlane::Background,
         PaintOp::Image { image, .. } => match image.text_wrap {
             Some(TextWrap::BehindText) => PaintReplayPlane::BehindText,
             Some(TextWrap::InFrontOfText) => PaintReplayPlane::InFrontOfText,
@@ -43,10 +57,20 @@ pub fn paint_op_replay_plane(op: &PaintOp) -> PaintReplayPlane {
     }
 }
 
+pub fn render_layer_replay_plane(layer: Option<RenderLayerInfo>) -> PaintReplayPlane {
+    match layer.and_then(|layer| layer.text_wrap) {
+        Some(TextWrap::BehindText) => PaintReplayPlane::BehindText,
+        Some(TextWrap::InFrontOfText) => PaintReplayPlane::InFrontOfText,
+        _ => PaintReplayPlane::Flow,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::render_tree::{BoundingBox, ImageNode, PageBackgroundNode, RectangleNode};
+    use crate::renderer::render_tree::{
+        BoundingBox, ImageNode, PageBackgroundNode, RectangleNode, RenderLayerInfo,
+    };
     use crate::renderer::ShapeStyle;
 
     fn bbox() -> BoundingBox {
@@ -116,5 +140,24 @@ mod tests {
             PaintReplayPlane::Flow
         );
         assert_eq!(paint_op_replay_plane(&vector), PaintReplayPlane::Flow);
+    }
+
+    #[test]
+    fn render_layer_metadata_overrides_non_image_paint_ops() {
+        let vector = PaintOp::Rectangle {
+            bbox: bbox(),
+            rect: RectangleNode::new(0.0, ShapeStyle::default(), None),
+        };
+        let behind_layer = RenderLayerInfo::new(Some(TextWrap::BehindText), 1, 1);
+        let front_layer = RenderLayerInfo::new(Some(TextWrap::InFrontOfText), 2, 2);
+
+        assert_eq!(
+            paint_op_replay_plane_with_layer(&vector, Some(behind_layer)),
+            PaintReplayPlane::BehindText
+        );
+        assert_eq!(
+            paint_op_replay_plane_with_layer(&vector, Some(front_layer)),
+            PaintReplayPlane::InFrontOfText
+        );
     }
 }

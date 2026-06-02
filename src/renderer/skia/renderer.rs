@@ -8,14 +8,15 @@ use crate::error::HwpError;
 use crate::model::image::ImageEffect;
 use crate::model::ColorRef;
 use crate::paint::{
-    paint_op_replay_plane, GlyphRunOrientation, GlyphRunReplayEligibility, LayerGlyphRunPaint,
-    LayerNode, LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp, PaintReplayPlane,
-    ResourceArena, TextVariantQuality,
+    paint_op_replay_plane_with_layer, GlyphRunOrientation, GlyphRunReplayEligibility,
+    LayerGlyphRunPaint, LayerNode, LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp,
+    PaintReplayPlane, ResourceArena, TextVariantQuality,
 };
 use crate::renderer::layer_renderer::{
     LayerRasterRenderer, LayerRenderResult, RasterOutputFormat, RasterRenderOptions,
     RasterRenderOutput,
 };
+use crate::renderer::render_tree::RenderLayerInfo;
 use crate::renderer::{svg_arc_to_beziers, LineStyle, PathCommand, ShapeStyle, StrokeDash};
 
 use super::equation_conv::render_equation;
@@ -362,6 +363,7 @@ impl SkiaLayerRenderer {
                 &tree.output_options,
                 &tree.resources,
                 replay_plane,
+                None,
                 &mut next_text_source_id,
             );
         }
@@ -387,8 +389,10 @@ impl SkiaLayerRenderer {
         output_options: &LayerOutputOptions,
         resources: &ResourceArena,
         replay_plane: PaintReplayPlane,
+        inherited_layer: Option<RenderLayerInfo>,
         next_text_source_id: &mut u32,
     ) {
+        let active_layer = node.layer.or(inherited_layer);
         let clip_enabled = output_options.clip_enabled;
         let apply_dash = |paint: &mut Paint, dash: StrokeDash| {
             let base_width = paint.stroke_width().max(1.0);
@@ -534,6 +538,7 @@ impl SkiaLayerRenderer {
                         output_options,
                         resources,
                         replay_plane,
+                        active_layer,
                         next_text_source_id,
                     );
                 }
@@ -546,6 +551,7 @@ impl SkiaLayerRenderer {
                         output_options,
                         resources,
                         replay_plane,
+                        active_layer,
                         next_text_source_id,
                     );
                     return;
@@ -567,6 +573,7 @@ impl SkiaLayerRenderer {
                     output_options,
                     resources,
                     replay_plane,
+                    active_layer,
                     next_text_source_id,
                 );
                 canvas.restore();
@@ -577,7 +584,7 @@ impl SkiaLayerRenderer {
                     HashMap::<String, HashMap<String, (usize, u32, HashSet<u32>, bool)>>::new();
                 let mut glyph_variant_sources = HashMap::<String, u32>::new();
                 for op in ops {
-                    if paint_op_replay_plane(op) != replay_plane {
+                    if paint_op_replay_plane_with_layer(op, active_layer) != replay_plane {
                         continue;
                     }
                     if let PaintOp::GlyphRun { run, .. } = op {
@@ -622,7 +629,7 @@ impl SkiaLayerRenderer {
                     .filter_map(|group| glyph_variant_sources.get(group).copied())
                     .collect::<HashSet<_>>();
                 for op in ops {
-                    if paint_op_replay_plane(op) != replay_plane {
+                    if paint_op_replay_plane_with_layer(op, active_layer) != replay_plane {
                         continue;
                     }
                     let skip_unselected_text_variant = match op {
@@ -1328,7 +1335,7 @@ mod tests {
     use crate::renderer::render_tree::{
         BoundingBox, EquationNode, FootnoteMarkerNode, FormObjectNode, ImageNode,
         PageBackgroundImage, PageBackgroundNode, PathNode, PlaceholderNode, RawSvgNode,
-        RectangleNode, TextRunNode,
+        RectangleNode, RenderLayerInfo, TextRunNode,
     };
     use crate::renderer::{GradientFillInfo, PatternFillInfo, TabLeaderInfo, TextStyle};
     use image::{ImageFormat, Rgba, RgbaImage};
@@ -2185,6 +2192,36 @@ mod tests {
         let output = SkiaLayerRenderer::new()
             .render_raster_with_options(&tree, RasterRenderOptions::default())
             .expect("render behind text order");
+        let image = decode_rgba(&output.bytes);
+        let center = *image.get_pixel(6, 6);
+
+        assert_channel(center, 0, 180, 255);
+        assert_channel(center, 1, 0, 64);
+        assert_channel(center, 2, 0, 64);
+        assert_eq!(center[3], 255);
+    }
+
+    #[test]
+    fn behind_text_layered_vector_replays_below_flow_across_tree_branches() {
+        let bbox = BoundingBox::new(0.0, 0.0, 12.0, 12.0);
+        let flow = LayerNode::leaf(bbox, None, vec![solid_rect_op(bbox, 0x000000ff)]);
+        let behind = LayerNode::leaf(bbox, None, vec![solid_rect_op(bbox, 0x00ff0000)])
+            .with_layer(Some(RenderLayerInfo::new(Some(TextWrap::BehindText), 1, 1)));
+        let tree = PageLayerTree::new(
+            12.0,
+            12.0,
+            LayerNode::group(
+                bbox,
+                None,
+                vec![flow, behind],
+                CacheHint::None,
+                GroupKind::Generic,
+            ),
+        );
+
+        let output = SkiaLayerRenderer::new()
+            .render_raster_with_options(&tree, RasterRenderOptions::default())
+            .expect("render layered vector order");
         let image = decode_rgba(&output.bytes);
         let center = *image.get_pixel(6, 6);
 
