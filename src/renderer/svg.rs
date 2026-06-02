@@ -192,32 +192,40 @@ impl SvgRenderer {
     }
 
     /// [Issue #1167/#1197] 노드의 z-order plane 키 (작을수록 먼저=아래).
-    /// PaintOp `paint_op_replay_plane()` 과 동일 의미:
-    /// 페이지 배경(0) → BehindText 객체(1) → 일반 Flow 콘텐츠(2) → InFrontOfText 객체(3).
+    /// SVG는 단일 스트림으로 출력하므로 웹/CanvasKit의 multi-layer 합성 순서를 직접
+    /// 보존해야 한다:
+    /// 페이지 배경(0) → 바탕쪽(1) → BehindText 객체(2) → 일반 Flow 콘텐츠(3)
+    /// → InFrontOfText 객체(4).
     /// 페이지 배경(흰 바탕·테두리·배경 워터마크)은 반드시 가장 먼저 그려야 한다.
     /// 그러지 않으면 root 레벨에서 BehindText 워터마크가 PageBackground 보다 앞으로
     /// 정렬되어, 흰 배경 rect 가 워터마크를 덮어버린다(#1167 1차 회귀).
+    /// 바탕쪽은 한컴의 "본문 뒤" 배경 성격이므로 BehindText 용지 기준 객체보다
+    /// 먼저 그려야 한다. 그렇지 않으면 바탕쪽의 전체 페이지 그림이 #1197의 최종
+    /// 표시용 BehindText 표를 다시 덮는다.
     /// #1197부터는 RenderNode.layer 가 있으면 표/도형도 이미지와 같은 plane 계약을 따른다.
     fn node_z_plane(node: &RenderNode) -> u8 {
         if matches!(&node.node_type, RenderNodeType::PageBackground(_)) {
             return 0;
         }
+        if matches!(&node.node_type, RenderNodeType::MasterPage) {
+            return 1;
+        }
         if let Some(layer) = node.layer {
             if let Some(text_wrap) = layer.text_wrap {
                 return match text_wrap {
-                    crate::model::shape::TextWrap::BehindText => 1,
-                    crate::model::shape::TextWrap::InFrontOfText => 3,
-                    _ => 2,
+                    crate::model::shape::TextWrap::BehindText => 2,
+                    crate::model::shape::TextWrap::InFrontOfText => 4,
+                    _ => 3,
                 };
             }
         }
         match &node.node_type {
             RenderNodeType::Image(img) => match img.text_wrap {
-                Some(crate::model::shape::TextWrap::BehindText) => 1,
-                Some(crate::model::shape::TextWrap::InFrontOfText) => 3,
-                _ => 2,
+                Some(crate::model::shape::TextWrap::BehindText) => 2,
+                Some(crate::model::shape::TextWrap::InFrontOfText) => 4,
+                _ => 3,
             },
-            _ => 2,
+            _ => 3,
         }
     }
 
@@ -233,7 +241,7 @@ impl SvgRenderer {
     /// [Issue #1167/#1197] 자식 중 BehindText/InFrontOfText 객체가 섞여 있어 plane
     /// 재정렬이 필요한지. 대부분의 노드는 Flow 만 가지므로 정렬 비용을 피한다.
     fn children_need_plane_reorder(node: &RenderNode) -> bool {
-        node.children.iter().any(|c| Self::node_z_plane(c) != 2)
+        node.children.iter().any(|c| Self::node_z_plane(c) != 3)
     }
 
     /// 개별 노드를 SVG로 렌더링
