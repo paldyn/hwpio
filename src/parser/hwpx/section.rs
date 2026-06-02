@@ -900,12 +900,10 @@ fn parse_note_pr_children(
                                     }
                                 }
                                 b"width" => {
-                                    // "0.12 mm" 형식 — 0.1mm 단위로 변환 (정답지 0.12mm → 1)
+                                    // 미주/각주 구분선 굵기도 테두리 굵기 raw 코드와 같은 표를 쓴다.
+                                    // 예: 0.12mm → 1, 0.7mm → 9.
                                     if let Ok(s) = std::str::from_utf8(&attr.value) {
-                                        let s = s.trim().trim_end_matches("mm").trim();
-                                        if let Ok(mm) = s.parse::<f32>() {
-                                            shape.separator_line_width = (mm * 10.0).round() as u8;
-                                        }
+                                        shape.separator_line_width = parse_hwpx_line_width(s);
                                     }
                                 }
                                 b"color" => {
@@ -5227,6 +5225,10 @@ mod tests {
             850
         );
         assert_eq!(section.section_def.endnote_shape.note_spacing, 567);
+        assert_eq!(
+            section.section_def.endnote_shape.separator_line_width, 1,
+            "HWPX noteLine width도 공통 선 굵기 코드표를 사용해야 함"
+        );
     }
 
     /// [#1199] HWPX 미주/각주 ctrl 의 prefixChar(코드포인트 숫자) 가
@@ -6137,6 +6139,7 @@ mod tests {
         assert_eq!(parse_hwpx_line_width("0.1 mm"), 0);
         assert_eq!(parse_hwpx_line_width("0.12 mm"), 1);
         assert_eq!(parse_hwpx_line_width("0.4 mm"), 6);
+        assert_eq!(parse_hwpx_line_width("0.7 mm"), 9);
         assert_eq!(parse_hwpx_line_width("5.0 mm"), 15);
     }
 

@@ -80,6 +80,7 @@ export class EndnoteShapeDialog extends ModalDialog {
   private lineColorInput!: HTMLInputElement;
   private lineColorButton!: HTMLButtonElement;
   private lineColorMenu!: HTMLDivElement;
+  private separatorLengthModeSelect!: HTMLSelectElement;
   private separatorLengthInput!: HTMLInputElement;
   private marginTopInput!: HTMLInputElement;
   private noteSpacingInput!: HTMLInputElement;
@@ -159,6 +160,7 @@ export class EndnoteShapeDialog extends ModalDialog {
     this.updateLineTypePreview();
     this.updateLineWidthPreview();
     this.updateColorPreview();
+    this.separatorLengthModeSelect.value = 'custom';
     this.separatorLengthInput.value = String(hwpToMm(this.settings.separatorLength || mmToHwp(50)));
     this.marginTopInput.value = String(hwpToMm(this.settings.separatorMarginTop || 0));
     this.noteSpacingInput.value = String(hwpToMm(this.settings.noteSpacing || 0));
@@ -199,6 +201,8 @@ export class EndnoteShapeDialog extends ModalDialog {
     this.separatorCheck.addEventListener('change', () => this.updateSeparatorEnabled());
     this.buildLineTypeControl();
     this.buildLineWidthControl();
+    this.separatorLengthModeSelect = this.select([['custom', '사용자']]);
+    this.separatorLengthModeSelect.style.width = '86px';
     this.separatorLengthInput = this.numberInput(50, 0, 300, 0.5);
     this.buildColorControl();
 
@@ -206,11 +210,13 @@ export class EndnoteShapeDialog extends ModalDialog {
       this.row(this.label('번호 모양'), this.numberFormatSelect),
       this.row(this.label('앞 장식 문자'), this.prefixInput, this.label('뒤 장식 문자'), this.suffixInput),
       this.checkboxRow(this.separatorCheck, '구분선 넣기'),
-      this.row(this.label('종류'), this.linePreviewSelect(
-        this.lineTypeSelect,
-        this.lineTypeButton,
-        this.lineTypeMenu,
-      ), this.label('길이'), this.withUnit(this.separatorLengthInput, 'mm')),
+      this.row(
+        this.label('종류'),
+        this.linePreviewSelect(this.lineTypeSelect, this.lineTypeButton, this.lineTypeMenu),
+        this.label('길이'),
+        this.separatorLengthModeSelect,
+        this.withUnit(this.separatorLengthInput, 'mm'),
+      ),
       this.row(this.label('굵기'), this.widthPreviewSelect(), this.label('색'), this.colorPicker()),
     );
     return group;
@@ -268,6 +274,7 @@ export class EndnoteShapeDialog extends ModalDialog {
       this.lineTypeButton,
       this.lineWidthSelect,
       this.lineWidthButton,
+      this.separatorLengthModeSelect,
       this.separatorLengthInput,
       this.lineColorInput,
       this.lineColorButton,
