@@ -27,8 +27,8 @@ use crate::model::header_footer::MasterPage;
 use crate::model::page::{PageBorderBasis, PageBorderFill};
 use crate::model::paragraph::Paragraph;
 use crate::model::shape::{
-    Caption, CaptionDirection, CommonObjAttr, HorzAlign, HorzRelTo, ShapeObject, VertAlign,
-    VertRelTo,
+    Caption, CaptionDirection, CommonObjAttr, HorzAlign, HorzRelTo, ShapeObject, TextWrap,
+    VertAlign, VertRelTo,
 };
 use crate::model::style::{
     Alignment, BorderLine, BorderLineType, HeadType, Numbering, UnderlineType,
@@ -608,6 +608,55 @@ impl LayoutEngine {
         self.layout_overflows.borrow_mut().push(overflow);
     }
 
+    fn object_stable_index(para_index: usize, control_index: usize) -> u32 {
+        ((para_index.min(u16::MAX as usize) as u32) << 16)
+            | control_index.min(u16::MAX as usize) as u32
+    }
+
+    fn render_layer_from_common(
+        common: &CommonObjAttr,
+        para_index: usize,
+        control_index: usize,
+    ) -> RenderLayerInfo {
+        RenderLayerInfo::new(
+            Some(common.text_wrap),
+            common.z_order,
+            Self::object_stable_index(para_index, control_index),
+        )
+    }
+
+    fn push_layered_paper_children(
+        paper_images: &mut Vec<RenderNode>,
+        temp_parent: &mut RenderNode,
+        layer: RenderLayerInfo,
+    ) {
+        for mut child in temp_parent.children.drain(..) {
+            child.set_layer(layer);
+            paper_images.push(child);
+        }
+    }
+
+    fn render_layer_plane(layer: Option<RenderLayerInfo>) -> u8 {
+        match layer.and_then(|layer| layer.text_wrap) {
+            Some(TextWrap::BehindText) => 1,
+            Some(TextWrap::InFrontOfText) => 3,
+            _ => 2,
+        }
+    }
+
+    fn paper_node_sort_key(node: &RenderNode) -> (u8, i32, u32) {
+        let layer = node.layer;
+        let (z_order, stable_index) = layer
+            .map(|layer| (layer.z_order, layer.stable_index))
+            .unwrap_or((0, node.id));
+
+        (Self::render_layer_plane(layer), z_order, stable_index)
+    }
+
+    fn sort_paper_render_nodes(paper_images: &mut [RenderNode]) {
+        paper_images.sort_by_key(Self::paper_node_sort_key);
+    }
+
     /// 빈 줄 감추기 문단 집합 설정
     pub fn set_hidden_empty_paras(&self, paras: &std::collections::HashSet<usize>) {
         *self.hidden_empty_paras.borrow_mut() = paras.clone();
@@ -929,9 +978,11 @@ impl LayoutEngine {
 
         tree.root.children.push(body_node);
 
-        // [Task #604 Stage 6] 용지 기준 이미지: body 위 z-layer 로 배치 (한컴 변환 메커니즘
-        // 정합). 본문이 sequential flow 로 그림 영역 y 안에 흐를 때 그림이 위에 그려져
-        // 시각적으로 본문을 가려 한컴 v2018/v2024 변환본과 정합 시각.
+        Self::sort_paper_render_nodes(&mut paper_images);
+
+        // [Task #604 Stage 6] 용지 기준 개체: body 위 z-layer 로 배치 (한컴 변환 메커니즘
+        // 정합). Task #1197 부터 Picture/Table/Shape 공통 layer 메타데이터로 같은
+        // text-wrap/z-order 축을 보존한다.
         for img_node in paper_images {
             tree.root.children.push(img_node);
         }
@@ -4392,9 +4443,9 @@ impl LayoutEngine {
                         Some(para_y_for_table),
                         false,
                     );
-                    for child in tmp_node.children.drain(..) {
-                        paper_images.push(child);
-                    }
+                    let layer =
+                        Self::render_layer_from_common(&t.common, para_index, control_index);
+                    Self::push_layered_paper_children(paper_images, &mut tmp_node, layer);
                 } else {
                     let square_anchor_y = if !is_tac && tbl_is_square {
                         square_wrap_table_line_anchor_y(para, t, para_y_for_table, self.dpi)
@@ -5502,9 +5553,16 @@ impl LayoutEngine {
                                 control_index,
                                 false,
                             );
-                            for child in temp_parent.children.drain(..) {
-                                paper_images.push(child);
-                            }
+                            let layer = Self::render_layer_from_common(
+                                &pic.common,
+                                para_index,
+                                control_index,
+                            );
+                            Self::push_layered_paper_children(
+                                paper_images,
+                                &mut temp_parent,
+                                layer,
+                            );
                         } else {
                             let comp = composed.get(para_index);
                             let para_style_id = comp
@@ -6212,9 +6270,9 @@ impl LayoutEngine {
                         None,
                         false,
                     );
-                    for child in temp_parent.children.drain(..) {
-                        paper_images.push(child);
-                    }
+                    let layer =
+                        Self::render_layer_from_common(&table.common, para_index, control_index);
+                    Self::push_layered_paper_children(paper_images, &mut temp_parent, layer);
                 }
             } else if is_tac_picture_shape {
                 let mut temp_parent = RenderNode::new(
@@ -6291,8 +6349,22 @@ impl LayoutEngine {
                     &overflow_map,
                     false,
                 );
-                for child in temp_parent.children.drain(..) {
-                    paper_images.push(child);
+                if let Some(layer) = ctrl.and_then(|ctrl| match ctrl {
+                    Control::Shape(shape) => Some(Self::render_layer_from_common(
+                        shape.common(),
+                        para_index,
+                        control_index,
+                    )),
+                    Control::Table(table) => Some(Self::render_layer_from_common(
+                        &table.common,
+                        para_index,
+                        control_index,
+                    )),
+                    _ => None,
+                }) {
+                    Self::push_layered_paper_children(paper_images, &mut temp_parent, layer);
+                } else {
+                    paper_images.append(&mut temp_parent.children);
                 }
             } else {
                 self.layout_shape(
