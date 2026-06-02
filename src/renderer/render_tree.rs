@@ -43,6 +43,34 @@ pub fn is_real_picture_watermark_tone_preset(
 /// 렌더 노드 고유 ID
 pub type NodeId = u32;
 
+/// Render-layer metadata shared by paper/page anchored Picture/Table/Shape nodes.
+///
+/// This is intentionally optional on `RenderNode`: ordinary flow nodes keep
+/// `None`, while out-of-flow object nodes can carry the original HWPX/HWP
+/// text-wrap and z-order contract without adding parallel fields to every leaf
+/// node type.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderLayerInfo {
+    /// Text wrapping mode that decides the coarse replay plane.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text_wrap: Option<TextWrap>,
+    /// Original object z-order. Smaller values are painted first.
+    pub z_order: i32,
+    /// Stable tie-breaker within the same z-order.
+    pub stable_index: u32,
+}
+
+impl RenderLayerInfo {
+    pub fn new(text_wrap: Option<TextWrap>, z_order: i32, stable_index: u32) -> Self {
+        Self {
+            text_wrap,
+            z_order,
+            stable_index,
+        }
+    }
+}
+
 /// 렌더 노드 (페이지 내 렌더링 가능한 요소)
 #[derive(Debug, Clone, Serialize)]
 pub struct RenderNode {
@@ -52,6 +80,9 @@ pub struct RenderNode {
     pub node_type: RenderNodeType,
     /// 박스 모델 (위치, 크기, 여백)
     pub bbox: BoundingBox,
+    /// 원본 객체 레이어 정보 (paper/page anchored Picture/Table/Shape용)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<RenderLayerInfo>,
     /// 자식 노드 목록
     pub children: Vec<RenderNode>,
     /// 변경 여부 플래그 (dirty flag for observer pattern)
@@ -66,10 +97,22 @@ impl RenderNode {
             id,
             node_type,
             bbox,
+            layer: None,
             children: Vec::new(),
             dirty: true,
             visible: true,
         }
+    }
+
+    /// 레이어 메타데이터를 부여한 노드를 반환한다.
+    pub fn with_layer(mut self, layer: RenderLayerInfo) -> Self {
+        self.layer = Some(layer);
+        self
+    }
+
+    /// 기존 노드에 레이어 메타데이터를 부여한다.
+    pub fn set_layer(&mut self, layer: RenderLayerInfo) {
+        self.layer = Some(layer);
     }
 
     /// dirty 플래그 설정 (변경된 노드만 재렌더링)

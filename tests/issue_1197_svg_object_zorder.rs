@@ -9,7 +9,8 @@
 
 use rhwp::model::shape::TextWrap;
 use rhwp::renderer::render_tree::{
-    BoundingBox, ImageNode, PageRenderTree, RawSvgNode, RenderNode, RenderNodeType, TableNode,
+    BoundingBox, ImageNode, PageRenderTree, RawSvgNode, RenderLayerInfo, RenderNode,
+    RenderNodeType, TableNode,
 };
 use rhwp::renderer::svg::SvgRenderer;
 
@@ -40,6 +41,11 @@ fn table_with_label(tree: &mut PageRenderTree, label: &str, para_index: usize) -
 
     let text_id = tree.next_id();
     table.children.push(marker_node(text_id, label));
+    table.set_layer(RenderLayerInfo::new(
+        Some(TextWrap::BehindText),
+        para_index as i32,
+        para_index as u32,
+    ));
     table
 }
 
@@ -52,6 +58,7 @@ fn behind_text_image(tree: &mut PageRenderTree) -> RenderNode {
         RenderNodeType::Image(image),
         BoundingBox::new(0.0, 0.0, 260.0, 180.0),
     )
+    .with_layer(RenderLayerInfo::new(Some(TextWrap::BehindText), 11, 11))
 }
 
 fn render_synthetic_z_order_svg() -> String {
@@ -59,13 +66,16 @@ fn render_synthetic_z_order_svg() -> String {
 
     // This order models the intended object z-order:
     // z=1 low table, z=11 full-page image, z=12 final table, z=69 front shape.
-    let low_table = table_with_label(&mut tree, "Z01_LOW_TABLE", 1);
     let image = behind_text_image(&mut tree);
+    let low_table = table_with_label(&mut tree, "Z01_LOW_TABLE", 1);
     let final_table = table_with_label(&mut tree, "Z12_FINAL_TABLE", 12);
-    let front_shape = marker_node(tree.next_id(), "Z69_FRONT_SHAPE");
+    let front_shape = marker_node(tree.next_id(), "Z69_FRONT_SHAPE")
+        .with_layer(RenderLayerInfo::new(Some(TextWrap::InFrontOfText), 69, 69));
 
-    tree.root.children.push(low_table);
+    // Insert the full-page image before the low table to prove that layer
+    // metadata, not accidental insertion order, decides SVG replay order.
     tree.root.children.push(image);
+    tree.root.children.push(low_table);
     tree.root.children.push(final_table);
     tree.root.children.push(front_shape);
 
