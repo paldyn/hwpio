@@ -615,6 +615,28 @@ impl LayoutEngine {
         *self.endnote_para_sources.borrow_mut() = sources.to_vec();
     }
 
+    /// [Task #1236] 이 미주 문단의 다음 렌더 문단이 **같은 미주(문제)** 내 연속 문단인지.
+    ///
+    /// 같은 미주 연속이면 다줄 미주 문단의 마지막 줄에도 trailing 줄간격을 적용해야
+    /// 풀이 본문 줄간격이 균일해진다(다줄 문단 다음 줄간격이 좁아지는 #1236 증상 해소).
+    /// 미주의 마지막 문단(=다음이 새 문제 = between-notes margin 적용)이면 false 를 반환해
+    /// 문제-사이 간격(7mm 등) 중복 가산을 막는다.
+    fn endnote_para_has_same_endnote_successor(&self, para_index: usize) -> bool {
+        let base = self.endnote_para_base.get();
+        let Some(local_idx) = para_index.checked_sub(base) else {
+            return false;
+        };
+        let sources = self.endnote_para_sources.borrow();
+        match (sources.get(local_idx), sources.get(local_idx + 1)) {
+            (Some(cur), Some(next)) => {
+                cur.section_index == next.section_index
+                    && cur.para_index == next.para_index
+                    && cur.control_index == next.control_index
+            }
+            _ => false,
+        }
+    }
+
     fn note_ref_for_endnote_equation(
         &self,
         para_index: usize,
