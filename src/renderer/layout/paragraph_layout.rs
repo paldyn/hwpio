@@ -362,6 +362,23 @@ fn note_marker_text_from_control(ctrl: Option<&Control>, fallback_number: u16) -
     }
 }
 
+fn is_leading_endnote_marker_rendered_as_prefix(
+    para: Option<&Paragraph>,
+    control_index: usize,
+    line_idx: usize,
+    start_line: usize,
+    marker_pos: usize,
+    line_char_start: usize,
+) -> bool {
+    line_idx == start_line
+        && start_line == 0
+        && marker_pos == line_char_start
+        && matches!(
+            para.and_then(|p| p.controls.get(control_index)),
+            Some(Control::Endnote(_))
+        )
+}
+
 fn line_tac_picture_or_shape_height(
     para: Option<&Paragraph>,
     comp: &ComposedParagraph,
@@ -2897,6 +2914,19 @@ impl LayoutEngine {
                             .iter()
                             .enumerate()
                             .filter_map(|(fni, &(fpos, fnum, ctrl_idx))| {
+                                if is_leading_endnote_marker_rendered_as_prefix(
+                                    para,
+                                    ctrl_idx,
+                                    line_idx,
+                                    start_line,
+                                    fpos,
+                                    comp_line.char_start,
+                                ) {
+                                    // 미주는 첫 줄 앞에 본문 크기 번호를 별도 TextRun으로 이미 그린다.
+                                    // 같은 위치의 위첨자 마커를 다시 만들면 `문26)`처럼 제목이 중복된다.
+                                    fn_marker_inserted[fni] = true;
+                                    return None;
+                                }
                                 let in_range = fpos >= run_char_pos
                                     && (fpos < run_char_end || (is_last && fpos == run_char_end));
                                 if !fn_marker_inserted[fni] && in_range {

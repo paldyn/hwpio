@@ -46,6 +46,19 @@ fn render_tree_contains_text(node: &RenderNode, needle: &str) -> bool {
         .any(|child| render_tree_contains_text(child, needle))
 }
 
+fn count_render_text_occurrences(node: &RenderNode, needle: &str) -> usize {
+    let here = match &node.node_type {
+        RenderNodeType::TextRun(run) => run.text.matches(needle).count(),
+        RenderNodeType::FootnoteMarker(marker) => marker.text.matches(needle).count(),
+        _ => 0,
+    };
+    here + node
+        .children
+        .iter()
+        .map(|child| count_render_text_occurrences(child, needle))
+        .sum::<usize>()
+}
+
 fn svg_attr_f64(tag: &str, name: &str) -> Option<f64> {
     let pattern = format!("{name}=\"");
     let start = tag.find(&pattern)? + pattern.len();
@@ -1032,6 +1045,19 @@ fn issue_1139_2023_page4_question26_square_table_uses_anchor_line() {
     assert!(
         table.y > first_text_y + 70.0 && table.y < first_text_y + 120.0,
         "문26 Square wrap 표는 문단 첫 줄이 아니라 LineSeg가 좁아지는 후반 줄에 붙어야 함: table={table:?}, first_text_y={first_text_y}"
+    );
+}
+
+#[test]
+fn issue_1245_2023_page4_question26_endnote_marker_not_duplicated() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2023.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(3).expect("page 4 render tree");
+
+    let count = count_render_text_occurrences(&tree.root, "문26");
+    assert_eq!(
+        count, 1,
+        "미주 선두 번호는 일반 TextRun으로 한 번만 렌더되어야 하며 위첨자 마커로 중복되면 안 됨"
     );
 }
 
