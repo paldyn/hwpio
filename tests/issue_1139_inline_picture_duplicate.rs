@@ -1348,7 +1348,15 @@ fn issue_1209_2022_sep_page10_question12_uses_safe_vpos_backtrack() {
 
     let question12_y = min_para_text_y(&tree.root, 567).expect("문12 title");
     let question12_body_y = min_para_text_y(&tree.root, 568).expect("문12 body");
+    let question12_tail_y = min_para_text_y(&tree.root, 573).expect("문12 따라서");
     let question13_y = min_para_text_y(&tree.root, 575).expect("문13 title");
+    let mut ah_formulas = Vec::new();
+    collect_equation_bboxes_containing(&tree.root, ">AH</text>", &mut ah_formulas);
+    let question12_formula = ah_formulas
+        .into_iter()
+        .filter(|bbox| bbox.y > question12_tail_y && bbox.y < question13_y)
+        .min_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
+        .expect("문12 첫 수식");
 
     assert!(
         (390.0..=406.0).contains(&question12_y),
@@ -1361,6 +1369,16 @@ fn issue_1209_2022_sep_page10_question12_uses_safe_vpos_backtrack() {
     assert!(
         question13_y <= 724.0,
         "문12 수식 블록이 아래로 밀려 문13을 늦게 시작시키면 안 됨: q13_y={question13_y}"
+    );
+    assert!(
+        (398.0..=408.0).contains(&question12_formula.x),
+        "문12 수식-only 문단은 배분 정렬 오프셋으로 중앙에 밀리면 안 됨: x={}",
+        question12_formula.x
+    );
+    assert!(
+        question12_formula.y - question12_tail_y <= 20.0,
+        "문12 '따라서'와 수식-only 문단 사이 간격은 한컴/PDF처럼 촘촘해야 함: tail_y={question12_tail_y}, formula_y={}",
+        question12_formula.y
     );
 }
 
