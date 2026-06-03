@@ -5,6 +5,12 @@
 - **성격**: 조사·설계 전용 — **코드 0줄 수정**
 - **조사 문서**: [`mydocs/tech/trailing_model_render_vs_pagination_1248.md`](../tech/trailing_model_render_vs_pagination_1248.md)
 
+> **현행화 메모 (2026-06-03)**: 본 보고서는 #1247/#1259 반영 전 조사 스냅샷을
+> 보존한다. 현재 `devel`에는 관련 PR이 이미 반영되어, 문서의 "PR #1247 그대로 머지"
+> 같은 권장 행동은 당시 기준의 결정 기록으로 읽어야 한다. 현재 `devel` 위에 PR #1260
+> 문서 커밋을 체리픽한 재검증에서는 `cargo test --lib height_cursor`가 31 passed,
+> `cargo test --test issue_1082_endnote_multicolumn_drift`가 4 passed로 통과했다.
+
 ## 1. 배경
 
 #1246(PR #1247)에서 미주 between-notes min-gap 을 `vpos_adjust` 의 8번째 특례로 추가하며,
@@ -58,6 +64,14 @@ trailing 처리가 render/pagination 에 분산돼 누적 복잡도가 한계라
 | `cargo test --lib height_cursor` | 26 passed |
 | `cargo test --test issue_1082_endnote_multicolumn_drift` | 4 passed |
 | 코드 변경 | 없음 (조사 전용) |
+
+현재 `devel` 기준 PR #1260 체리픽 재검증:
+
+| 명령 | 결과 |
+|------|------|
+| `git diff --check devel..HEAD` | 통과 |
+| `cargo test --lib height_cursor` | 31 passed |
+| `cargo test --test issue_1082_endnote_multicolumn_drift` | 4 passed |
 
 ## 8. 후속
 
