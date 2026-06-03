@@ -4,7 +4,7 @@
 - 관련 이슈: https://github.com/edwardkim/rhwp/issues/1267
 - 작성일: 2026-06-03
 - 작성자: @Martinel2
-- 처리 브랜치: `local/pr1272-verify`
+- 처리 브랜치: `local/pr1272-integration`
 
 ## 1. PR 요약
 
@@ -29,8 +29,8 @@ PR 변경:
 |---|---|
 | `src/serializer/hwpx/section.rs` | 탭 직렬화 로직 수정 |
 | `tests/issue_1267_hwpx_tab_and_diagonal.rs` | 탭 roundtrip 테스트 추가 |
-| `mydocs/plans/task_m100_1267.md` | archive 이동 필요 |
-| `mydocs/plans/task_m100_1267_impl.md` | archive 이동 필요 |
+| `mydocs/plans/archives/task_m100_1267.md` | archive 이동 완료 |
+| `mydocs/plans/archives/task_m100_1267_impl.md` | archive 이동 완료 |
 
 ## 3. 현재 devel 기준 검증
 
@@ -70,7 +70,7 @@ PR이 추가한 문서는 다음 위치에 있다.
 
 최근 정리 정책상 `mydocs/plans`, `mydocs/report`, `mydocs/working` 루트에는 진행 중 문서만 두고 완료/PR 반영 문서는 `archives/` 아래로 이동해야 한다.
 
-수용 시 다음으로 이동하는 것이 맞다.
+수용 처리에서 다음 위치로 이동했다.
 
 - `mydocs/plans/archives/task_m100_1267.md`
 - `mydocs/plans/archives/task_m100_1267_impl.md`
@@ -91,16 +91,18 @@ write_diag_line(w, "hh:backSlash")?;
 
 따라서 PR #1272는 #1267의 탭 문제는 해결하지만, 사선 roundtrip 문제까지 해결하지는 않는다.
 
+후속 추적 이슈를 별도로 등록했다.
+
+- https://github.com/edwardkim/rhwp/issues/1278
+
 ## 5. 권장 처리
 
-권장안:
+승인된 처리:
 
 1. PR #1272는 탭 직렬화 수정으로 수용한다.
 2. 문서 파일은 archive 정책에 맞춰 이동한다.
 3. 사선 `slash/backSlash` 직렬화 문제는 PR #1272 범위 밖으로 분리한다.
-4. issue #1267은 다음 중 하나로 처리한다.
-   - 탭 이슈로 완료 처리하고, 사선은 별도 이슈 등록
-   - 또는 #1267은 열어 두고 PR #1272는 partial fix로 닫기
+4. issue #1267은 탭 이슈로 완료 처리하고, 사선은 #1278에서 추적한다.
 
 관리상 권장은 첫 번째다. 이슈 제목이 탭 폭 고정이고, 사선은 다른 serializer 테이블인 `header.rs`의 borderFill 문제이므로 별도 이슈로 분리하는 편이 추적이 쉽다.
 
@@ -118,4 +120,3 @@ write_diag_line(w, "hh:backSlash")?;
    - `cargo check --target wasm32-unknown-unknown --lib`
    - 필요 시 전체 `cargo test --tests --quiet`
 6. `devel` 병합 및 원격 CI 확인
-
