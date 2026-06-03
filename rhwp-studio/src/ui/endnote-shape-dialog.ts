@@ -56,6 +56,50 @@ const COLOR_SWATCHES = [
   '#eadcf8', '#e6e6e6', '#f9cb9c', '#ffe599', '#b6d7a8', '#76a5af', '#6fa8dc', '#8e7cc3',
 ];
 
+let dialogInstanceSeq = 0;
+
+function normalizeColor(value: string | undefined | null): string {
+  const text = (value || '').trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(text)) {
+    return text.toLowerCase();
+  }
+  return '#000000';
+}
+
+function normalizeEndnotePlacement(value: string | undefined | null): 'documentEnd' | 'sectionEnd' {
+  switch ((value || '').trim()) {
+    case 'sectionEnd':
+    case 'belowText':
+    case 'END_OF_SECTION':
+    case 'BELOW_TEXT':
+      return 'sectionEnd';
+    case 'documentEnd':
+    case 'eachColumn':
+    case 'rightColumn':
+    case 'END_OF_DOCUMENT':
+    case 'EACH_COLUMN':
+    case 'RIGHT_COLUMN':
+    default:
+      return 'documentEnd';
+  }
+}
+
+function normalizeEndnoteNumbering(value: string | undefined | null): 'continue' | 'restartSection' {
+  switch ((value || '').trim()) {
+    case 'restartSection':
+    case 'restartPage':
+    case 'ON_SECTION':
+    case 'ON_PAGE':
+    case 'RESTART_SECTION':
+    case 'RESTART_PAGE':
+      return 'restartSection';
+    case 'continue':
+    case 'CONTINUOUS':
+    default:
+      return 'continue';
+  }
+}
+
 function hwpToMm(value: number): number {
   return Math.round(value / HWPUNIT_PER_MM * 10) / 10;
 }
@@ -66,6 +110,7 @@ function mmToHwp(value: number, max = 300): number {
 }
 
 export class EndnoteShapeDialog extends ModalDialog {
+  private readonly radioNameSuffix = ++dialogInstanceSeq;
   private settings!: EndnoteShapeSettings;
   private numberFormatSelect!: HTMLSelectElement;
   private prefixInput!: HTMLInputElement;
@@ -89,19 +134,28 @@ export class EndnoteShapeDialog extends ModalDialog {
   private numberingRestart!: HTMLInputElement;
   private placementDocument!: HTMLInputElement;
   private placementSection!: HTMLInputElement;
+  private popupDismissPointerHandler: ((event: PointerEvent) => void) | null = null;
+  private popupDismissFocusHandler: ((event: FocusEvent) => void) | null = null;
 
   constructor(
     private wasm: WasmBridge,
     private eventBus: EventBus,
     private sectionIdx: number,
   ) {
-    super('주석 모양', 620);
+    super('미주', 620);
   }
 
   show(): void {
     this.settings = this.wasm.getEndnoteShape(this.sectionIdx);
     super.show();
+    this.attachPopupDismissHandlers();
     this.populate();
+  }
+
+  hide(): void {
+    this.detachPopupDismissHandlers();
+    this.closePopupMenus();
+    super.hide();
   }
 
   protected createBody(): HTMLElement {
@@ -154,21 +208,18 @@ export class EndnoteShapeDialog extends ModalDialog {
     this.prefixInput.value = this.settings.prefixChar || '';
     this.suffixInput.value = this.settings.suffixChar || ')';
     this.separatorCheck.checked = this.settings.separatorEnabled !== false;
-    this.lineTypeSelect.value = String(this.settings.separatorLineType ?? 1);
-    this.lineWidthSelect.value = String(this.settings.separatorLineWidth ?? 1);
-    this.lineColorInput.value = this.settings.separatorColor || '#000000';
+    this.setLineTypeValue(this.settings.separatorLineType ?? 1);
+    this.setLineWidthValue(this.settings.separatorLineWidth ?? 1);
+    this.setSeparatorColor(this.settings.separatorColor);
     this.updateLineTypePreview();
     this.updateLineWidthPreview();
-    this.updateColorPreview();
     this.separatorLengthModeSelect.value = 'custom';
     this.separatorLengthInput.value = String(hwpToMm(this.settings.separatorLength || mmToHwp(50)));
     this.marginTopInput.value = String(hwpToMm(this.settings.separatorMarginTop || 0));
     this.noteSpacingInput.value = String(hwpToMm(this.settings.noteSpacing || 0));
     this.marginBottomInput.value = String(hwpToMm(this.settings.separatorMarginBottom || 0));
-    this.numberingContinue.checked = this.settings.numbering !== 'restartSection';
-    this.numberingRestart.checked = this.settings.numbering === 'restartSection';
-    this.placementDocument.checked = this.settings.placement !== 'sectionEnd';
-    this.placementSection.checked = this.settings.placement === 'sectionEnd';
+    this.setNumberingRadio(normalizeEndnoteNumbering(this.settings.numbering));
+    this.setPlacementRadio(normalizeEndnotePlacement(this.settings.placement));
     this.updateSeparatorEnabled();
   }
 
@@ -210,14 +261,16 @@ export class EndnoteShapeDialog extends ModalDialog {
       this.row(this.label('번호 모양'), this.numberFormatSelect),
       this.row(this.label('앞 장식 문자'), this.prefixInput, this.label('뒤 장식 문자'), this.suffixInput),
       this.checkboxRow(this.separatorCheck, '구분선 넣기'),
-      this.row(
-        this.label('종류'),
+      this.pairRow(
+        '종류',
         this.linePreviewSelect(this.lineTypeSelect, this.lineTypeButton, this.lineTypeMenu),
-        this.label('길이'),
-        this.separatorLengthModeSelect,
-        this.withUnit(this.separatorLengthInput, 'mm'),
+        '길이',
+        this.inlineControls(
+          this.separatorLengthModeSelect,
+          this.withUnit(this.separatorLengthInput, 'mm'),
+        ),
       ),
-      this.row(this.label('굵기'), this.widthPreviewSelect(), this.label('색'), this.colorPicker()),
+      this.pairRow('굵기', this.widthPreviewSelect(), '색', this.colorPicker()),
     );
     return group;
   }
@@ -237,8 +290,10 @@ export class EndnoteShapeDialog extends ModalDialog {
 
   private numberingGroup(): HTMLElement {
     const group = this.group('번호 매기기');
-    this.numberingContinue = this.radio('endnote-numbering', 'continue');
-    this.numberingRestart = this.radio('endnote-numbering', 'restartSection');
+    this.numberingContinue = this.radio(`endnote-numbering-${this.radioNameSuffix}`, 'continue');
+    this.numberingRestart = this.radio(`endnote-numbering-${this.radioNameSuffix}`, 'restartSection');
+    this.numberingContinue.checked = true;
+    this.numberingContinue.defaultChecked = true;
     group.append(
       this.radioRow(this.numberingContinue, '앞 구역에 이어서'),
       this.radioRow(this.numberingRestart, '현재 구역부터 새로 시작'),
@@ -248,9 +303,10 @@ export class EndnoteShapeDialog extends ModalDialog {
 
   private contentNumberGroup(): HTMLElement {
     const group = this.group('미주 내용 번호 속성');
-    const normal = this.radio('endnote-content-number', 'normal');
-    const small = this.radio('endnote-content-number', 'small');
+    const normal = this.radio(`endnote-content-number-${this.radioNameSuffix}`, 'normal');
+    const small = this.radio(`endnote-content-number-${this.radioNameSuffix}`, 'small');
     normal.checked = true;
+    normal.defaultChecked = true;
     small.disabled = true;
     group.append(this.radioRow(normal, '보통'), this.radioRow(small, '작게'));
     return group;
@@ -258,8 +314,10 @@ export class EndnoteShapeDialog extends ModalDialog {
 
   private placementGroup(): HTMLElement {
     const group = this.group('미주 위치');
-    this.placementDocument = this.radio('endnote-placement', 'documentEnd');
-    this.placementSection = this.radio('endnote-placement', 'sectionEnd');
+    this.placementDocument = this.radio(`endnote-placement-${this.radioNameSuffix}`, 'documentEnd');
+    this.placementSection = this.radio(`endnote-placement-${this.radioNameSuffix}`, 'sectionEnd');
+    this.placementDocument.checked = true;
+    this.placementDocument.defaultChecked = true;
     group.append(
       this.radioRow(this.placementDocument, '문서의 끝'),
       this.radioRow(this.placementSection, '구역의 끝'),
@@ -283,6 +341,22 @@ export class EndnoteShapeDialog extends ModalDialog {
     }
   }
 
+  private setNumberingRadio(numbering: 'continue' | 'restartSection'): void {
+    this.numberingContinue.checked = numbering === 'continue';
+    this.numberingRestart.checked = numbering === 'restartSection';
+    if (!this.numberingContinue.checked && !this.numberingRestart.checked) {
+      this.numberingContinue.checked = true;
+    }
+  }
+
+  private setPlacementRadio(placement: 'documentEnd' | 'sectionEnd'): void {
+    this.placementDocument.checked = placement === 'documentEnd';
+    this.placementSection.checked = placement === 'sectionEnd';
+    if (!this.placementDocument.checked && !this.placementSection.checked) {
+      this.placementDocument.checked = true;
+    }
+  }
+
   private group(title: string): HTMLFieldSetElement {
     const fieldset = document.createElement('fieldset');
     fieldset.style.cssText = 'border:1px solid #d8dce5;padding:9px 10px 10px;margin:0;';
@@ -298,6 +372,34 @@ export class EndnoteShapeDialog extends ModalDialog {
     row.style.cssText = 'display:flex;align-items:center;gap:8px;margin:5px 0;font-size:13px;flex-wrap:wrap;min-height:28px;';
     row.append(...children);
     return row;
+  }
+
+  private pairRow(
+    leftLabel: string,
+    leftControl: HTMLElement,
+    rightLabel: string,
+    rightControl: HTMLElement,
+  ): HTMLElement {
+    const row = document.createElement('div');
+    row.style.cssText = [
+      'display:grid;grid-template-columns:48px 118px 48px minmax(0,1fr);',
+      'align-items:center;column-gap:10px;row-gap:6px;margin:5px 0;',
+      'font-size:13px;min-height:28px;',
+    ].join('');
+    row.append(
+      this.pairLabel(leftLabel),
+      leftControl,
+      this.pairLabel(rightLabel),
+      rightControl,
+    );
+    return row;
+  }
+
+  private pairLabel(text: string): HTMLSpanElement {
+    const label = document.createElement('span');
+    label.textContent = text;
+    label.style.cssText = 'color:#222;text-align:right;white-space:nowrap;';
+    return label;
   }
 
   private label(text: string): HTMLSpanElement {
@@ -370,7 +472,15 @@ export class EndnoteShapeDialog extends ModalDialog {
 
   private popupWrap(): HTMLElement {
     const wrap = document.createElement('span');
+    wrap.dataset.endnotePopupRoot = '1';
     wrap.style.cssText = 'position:relative;display:inline-flex;align-items:center;';
+    return wrap;
+  }
+
+  private inlineControls(...children: HTMLElement[]): HTMLElement {
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:8px;min-width:0;';
+    wrap.append(...children);
     return wrap;
   }
 
@@ -380,7 +490,7 @@ export class EndnoteShapeDialog extends ModalDialog {
     this.lineTypeMenu = this.popupMenu(178);
     for (const choice of LINE_TYPE_CHOICES) {
       const option = this.menuOption(() => {
-        this.lineTypeSelect.value = choice.value;
+        this.setLineTypeValue(choice.value);
         this.updateLineTypePreview();
         this.closePopupMenus();
       });
@@ -401,7 +511,7 @@ export class EndnoteShapeDialog extends ModalDialog {
     this.lineWidthMenu = this.popupMenu(136);
     for (const choice of LINE_WIDTH_CHOICES) {
       const option = this.menuOption(() => {
-        this.lineWidthSelect.value = choice.value;
+        this.setLineWidthValue(choice.value);
         this.updateLineWidthPreview();
         this.closePopupMenus();
       });
@@ -421,8 +531,13 @@ export class EndnoteShapeDialog extends ModalDialog {
   private buildColorControl(): void {
     this.lineColorInput = document.createElement('input');
     this.lineColorInput.type = 'color';
-    this.lineColorInput.style.display = 'none';
-    this.lineColorInput.addEventListener('input', () => this.updateColorPreview());
+    this.lineColorInput.value = '#000000';
+    this.lineColorInput.style.cssText = [
+      'position:absolute;left:0;top:0;width:1px;height:1px;opacity:0;',
+      'pointer-events:none;border:0;padding:0;',
+    ].join('');
+    this.lineColorInput.addEventListener('input', () => this.setSeparatorColor(this.lineColorInput.value));
+    this.lineColorInput.addEventListener('change', () => this.setSeparatorColor(this.lineColorInput.value));
 
     this.lineColorButton = this.previewButton();
     this.lineColorButton.style.width = '74px';
@@ -437,6 +552,7 @@ export class EndnoteShapeDialog extends ModalDialog {
       const swatch = document.createElement('button');
       swatch.type = 'button';
       swatch.title = color;
+      swatch.dataset.color = color;
       swatch.style.cssText = [
         'width:20px;height:20px;border:1px solid #b8b8b8;background:#fff;padding:0;',
         'display:flex;align-items:center;justify-content:center;cursor:pointer;',
@@ -446,12 +562,25 @@ export class EndnoteShapeDialog extends ModalDialog {
       swatch.appendChild(chip);
       swatch.addEventListener('click', (event) => {
         event.stopPropagation();
-        this.lineColorInput.value = color;
-        this.updateColorPreview();
+        this.setSeparatorColor(color);
         this.closePopupMenus();
       });
       this.lineColorMenu.appendChild(swatch);
     }
+
+    const custom = document.createElement('button');
+    custom.type = 'button';
+    custom.textContent = '다른 색...';
+    custom.style.cssText = [
+      'grid-column:1 / -1;height:24px;border:1px solid #c9c9c9;background:#f8f8f8;',
+      'font-size:12px;color:#222;cursor:pointer;margin-top:2px;',
+    ].join('');
+    custom.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this.closePopupMenus();
+      this.lineColorInput.click();
+    });
+    this.lineColorMenu.appendChild(custom);
 
     this.lineColorButton.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -470,6 +599,7 @@ export class EndnoteShapeDialog extends ModalDialog {
     ].join('');
     const arrow = document.createElement('span');
     arrow.textContent = '▾';
+    arrow.dataset.dropdownArrow = '1';
     arrow.style.cssText = 'position:absolute;right:6px;top:4px;color:#555;font-size:11px;';
     button.appendChild(arrow);
     return button;
@@ -540,26 +670,51 @@ export class EndnoteShapeDialog extends ModalDialog {
   private updateLineTypePreview(): void {
     const choice = LINE_TYPE_CHOICES.find(item => item.value === this.lineTypeSelect.value)
       ?? LINE_TYPE_CHOICES[0];
+    this.setLineTypeValue(choice.value);
     this.replaceButtonPreview(this.lineTypeButton, this.linePreview(choice, 2, '#222'));
   }
 
   private updateLineWidthPreview(): void {
     const choice = LINE_WIDTH_CHOICES.find(item => item.value === this.lineWidthSelect.value)
       ?? LINE_WIDTH_CHOICES[0];
+    this.setLineWidthValue(choice.value);
     this.replaceButtonPreview(this.lineWidthButton, this.widthPreview(choice));
   }
 
+  private setLineTypeValue(value: string | number | undefined | null): void {
+    const text = String(value ?? '');
+    const choice = LINE_TYPE_CHOICES.find(item => item.value === text) ?? LINE_TYPE_CHOICES[0];
+    this.lineTypeSelect.value = choice.value;
+  }
+
+  private setLineWidthValue(value: string | number | undefined | null): void {
+    const text = String(value ?? '');
+    const choice = LINE_WIDTH_CHOICES.find(item => item.value === text) ?? LINE_WIDTH_CHOICES[0];
+    this.lineWidthSelect.value = choice.value;
+  }
+
+  private setSeparatorColor(color: string | undefined | null): void {
+    this.lineColorInput.value = normalizeColor(color);
+    this.updateColorPreview();
+  }
+
   private updateColorPreview(): void {
+    const color = normalizeColor(this.lineColorInput.value);
     const chip = document.createElement('span');
     chip.style.cssText = [
-      `display:block;width:44px;height:16px;background:${this.lineColorInput.value || '#000000'};`,
+      `display:block;width:44px;height:16px;background:${color};`,
       'border:1px solid #777;',
     ].join('');
     this.replaceButtonPreview(this.lineColorButton, chip);
+    this.lineColorMenu?.querySelectorAll<HTMLButtonElement>('button[data-color]').forEach((button) => {
+      const active = normalizeColor(button.dataset.color) === color;
+      button.style.outline = active ? '2px solid #315fc0' : 'none';
+      button.style.outlineOffset = active ? '1px' : '0';
+    });
   }
 
   private replaceButtonPreview(button: HTMLButtonElement, preview: HTMLElement): void {
-    const arrow = button.querySelector('span:last-child');
+    const arrow = button.querySelector('[data-dropdown-arrow="1"]');
     button.querySelectorAll('[data-preview="1"]').forEach(el => el.remove());
     preview.dataset.preview = '1';
     if (arrow) {
@@ -573,6 +728,36 @@ export class EndnoteShapeDialog extends ModalDialog {
     const nextDisplay = menu.style.display === 'none' ? (menu.dataset.display || 'block') : 'none';
     this.closePopupMenus();
     menu.style.display = nextDisplay;
+  }
+
+  private attachPopupDismissHandlers(): void {
+    if (this.popupDismissPointerHandler || this.popupDismissFocusHandler) return;
+    this.popupDismissPointerHandler = (event: PointerEvent) => {
+      if (this.isPopupTarget(event.target)) return;
+      this.closePopupMenus();
+    };
+    this.popupDismissFocusHandler = (event: FocusEvent) => {
+      if (this.isPopupTarget(event.target)) return;
+      this.closePopupMenus();
+    };
+    document.addEventListener('pointerdown', this.popupDismissPointerHandler, true);
+    document.addEventListener('focusin', this.popupDismissFocusHandler, true);
+  }
+
+  private detachPopupDismissHandlers(): void {
+    if (this.popupDismissPointerHandler) {
+      document.removeEventListener('pointerdown', this.popupDismissPointerHandler, true);
+      this.popupDismissPointerHandler = null;
+    }
+    if (this.popupDismissFocusHandler) {
+      document.removeEventListener('focusin', this.popupDismissFocusHandler, true);
+      this.popupDismissFocusHandler = null;
+    }
+  }
+
+  private isPopupTarget(target: EventTarget | null): boolean {
+    return target instanceof HTMLElement
+      && Boolean(target.closest('[data-endnote-popup-root="1"]'));
   }
 
   private closePopupMenus(): void {

@@ -5720,9 +5720,11 @@ impl DocumentCore {
     ) -> crate::model::footnote::FootnoteNumbering {
         use crate::model::footnote::FootnoteNumbering;
         match value {
-            "continue" => FootnoteNumbering::Continue,
-            "restartSection" => FootnoteNumbering::RestartSection,
-            "restartPage" => FootnoteNumbering::RestartPage,
+            "continue" | "CONTINUOUS" | "continuous" => FootnoteNumbering::Continue,
+            "restartSection" | "ON_SECTION" | "RESTART_SECTION" | "onSection" => {
+                FootnoteNumbering::RestartSection
+            }
+            "restartPage" | "ON_PAGE" | "RESTART_PAGE" | "onPage" => FootnoteNumbering::RestartPage,
             _ => fallback,
         }
     }
