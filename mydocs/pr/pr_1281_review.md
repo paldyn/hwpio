@@ -119,13 +119,19 @@ npm run build
 
 | 항목 | 기대 동작 | 판정 |
 |---|---|---|
-| 찾기창 open + 입력칸 focus + Enter | 다음 찾기 | 대기 |
-| 찾기창 open + 입력칸 focus + Shift+Enter | 이전 찾기 | 대기 |
-| 찾기창 open + 편집면 focus + Enter | 편집기 입력이 아니라 다음 찾기 | 대기 |
-| 찾기창 open + 편집면 focus + Shift+Enter | 편집기 줄바꿈이 아니라 이전 찾기 | 대기 |
-| 찾아 바꾸기 mode + 바꿀 내용 focus + Enter | 바꾸기 실행 | 대기 |
-| 찾기창 open + Escape | 찾기창 닫힘 | 대기 |
-| IME composing 중 Enter | 찾기 Enter로 오인하지 않음 | 대기 |
+| 찾기창 open + 입력칸 focus + Enter | 다음 찾기 | 성공 |
+| 찾기창 open + 입력칸 focus + Shift+Enter | 이전 찾기 | 성공 |
+| 찾기창 open + 편집면 focus + Enter | 편집기 입력이 아니라 다음 찾기 | 성공 |
+| 찾기창 open + 편집면 focus + Shift+Enter | 편집기 줄바꿈이 아니라 이전 찾기 | 성공 |
+| 찾아 바꾸기 mode + 바꿀 내용 focus + Enter | 바꾸기 실행 | 성공 |
+| 찾기창 open + Escape | 찾기창 닫힘 | 성공 |
+| IME composing 중 Enter | 찾기 Enter로 오인하지 않음 | 성공 |
+
+메인테이너 동작 테스트:
+
+```text
+2026-06-03 성공
+```
 
 ## 6. 권장 처리
 
@@ -140,7 +146,7 @@ npm run build
 
 진행 절차:
 
-1. 메인테이너 수동 동작 판정
+1. 메인테이너 수동 동작 판정 완료
 2. 판정 통과 시 `devel` 병합
 3. 원격 push
 4. PR #1281 종료 처리
