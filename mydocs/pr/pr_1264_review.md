@@ -141,10 +141,14 @@ pdf-large/3-09월_교육_통합_2024-미주사이20-2024.pdf: 1,473,246 bytes
 
 두 보정 후 `issue_1116`, `issue_919`, `issue_1261_*` 및 전체 테스트가 통과했다.
 
-원격 PR head 기준 GitHub Actions도 확인했다. Render Diff와 CodeQL은 성공했지만 CI run
-`26864602595`의 `Run tests` 단계에서 `issue_1116` 2건이 실패했다. 실패 항목은 위
-통합 후보 보정 전 회귀와 동일하며, 현재 `local/pr1264-current`에서는 해당 테스트와 전체
-`cargo test --verbose`가 통과한다.
+원격 PR head 기준 GitHub Actions도 확인했다. 초기 head에서는 Render Diff와 CodeQL은
+성공했지만 CI run `26864602595`의 `Run tests` 단계에서 `issue_1116` 2건이 실패했다.
+실패 항목은 위 통합 후보 보정 전 회귀와 동일했다.
+
+이후 컨트리뷰터가 추가 커밋 `3de2cdf3`를 올려 PR head CI를 다시 통과시켰다. 최신 head
+기준 Actions 상태는 Render Diff `26867913610`, CodeQL `26867913624`, CI `26867913652`
+모두 success다. 다만 최신 PR diff에도 `mydocs/*` archive 정책 미반영과 PDF LFS pointer
+정리 대상이 남아 있어, 최종 반영은 메인테이너 통합 브랜치로 진행한다.
 
 ## 5. 자동 검증 결과
 
@@ -186,6 +190,12 @@ readonly cache metadata 경고이며 빌드/테스트 결과에는 영향이 없
 | `samples/3-10월_교육_통합_2022.hwp` | `output/poc/pr1264-visual/hwp-2022-oct-page5/3-10월_교육_통합_2022_005.svg` |
 | `samples/3-09월_교육_통합_2024-미주사이20.hwp` | `output/poc/pr1264-visual/hwp-2024-sep-note-gap-page10/3-09월_교육_통합_2024-미주사이20_010.svg` |
 | `samples/3-09월_교육_통합_2024-구분선아래20.hwp` | `output/poc/pr1264-visual/hwp-2024-sep-separator-page10/3-09월_교육_통합_2024-구분선아래20_010.svg` |
+
+메인테이너 시각 판정:
+
+```text
+2026-06-03 통과
+```
 
 판정 포인트:
 
