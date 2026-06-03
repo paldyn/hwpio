@@ -99,6 +99,8 @@ cargo run --bin rhwp -- export-svg samples/143E433F503322BD33.hwp -o output/poc/
 
 ## 7. 판정
 
-자동 검증 기준으로는 통합 가능하다.
+자동 검증 및 메인테이너 시각 판정 기준으로 통합 가능하다.
 
 `charming` adapter는 현재 crate-type과 충돌하므로 이번 PR 범위에서는 제외했다. 핵심 목표인 legacy OLE `/Contents` 차트의 placeholder 탈출과 Rust SVG 렌더링 경로는 동작한다.
+
+- 2026-06-03 메인테이너 시각 판정 통과: `output/poc/pr1268-ole-chart/143E433F503322BD33.svg`
