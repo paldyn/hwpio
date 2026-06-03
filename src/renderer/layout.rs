@@ -2944,6 +2944,12 @@ impl LayoutEngine {
                     .map(|p| p.text.trim_start().starts_with('문'))
                     .unwrap_or(false);
             let y_before_vpos = y_offset;
+            hcursor.prev_item_content_bottom_y = if item_ordinal > 0 {
+                let content_bottom_y = self.last_item_content_bottom.get();
+                content_bottom_y.is_finite().then_some(content_bottom_y)
+            } else {
+                None
+            };
             if !shape_jumped && !prev_tac_seg_applied {
                 // [Task #1027 Stage C] inter-item VPOS_CORR 보정을 HeightCursor 에 위임 (동작 동일).
                 // 이전 문단 overlay-shape/분할표 bypass, page/lazy base 산출, sb 차감,

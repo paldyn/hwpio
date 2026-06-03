@@ -1143,6 +1143,30 @@ impl DocumentCore {
             )
         }
 
+        fn text_run_hit_allowed_by_textbox_bbox(
+            run: &RunInfo,
+            textbox_bboxes: &[TextBoxBboxInfo],
+            x: f64,
+            y: f64,
+        ) -> bool {
+            if !run.is_textbox {
+                return true;
+            }
+            let Some(ctx) = run.cell_context.as_ref() else {
+                return false;
+            };
+            let outer = &ctx.path[0];
+            textbox_bboxes.iter().any(|tb| {
+                tb.section_index == run.section_index
+                    && tb.parent_para_index == ctx.parent_para_index
+                    && tb.control_index == outer.control_index
+                    && x >= tb.x
+                    && x <= tb.x + tb.w
+                    && y >= tb.y
+                    && y <= tb.y + tb.h
+            })
+        }
+
         let mut runs: Vec<RunInfo> = Vec::new();
         let mut guide_runs: Vec<GuideRunInfo> = Vec::new();
         let mut cell_bboxes: Vec<CellBboxInfo> = Vec::new();
@@ -1399,6 +1423,9 @@ impl DocumentCore {
         let mut hit_cell: Option<(usize, usize)> = None;
         let mut hit_cell_area: Option<i64> = None;
         for (i, run) in runs.iter().enumerate() {
+            if !text_run_hit_allowed_by_textbox_bbox(run, &textbox_bboxes, x, y) {
+                continue;
+            }
             if x >= run.bbox_x
                 && x <= run.bbox_x + run.bbox_w
                 && y >= run.bbox_y
@@ -1565,6 +1592,7 @@ impl DocumentCore {
         let mut same_line_runs: Vec<&RunInfo> = runs
             .iter()
             .filter(|r| r.cell_context.is_none()) // 본문 run만
+            .filter(|r| text_run_hit_allowed_by_textbox_bbox(r, &textbox_bboxes, x, y))
             .filter(|r| y >= r.bbox_y && y <= r.bbox_y + r.bbox_h)
             .filter(|r| {
                 click_column.is_none() || r.column_index.is_none() || r.column_index == click_column
@@ -1591,15 +1619,27 @@ impl DocumentCore {
         // 다단: 클릭 칼럼의 run을 우선 후보로 사용
         let column_runs: Vec<&RunInfo> = runs
             .iter()
+            .filter(|r| text_run_hit_allowed_by_textbox_bbox(r, &textbox_bboxes, x, y))
             .filter(|r| {
                 click_column.is_none() || r.column_index.is_none() || r.column_index == click_column
             })
             .collect();
+        let all_allowed_runs: Vec<&RunInfo> = runs
+            .iter()
+            .filter(|r| text_run_hit_allowed_by_textbox_bbox(r, &textbox_bboxes, x, y))
+            .collect();
         let candidate_runs = if column_runs.is_empty() {
-            &runs.iter().collect::<Vec<_>>()
+            &all_allowed_runs
         } else {
             &column_runs
         };
+        if candidate_runs.is_empty() {
+            let (page_content, _, _) = self.find_page(page_num)?;
+            return Ok(format!(
+                "{{\"sectionIndex\":{},\"paragraphIndex\":0,\"charOffset\":0}}",
+                page_content.section_index
+            ));
+        }
 
         let closest = candidate_runs
             .iter()

@@ -145,6 +145,21 @@ fn find_image_bbox(
         .find_map(|child| find_image_bbox(child, para_index, control_index))
 }
 
+fn find_rectangle_bbox(
+    node: &RenderNode,
+    para_index: usize,
+    control_index: usize,
+) -> Option<BoundingBox> {
+    if let RenderNodeType::Rectangle(rect) = &node.node_type {
+        if rect.para_index == Some(para_index) && rect.control_index == Some(control_index) {
+            return Some(node.bbox.clone());
+        }
+    }
+    node.children
+        .iter()
+        .find_map(|child| find_rectangle_bbox(child, para_index, control_index))
+}
+
 fn collect_equation_bboxes_containing(node: &RenderNode, needle: &str, out: &mut Vec<BoundingBox>) {
     if let RenderNodeType::Equation(eq) = &node.node_type {
         if eq.svg_content.contains(needle) {
@@ -1286,6 +1301,68 @@ fn issue_1189_2022_oct_page17_endnote_drag_selection_covers_equation_tail_lines(
             "한컴오피스처럼 문27 미주 드래그 선택이 수식 꼬리 문단까지 연속으로 덮어야 함: para_idx={para_idx}, para_y={para_y}, rects={rects:?}"
         );
     }
+}
+
+#[test]
+fn issue_1261_2022_oct_page5_question28_choices_stay_below_condition_box() {
+    let bytes = std::fs::read("samples/3-10월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(4).expect("page 5 render tree");
+
+    let condition_box = find_rectangle_bbox(&tree.root, 306, 0).expect("문28 조건 박스");
+    let first_choice_line = find_text_line_bbox(&tree.root, 306, 1).expect("문28 ①②③ 선택지 줄");
+    let box_bottom = condition_box.y + condition_box.height;
+
+    assert!(
+        first_choice_line.y > box_bottom + 2.0,
+        "문28 선택지 줄은 조건 박스 아래에서 시작해야 하며 박스 내부 문장을 덮으면 안 됨: box={condition_box:?}, choice={first_choice_line:?}"
+    );
+}
+
+#[test]
+fn issue_1261_2024_sep_page10_question8_stays_below_previous_equation() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2024-미주사이20.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(9).expect("page 10 render tree");
+
+    let previous_equation_bottom =
+        max_para_content_bottom(&tree.root, 522).expect("문7 마지막 수식 문단");
+    let question8_y = min_para_text_y(&tree.root, 523).expect("문8 제목");
+    let between_notes_gap = question8_y - previous_equation_bottom;
+
+    assert!(
+        (70.0..82.0).contains(&between_notes_gap),
+        "문8 제목은 직전 문7 마지막 수식 하단 뒤에 미주 사이 20mm 공통 간격을 유지해야 함: prev_bottom={previous_equation_bottom}, q8_y={question8_y}, gap={between_notes_gap}"
+    );
+}
+
+#[test]
+fn issue_1261_2024_sep_page10_question12_tail_stays_inside_column() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2024-미주사이20.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(9).expect("page 10 render tree");
+
+    let question10_y = min_para_text_y(&tree.root, 550).expect("문10 제목");
+    let question11_y = min_para_text_y(&tree.root, 557).expect("문11 제목");
+    let question12_y = min_para_text_y(&tree.root, 567).expect("문12 제목");
+    let question12_tail_bottom = max_para_content_bottom(&tree.root, 569).expect("문12 꼬리");
+
+    assert!(
+        (398.0..408.0).contains(&question10_y),
+        "문10 제목은 한컴 PDF bbox(약 402.8px)와 맞아야 함: q10={question10_y}"
+    );
+    assert!(
+        (614.0..624.0).contains(&question11_y),
+        "문11 제목은 한컴 PDF bbox(약 618.5px)와 맞아야 함: q11={question11_y}"
+    );
+    assert!(
+        (991.0..1001.0).contains(&question12_y),
+        "문12 제목은 한컴 PDF bbox(약 995.6px)와 맞아야 함: q12={question12_y}"
+    );
+    assert!(
+        question12_tail_bottom < 1092.5,
+        "문12 꼬리는 10쪽 오른쪽 단 하단 안에 남아야 함: bottom={question12_tail_bottom}"
+    );
 }
 
 #[test]
