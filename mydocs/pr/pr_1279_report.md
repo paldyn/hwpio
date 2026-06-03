@@ -25,6 +25,23 @@ d6f4d9ad Task #1273: Stage 2 — 이동 커맨드 by-path 지원 (undo/redo)
 - PR 리뷰 문서 `mydocs/pr/pr_1279_review.md`를 작성했다.
 - 본 처리 보고서 `mydocs/pr/pr_1279_report.md`를 작성했다.
 
+후속 보강:
+
+- rhwp-studio에서 회전한 셀 내부 그림을 HWP로 저장하면 한컴편집기에서
+  `rotationAngle` 속성은 바인딩되지만 실제 이미지가 회전되지 않는 문제를 확인했다.
+- 원인은 HWP 저장 경로가 `ShapeComponentAttr.rotation_angle`만 갱신하고,
+  한컴이 실제 회전에 사용하는 SHAPE_COMPONENT rendering matrix는 identity로 남기는 것이었다.
+- `samples/ta-pic-001-r.hwp`, `samples/hwpx/ta-pic-001-r.hwpx`,
+  `pdf-large/hwpx/ta-pic-001-r.pdf`를 기준 파일로 추가했다.
+- 저장 시 회전 그림의 `common.width/height`는 회전 후 외곽 박스,
+  `shape_attr.current_width/current_height`는 회전 전 실제 표시 크기로 분리되도록 보강했다.
+- raw rendering matrix가 없는 회전 그림은 HWP 직렬화 시
+  `transMatrix + scaleMatrix + rotMatrix`를 생성하도록 보강했다.
+- 리사이즈 경로의 `width/height`는 UI 표시 박스 크기이므로, 회전 그림에서는 기존
+  `curSz` 비율로 실제 표시 크기를 스케일하고 회전 외곽 재계산은 `rotationAngle`
+  변경 시에만 수행하도록 분리했다.
+- 더 정밀한 UX 정합은 후속 이슈 [#1282](https://github.com/edwardkim/rhwp/issues/1282)로 분리했다.
+
 ## 문서 이동
 
 ```text
@@ -50,6 +67,15 @@ VITE_URL=http://127.0.0.1:7701 node e2e/textbox-picture-1171.test.mjs --mode=hea
 VITE_URL=http://127.0.0.1:7701 node e2e/textbox-picture-insert-1171.test.mjs --mode=headless
 ```
 
+후속 Rust 검증:
+
+```text
+cargo test --test issue_1279_picture_rotation_save
+cargo test --lib document_core::commands::object_ops
+cargo test --lib serializer::control
+cargo test --test issue_1067_shape_rotation
+```
+
 주요 E2E 확인:
 
 ```text
@@ -73,14 +99,13 @@ floating: vertOffset 0 -> 2250, bbox y 799 -> 829
 - 보고된 조작 오류 경로를 직접 수정한다.
 - 실제 InputHandler 마우스 드래그 경로를 구동하는 E2E가 추가되었다.
 - 관련 기존 E2E와 production build가 통과했다.
-- Rust/WASM 변경이 없어 영향 범위가 rhwp-studio 조작 경로로 제한된다.
+- 후속 저장 호환성 회귀 테스트로 회전 그림의 HWP rendering matrix 계약을 고정했다.
 
 ## 다음 절차
 
 ```text
 1. 통합 커밋 생성
-2. devel 병합
-3. push
-4. GitHub CI 확인
-5. PR #1279 / 이슈 #1273 종료 처리
+2. push
+3. GitHub CI 확인
+4. PR #1279 / 이슈 #1273 종료 처리
 ```

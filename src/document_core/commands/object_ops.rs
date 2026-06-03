@@ -273,6 +273,109 @@ impl DocumentCore {
         }
     }
 
+    fn picture_props_touch_shape_transform(props_json: &str) -> bool {
+        const TRANSFORM_KEYS: [&str; 7] = [
+            "\"width\"",
+            "\"height\"",
+            "\"vertOffset\"",
+            "\"horzOffset\"",
+            "\"rotationAngle\"",
+            "\"horzFlip\"",
+            "\"vertFlip\"",
+        ];
+        TRANSFORM_KEYS.iter().any(|key| props_json.contains(key))
+    }
+
+    fn picture_rotated_bounds(width: u32, height: u32, angle: i16) -> (u32, u32) {
+        if width == 0 || height == 0 || angle.rem_euclid(360) == 0 {
+            return (width, height);
+        }
+
+        let theta = (angle as f64).to_radians();
+        let cos = theta.cos().abs();
+        let sin = theta.sin().abs();
+        let rotated_width = width as f64 * cos + height as f64 * sin;
+        let rotated_height = width as f64 * sin + height as f64 * cos;
+        (
+            rotated_width.round().max(1.0) as u32,
+            rotated_height.round().max(1.0) as u32,
+        )
+    }
+
+    fn refresh_picture_rotation_layout_for_save(pic: &mut crate::model::image::Picture) {
+        let cur_w = if pic.shape_attr.current_width > 0 {
+            pic.shape_attr.current_width
+        } else {
+            pic.common.width
+        };
+        let cur_h = if pic.shape_attr.current_height > 0 {
+            pic.shape_attr.current_height
+        } else {
+            pic.common.height
+        };
+
+        if cur_w == 0 || cur_h == 0 {
+            return;
+        }
+
+        pic.shape_attr.current_width = cur_w;
+        pic.shape_attr.current_height = cur_h;
+
+        let old_center_x =
+            pic.common.horizontal_offset as i32 as i64 + (pic.common.width as i64 / 2);
+        let old_center_y =
+            pic.common.vertical_offset as i32 as i64 + (pic.common.height as i64 / 2);
+        let (bbox_w, bbox_h) =
+            Self::picture_rotated_bounds(cur_w, cur_h, pic.shape_attr.rotation_angle);
+
+        if pic.shape_attr.rotation_angle.rem_euclid(360) != 0 {
+            pic.common.width = bbox_w;
+            pic.common.height = bbox_h;
+            pic.common.horizontal_offset = (old_center_x - (bbox_w as i64 / 2)) as i32 as u32;
+            pic.common.vertical_offset = (old_center_y - (bbox_h as i64 / 2)) as i32 as u32;
+        } else {
+            pic.common.width = cur_w;
+            pic.common.height = cur_h;
+        }
+
+        pic.shape_attr.rotation_center.x = (pic.common.width / 2) as i32;
+        pic.shape_attr.rotation_center.y = (pic.common.height / 2) as i32;
+        pic.shape_attr.rotate_image = true;
+        pic.shape_attr.flip |= 0x0008_0000;
+    }
+
+    fn apply_picture_display_width(pic: &mut crate::model::image::Picture, width: u32) {
+        let old_common_width = pic.common.width;
+        let old_current_width = pic.shape_attr.current_width;
+        pic.common.width = width;
+        if pic.shape_attr.rotation_angle.rem_euclid(360) != 0
+            && old_common_width > 0
+            && old_current_width > 0
+        {
+            pic.shape_attr.current_width =
+                ((old_current_width as f64 * width as f64 / old_common_width as f64).round())
+                    .max(1.0) as u32;
+        } else {
+            pic.shape_attr.current_width = width;
+        }
+    }
+
+    fn apply_picture_display_height(pic: &mut crate::model::image::Picture, height: u32) {
+        let old_common_height = pic.common.height;
+        let old_current_height = pic.shape_attr.current_height;
+        pic.common.height = height;
+        if pic.shape_attr.rotation_angle.rem_euclid(360) != 0
+            && old_common_height > 0
+            && old_current_height > 0
+        {
+            pic.shape_attr.current_height =
+                ((old_current_height as f64 * height as f64 / old_common_height as f64).round())
+                    .max(1.0) as u32;
+        } else {
+            pic.shape_attr.current_height = height;
+        }
+    }
+
     /// [Task #825] 머리말/꼬리말 안 그림의 속성 조회.
     /// path: section[si].paragraphs[outer_para].controls[outer_ctrl] = Header/Footer
     ///       → .paragraphs[inner_para].controls[inner_ctrl] = Picture
@@ -785,14 +888,15 @@ impl DocumentCore {
     fn apply_picture_props_inner(pic: &mut crate::model::image::Picture, props_json: &str) -> bool {
         use super::super::helpers::{json_bool, json_i16, json_i32, json_str, json_u32};
 
+        let transform_changed = Self::picture_props_touch_shape_transform(props_json);
+        let mut rotation_changed = false;
+
         // 크기 변경
         if let Some(w) = json_u32(props_json, "width") {
-            pic.common.width = w;
-            pic.shape_attr.current_width = w;
+            Self::apply_picture_display_width(pic, w);
         }
         if let Some(h) = json_u32(props_json, "height") {
-            pic.common.height = h;
-            pic.shape_attr.current_height = h;
+            Self::apply_picture_display_height(pic, h);
         }
 
         // 위치 속성
@@ -855,6 +959,15 @@ impl DocumentCore {
         if let Some(v) = json_u32(props_json, "horzOffset") {
             pic.common.horizontal_offset = v;
         }
+        if transform_changed {
+            pic.shape_attr.raw_rendering.clear();
+            pic.shape_attr.render_tx = pic.shape_attr.offset_x as f64;
+            pic.shape_attr.render_ty = pic.shape_attr.offset_y as f64;
+            pic.shape_attr.render_sx = 1.0;
+            pic.shape_attr.render_sy = 1.0;
+            pic.shape_attr.render_b = 0.0;
+            pic.shape_attr.render_c = 0.0;
+        }
 
         // 이미지 속성
         if let Some(v) = json_i32(props_json, "brightness") {
@@ -875,6 +988,7 @@ impl DocumentCore {
         // 회전/대칭
         if let Some(v) = json_i16(props_json, "rotationAngle") {
             pic.shape_attr.rotation_angle = v;
+            rotation_changed = true;
         }
         if let Some(v) = json_bool(props_json, "horzFlip") {
             pic.shape_attr.horz_flip = v;
@@ -891,6 +1005,9 @@ impl DocumentCore {
             } else {
                 pic.shape_attr.flip &= !0x02;
             }
+        }
+        if rotation_changed {
+            Self::refresh_picture_rotation_layout_for_save(pic);
         }
 
         // 자르기: HWP 내부 crop은 원본 이미지의 source rect 좌표이고,

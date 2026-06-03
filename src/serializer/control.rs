@@ -1763,6 +1763,8 @@ fn write_shape_component_base(
     // Rendering 정보 (원본이 있으면 복원, 없으면 적절한 행렬 생성)
     if !attr.raw_rendering.is_empty() {
         w.write_bytes(&attr.raw_rendering).unwrap();
+    } else if attr.rotation_angle.rem_euclid(360) != 0 {
+        write_generated_rendering_matrix(w, attr);
     } else if has_explicit_rendering_matrix(attr) {
         write_parsed_rendering_matrix(w, attr);
     } else {
@@ -1784,13 +1786,9 @@ fn write_shape_component_base(
         w.write_f64(0.0).unwrap();
         w.write_f64(1.0).unwrap();
         w.write_f64(0.0).unwrap();
-        // rotation matrix = identity [1, 0, 0, 0, 1, 0]
-        w.write_f64(1.0).unwrap();
-        w.write_f64(0.0).unwrap();
-        w.write_f64(0.0).unwrap();
-        w.write_f64(0.0).unwrap();
-        w.write_f64(1.0).unwrap();
-        w.write_f64(0.0).unwrap();
+        // rotation matrix. Hancom applies visible picture rotation from the
+        // rendering rotMatrix, not only from ShapeComponentAttr.rotation_angle.
+        write_matrix(w, shape_rotation_matrix(attr));
         // 그룹 자식 (cnt=2): 두 번째 scale + rotation 세트 (identity)
         if is_group_child {
             // scale2 = identity
@@ -1825,6 +1823,90 @@ fn has_explicit_rendering_matrix(attr: &ShapeComponentAttr) -> bool {
 fn write_matrix(w: &mut ByteWriter, matrix: [f64; 6]) {
     for value in matrix {
         w.write_f64(value).unwrap();
+    }
+}
+
+fn shape_scale_matrix(attr: &ShapeComponentAttr) -> [f64; 6] {
+    let sx = if attr.original_width > 0 && attr.current_width > 0 {
+        attr.current_width as f64 / attr.original_width as f64
+    } else {
+        1.0
+    };
+    let sy = if attr.original_height > 0 && attr.current_height > 0 {
+        attr.current_height as f64 / attr.original_height as f64
+    } else {
+        1.0
+    };
+    [sx, 0.0, 0.0, 0.0, sy, 0.0]
+}
+
+fn shape_rotation_positive_correction(attr: &ShapeComponentAttr) -> (f64, f64) {
+    let width = attr.current_width as f64;
+    let height = attr.current_height as f64;
+    if width <= 0.0 || height <= 0.0 {
+        return (0.0, 0.0);
+    }
+
+    let theta = (attr.rotation_angle as f64).to_radians();
+    let cos = theta.cos();
+    let sin = theta.sin();
+    let corners = [
+        (0.0, 0.0),
+        (width * cos, width * sin),
+        (-height * sin, height * cos),
+        (width * cos - height * sin, width * sin + height * cos),
+    ];
+    let min_x = corners
+        .iter()
+        .map(|(x, _)| *x)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = corners
+        .iter()
+        .map(|(_, y)| *y)
+        .fold(f64::INFINITY, f64::min);
+    (-min_x, -min_y)
+}
+
+fn shape_rotation_matrix(attr: &ShapeComponentAttr) -> [f64; 6] {
+    if attr.rotation_angle.rem_euclid(360) == 0 {
+        return [1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+    }
+
+    let theta = (attr.rotation_angle as f64).to_radians();
+    let cos = theta.cos();
+    let sin = theta.sin();
+    let (tx, ty) = shape_rotation_positive_correction(attr);
+
+    [
+        cos,
+        -sin,
+        tx - attr.offset_x as f64,
+        sin,
+        cos,
+        ty - attr.offset_y as f64,
+    ]
+}
+
+fn write_generated_rendering_matrix(w: &mut ByteWriter, attr: &ShapeComponentAttr) {
+    let is_group_child = attr.group_level > 0;
+    let cnt: u16 = if is_group_child { 2 } else { 1 };
+    w.write_u16(cnt).unwrap();
+    write_matrix(
+        w,
+        [
+            1.0,
+            0.0,
+            attr.offset_x as f64,
+            0.0,
+            1.0,
+            attr.offset_y as f64,
+        ],
+    );
+    write_matrix(w, shape_scale_matrix(attr));
+    write_matrix(w, shape_rotation_matrix(attr));
+    if is_group_child {
+        write_matrix(w, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+        write_matrix(w, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
     }
 }
 
