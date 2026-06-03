@@ -141,6 +141,11 @@ pdf-large/3-09월_교육_통합_2024-미주사이20-2024.pdf: 1,473,246 bytes
 
 두 보정 후 `issue_1116`, `issue_919`, `issue_1261_*` 및 전체 테스트가 통과했다.
 
+원격 PR head 기준 GitHub Actions도 확인했다. Render Diff와 CodeQL은 성공했지만 CI run
+`26864602595`의 `Run tests` 단계에서 `issue_1116` 2건이 실패했다. 실패 항목은 위
+통합 후보 보정 전 회귀와 동일하며, 현재 `local/pr1264-current`에서는 해당 테스트와 전체
+`cargo test --verbose`가 통과한다.
+
 ## 5. 자동 검증 결과
 
 현재 `devel` 위에 PR 커밋을 체리픽해 검증했다.
@@ -159,6 +164,7 @@ pdf-large/3-09월_교육_통합_2024-미주사이20-2024.pdf: 1,473,246 bytes
 | wasm check | `cargo check --target wasm32-unknown-unknown --lib` | 통과 |
 | native-skia | `cargo test --features native-skia skia --lib --verbose` | 통과, 37 passed |
 | clippy | `cargo clippy -- -D warnings` | 통과 |
+| WASM build | `docker compose --env-file .env.docker run --rm wasm` | 통과 |
 
 통합 테스트 중 기존 overflow diagnostic 로그가 일부 출력되었지만 테스트 실패는 없다.
 Cargo local cache의 `failed to save last-use data` 경고가 일부 명령에서 출력되었지만,
@@ -172,6 +178,14 @@ readonly cache metadata 경고이며 빌드/테스트 결과에는 영향이 없
 | `samples/3-09월_교육_통합_2024-미주사이20.hwp` | 10 | 문8 제목이 직전 수식 하단 뒤 20mm gap을 유지하는지 |
 | `samples/3-09월_교육_통합_2024-미주사이20.hwp` | 10 | 문10/문11/문12 제목 위치와 문12 꼬리 단 하단 overflow 여부 |
 | `samples/3-09월_교육_통합_2024-구분선아래20.hwp` | 10 | PDF reference가 함께 추가된 endnote gap guard |
+
+생성한 SVG 후보:
+
+| file | output |
+|---|---|
+| `samples/3-10월_교육_통합_2022.hwp` | `output/poc/pr1264-visual/hwp-2022-oct-page5/3-10월_교육_통합_2022_005.svg` |
+| `samples/3-09월_교육_통합_2024-미주사이20.hwp` | `output/poc/pr1264-visual/hwp-2024-sep-note-gap-page10/3-09월_교육_통합_2024-미주사이20_010.svg` |
+| `samples/3-09월_교육_통합_2024-구분선아래20.hwp` | `output/poc/pr1264-visual/hwp-2024-sep-separator-page10/3-09월_교육_통합_2024-구분선아래20_010.svg` |
 
 판정 포인트:
 
