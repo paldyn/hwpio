@@ -10,8 +10,8 @@
 - **PR 기준 base**: `143fb0f4`
 - **현재 devel**: `09f6b8d1`
 - **검증 브랜치**: `local/pr1264-current`
-- **검증 HEAD**: `11e79cee`
-- **규모**: 15 files, +665 / -36
+- **검증 HEAD**: `local/pr1264-current` 통합 후보
+- **규모**: 17 files, +913 / -35
 - **GitHub mergeable**: true
 - **PR 댓글**: 없음
 
@@ -37,10 +37,11 @@ PR #1264는 두 계열 문제를 함께 보정한다.
 
 | 파일 | 변경 |
 |---|---|
-| `src/renderer/layout/paragraph_layout.rs` | TAC Shape 높이에 `shape_attr.current_height` 반영, line별 TAC shape 판정 보정 |
+| `src/renderer/layout/paragraph_layout.rs` | TAC Shape 높이에 `shape_attr.current_height` 반영, 빈 TAC guide line 보정 범위 조정 |
 | `src/renderer/layout.rs` | 직전 항목 실제 콘텐츠 하단을 `HeightCursor`에 전달 |
 | `src/renderer/height_cursor.rs` | compact 미주 제목 gap 산출과 page/lazy base signed 보정 |
 | `src/renderer/typeset.rs` | typeset 경로의 `prev_item_content_bottom_y` 기본값 설정 |
+| `src/document_core/queries/cursor_rect.rs` | 글상자 밖 hit-test fallback이 글상자 내부 TextRun을 반환하지 않도록 bbox gate 추가 |
 | `tests/issue_1139_inline_picture_duplicate.rs` | 문28/문8/문12 회귀 테스트 추가 |
 | `pdf-large/*.pdf` | 한컴 PDF bbox 비교 기준 추가 |
 | `mydocs/orders/20260603.md` | 작업 기록 |
@@ -53,12 +54,14 @@ PR #1264는 두 계열 문제를 함께 보정한다.
 문28 조건 박스는 글자처럼 취급되는 Shape이고, 기존 로직은 `common.height`만 높이 예약에 사용했다.
 PR은 Shape의 `current_height`까지 함께 고려해 실제 한컴 렌더링에 가까운 높이를 확보한다.
 
-특히 다음 로직이 line별 TAC offset을 기준으로 동작하도록 좁혀져, 다른 줄의 TAC 컨트롤 때문에
-현재 줄을 과하게 보정하는 위험을 줄였다.
+다만 검증 중 기존 `issue_1116` 회귀가 확인되어, 통합 후보에서는 문단 전체 TAC shrink 기준은 유지하고
+빈 TAC guide line 중 `shape_attr.current_height > common.height`인 케이스만 실제 높이 보존 대상으로
+좁혔다. 이로써 문28 조건 박스 케이스는 유지하면서, `hwp3-sample16-hwp5` 3쪽처럼
+`common.height == current_height`인 legacy TAC guide line은 기존 shrink 흐름을 따른다.
 
 ```text
-has_tac_shape = line_tac_offsets 기준
 shape_h = max(common.height, shape_attr.current_height)
+empty_tac_guide_height_preserve = current_height > common.height
 ```
 
 ### 3.2 미주 간격 보정은 "저장 trailing"과 "실제 콘텐츠 하단"을 분리한다
@@ -127,6 +130,17 @@ pdf-large/3-09월_교육_통합_2024-미주사이20-2024.pdf: 1,473,246 bytes
 따라서 이 PR은 GitHub의 PR branch를 그대로 merge하지 말고, 메인테이너 통합 브랜치에서
 문서 archive 이동과 PDF LFS normalization을 함께 적용한 커밋으로 반영하는 것을 권장한다.
 
+### 4.5 CI 회귀 2건을 통합 후보에서 보정했다
+
+초기 통합 후보에서 `cargo test --verbose`를 실행했을 때 다음 회귀가 발견되었다.
+
+| 실패 | 원인 | 통합 후보 보정 |
+|---|---|---|
+| `tests/issue_1116.rs` 2건 | 빈 TAC guide line 전체가 Shape 높이를 보존하면서 `hwp3-sample16-hwp5` 3쪽 줄간격이 커짐 | `current_height > common.height`인 빈 TAC guide line만 높이 보존 |
+| `tests/issue_919_textbox_hit_test.rs` 1건 | 글상자 밖 클릭 fallback이 가장 가까운 글상자 내부 TextRun을 반환 | 글상자 TextRun은 클릭점이 해당 글상자 bbox 안일 때만 hit/fallback 후보로 허용 |
+
+두 보정 후 `issue_1116`, `issue_919`, `issue_1261_*` 및 전체 테스트가 통과했다.
+
 ## 5. 자동 검증 결과
 
 현재 `devel` 위에 PR 커밋을 체리픽해 검증했다.
@@ -138,8 +152,17 @@ pdf-large/3-09월_교육_통합_2024-미주사이20-2024.pdf: 1,473,246 bytes
 | Rust fmt | `cargo fmt --all --check` | 통과 |
 | height_cursor 단위 테스트 | `cargo test --lib height_cursor -- --nocapture` | 통과, 34 passed |
 | 미주/페이지네이션 통합 테스트 | `cargo test --test issue_1139_inline_picture_duplicate -- --nocapture` | 통과, 46 passed |
+| sample16 회귀 | `cargo test --test issue_1116 -- --nocapture` | 통과, 13 passed |
+| textbox hit-test 회귀 | `cargo test --test issue_919_textbox_hit_test -- --nocapture` | 통과, 5 passed |
+| 전체 테스트 | `cargo test --verbose` | 통과 |
+| build | `cargo build --verbose` | 통과 |
+| wasm check | `cargo check --target wasm32-unknown-unknown --lib` | 통과 |
+| native-skia | `cargo test --features native-skia skia --lib --verbose` | 통과, 37 passed |
+| clippy | `cargo clippy -- -D warnings` | 통과 |
 
 통합 테스트 중 기존 overflow diagnostic 로그가 일부 출력되었지만 테스트 실패는 없다.
+Cargo local cache의 `failed to save last-use data` 경고가 일부 명령에서 출력되었지만,
+readonly cache metadata 경고이며 빌드/테스트 결과에는 영향이 없었다.
 
 ## 6. 시각 판정 권장 후보
 
