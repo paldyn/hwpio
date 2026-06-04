@@ -4356,7 +4356,13 @@ mod tests {
     // 검증한다.
 
     /// char_count 개 글자가 균등 폭 `w` 로 놓인 한 run.
-    fn run(bbox_x: f64, char_start: usize, char_count: usize, w: f64, positions: &[f64]) -> LineRunView<'_> {
+    fn run(
+        bbox_x: f64,
+        char_start: usize,
+        char_count: usize,
+        w: f64,
+        positions: &[f64],
+    ) -> LineRunView<'_> {
         LineRunView {
             bbox_x,
             bbox_w: w * char_count as f64,
@@ -4425,7 +4431,11 @@ mod tests {
     fn outside_line_clamps_to_start_and_end() {
         let line = vec![run(100.0, 7, 10, 10.0, &POS10)];
         assert_eq!(resolve_x_on_line(&line, 50.0), (0, 7), "줄 왼쪽 → 줄 시작");
-        assert_eq!(resolve_x_on_line(&line, 999.0), (0, 17), "줄 오른쪽 → 줄 끝");
+        assert_eq!(
+            resolve_x_on_line(&line, 999.0),
+            (0, 17),
+            "줄 오른쪽 → 줄 끝"
+        );
     }
 
     /// 다중 run 줄: 두 run 사이의 빈틈 클릭은 줄 끝으로 스냅하지 않고
@@ -4434,17 +4444,17 @@ mod tests {
     fn inter_run_gap_snaps_to_nearer_boundary_not_line_end() {
         const P0: [f64; 4] = [0.0, 10.0, 20.0, 30.0]; // 3 chars, 폭 10
         const P1: [f64; 4] = [0.0, 10.0, 20.0, 30.0]; // 3 chars, 폭 10
-        // run0: x[100,130], chars 0..3 ; 빈틈 ; run1: x[200,230], chars 5..8
-        let line = vec![
-            run(100.0, 0, 3, 10.0, &P0),
-            run(200.0, 5, 3, 10.0, &P1),
-        ];
+                                                      // run0: x[100,130], chars 0..3 ; 빈틈 ; run1: x[200,230], chars 5..8
+        let line = vec![run(100.0, 0, 3, 10.0, &P0), run(200.0, 5, 3, 10.0, &P1)];
         let line_end = 5 + 3; // 8
 
         // 빈틈 안에서 왼쪽 run 에 가까운 x(140) → 왼쪽 run 끝 (offset 3)
         let (idx, offset) = resolve_x_on_line(&line, 140.0);
         assert_eq!((idx, offset), (0, 3), "빈틈 왼쪽 → 왼쪽 run 끝");
-        assert_ne!(offset, line_end, "회귀: 빈틈 클릭이 줄 끝으로 스냅하면 안 됨");
+        assert_ne!(
+            offset, line_end,
+            "회귀: 빈틈 클릭이 줄 끝으로 스냅하면 안 됨"
+        );
 
         // 빈틈 안에서 오른쪽 run 에 가까운 x(190) → 오른쪽 run 시작 (offset 5)
         let (idx, offset) = resolve_x_on_line(&line, 190.0);
