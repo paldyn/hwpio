@@ -1018,9 +1018,7 @@ fn synthesize_hwpx_shape_ctrl_data(shape: &ShapeObject) -> Option<Vec<u8>> {
     let ShapeObject::Rectangle(rect) = shape else {
         return None;
     };
-    if rect.drawing.text_box.is_none() {
-        return None;
-    }
+    rect.drawing.text_box.as_ref()?;
     let common = &rect.common;
     if !(common.size_protect
         && common.flow_with_text
