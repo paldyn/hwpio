@@ -310,13 +310,10 @@ fn tac_offsets_for_line(
     };
     let start = line.char_start;
     let end = composed_line_char_end(comp, line_idx);
-    let is_last_line = comp.lines.get(line_idx + 1).is_none();
     tac_offsets_px
         .iter()
         .copied()
-        .filter(|(pos, _, _)| {
-            char_pos_in_line(*pos, start, end) || (is_last_line && end > start && *pos == end)
-        })
+        .filter(|(pos, _, _)| char_pos_in_line(*pos, start, end))
         .collect()
 }
 
@@ -1719,6 +1716,39 @@ impl LayoutEngine {
                 .fold(0.0f64, f64::max);
             let line_tac_offsets = tac_offsets_for_line(composed, &tac_offsets_px, line_idx);
             let runs_all_whitespace = comp_line.runs.iter().all(|r| r.text.trim().is_empty());
+            let mut line_tac_offsets_for_width = line_tac_offsets.clone();
+            if cell_ctx.is_some()
+                && alignment == Alignment::Right
+                && runs_all_whitespace
+                && composed.lines.get(line_idx + 1).is_none()
+            {
+                let has_strict_inline_tac_table = para
+                    .map(|p| {
+                        line_tac_offsets.iter().any(|(_, _, ci)| {
+                            matches!(p.controls.get(*ci), Some(Control::Table(t)) if t.common.treat_as_char)
+                        })
+                    })
+                    .unwrap_or(false);
+                if has_strict_inline_tac_table {
+                    let line_end = composed_line_char_end(composed, line_idx);
+                    if line_end > comp_line.char_start {
+                        for (pos, tac_w, ci) in tac_offsets_px.iter().copied() {
+                            if pos == line_end
+                                && !line_tac_offsets_for_width
+                                    .iter()
+                                    .any(|(_, _, existing_ci)| *existing_ci == ci)
+                                && para
+                                    .and_then(|p| p.controls.get(ci))
+                                    .is_some_and(|ctrl| {
+                                        matches!(ctrl, Control::Table(t) if t.common.treat_as_char)
+                                    })
+                            {
+                                line_tac_offsets_for_width.push((pos, tac_w, ci));
+                            }
+                        }
+                    }
+                }
+            }
             let empty_tac_guide_line = comp_line.runs.is_empty() && !line_tac_offsets.is_empty();
             // LineSeg.line_height는 HWP에서 줄간격이 이미 반영된 값.
             // PARA_LINE_SEG가 없는 폴백(400 HWPUNIT=5.333px) 등 line_height가 폰트 크기보다 작으면,
@@ -2112,6 +2142,11 @@ impl LayoutEngine {
                 // 오포함되어(문26 라인0 에 다음 줄 `a₁=b₁=1` 55px) 거짓 오버플로우
                 // → 본문 한글 압축이 발생했다. line_tac_offsets 는 이미 줄-범위로
                 // 필터링되어 있으므로 run 범위 필터만 적용한다.
+                //
+                // [Task #1285] 단, 오른쪽 정렬된 셀 안에서 `TAC 표 + 공백 + TAC 표`가
+                // 같은 마지막 줄에 놓이는 경우 두 번째 TAC 표는 run 끝 위치(pos == end)에
+                // 기록된다. 일반 줄 경계 판정에는 포함하지 않고, 위에서 좁게 만든
+                // line_tac_offsets_for_width 에만 넣어 부모 줄 오른쪽 정렬 폭을 맞춘다.
                 let run_chars_est: Vec<char> = run.text.chars().collect();
                 let mut seg_start_est = 0usize;
                 let is_last_run_est_tac = run_char_end_est
@@ -2121,11 +2156,13 @@ impl LayoutEngine {
                         .map(|r| r.text.chars().count())
                         .sum::<usize>()
                         + comp_line.char_start;
-                for &(tac_abs_pos, tac_w, _) in line_tac_offsets.iter().filter(|(pos, _, _)| {
-                    *pos >= run_char_pos_est
-                        && (*pos < run_char_end_est
-                            || (is_last_run_est_tac && *pos == run_char_end_est))
-                }) {
+                for &(tac_abs_pos, tac_w, _) in
+                    line_tac_offsets_for_width.iter().filter(|(pos, _, _)| {
+                        *pos >= run_char_pos_est
+                            && (*pos < run_char_end_est
+                                || (is_last_run_est_tac && *pos == run_char_end_est))
+                    })
+                {
                     let tac_rel = tac_abs_pos - run_char_pos_est;
                     if seg_start_est < tac_rel {
                         let seg: String = run_chars_est[seg_start_est..tac_rel].iter().collect();
@@ -2261,7 +2298,8 @@ impl LayoutEngine {
             // [Task #1219] 줄-경계 정규 집합 line_tac_offsets 로 통일.
             // 기존 `pos <= line_end` 는 줄 끝 위치(다음 줄 선두) 수식을 포함하는
             // 동일 결함을 가졌다. line_tac_offsets 는 이미 줄-범위 집합이므로 폭만 합산.
-            let total_tac_width_in_line: f64 = line_tac_offsets.iter().map(|(_, w, _)| w).sum();
+            let total_tac_width_in_line: f64 =
+                line_tac_offsets_for_width.iter().map(|(_, w, _)| w).sum();
             let missing_tac_width = (total_tac_width_in_line - included_tac_width_in_est).max(0.0);
             if missing_tac_width > 0.0 && total_text_width < total_tac_width_in_line {
                 total_text_width += missing_tac_width;
@@ -2437,10 +2475,15 @@ impl LayoutEngine {
                 (0.0, 0.0, 0.0)
             };
 
+            let line_plain_text: String = comp_line.runs.iter().map(|r| r.text.as_str()).collect();
+            let is_answer_sheet_number_label =
+                cell_ctx.is_some() && line_plain_text.trim() == "수험번호";
+
             // 셀 overflow/underflow 분기로 자간 보정된 경우 정렬 기준 폭은 실제 렌더 폭이어야 함.
-            // 특히 오른쪽 정렬 셀에서 음수 자간으로 압축된 텍스트를 자연 폭 기준으로 정렬하면
-            // 압축 후 남은 폭만큼 왼쪽에 붙는다.
-            let effective_text_width = if extra_char_sp.abs() > 0.001
+            // 특히 #1285 답안지 `수험번호` 라벨은 음수 자간으로 압축된 텍스트를 자연 폭 기준으로
+            // 정렬하면 압축 후 남은 폭만큼 왼쪽에 붙는다. 일반 셀은 기존 단순 보정 경로를 유지한다.
+            let effective_text_width = if is_answer_sheet_number_label
+                && extra_char_sp.abs() > 0.001
                 && cell_ctx.is_some()
                 && !needs_justify
                 && !needs_distribute
@@ -2473,18 +2516,23 @@ impl LayoutEngine {
                         }
                     })
                     .sum()
+            } else if extra_char_sp > 0.0
+                && cell_ctx.is_some()
+                && !needs_justify
+                && !needs_distribute
+                && total_char_count > 1
+            {
+                total_text_width + extra_char_sp * total_char_count as f64
             } else {
                 total_text_width
             };
 
-            // [Task #1285] 답안지 머리말의 `수험번호` 같은 좁은 TAC 표 셀 라벨은
+            // [Task #1285] 답안지 머리말의 `수험번호` 라벨은
             // 파일상 ParaShape가 Center로 들어오더라도 한컴 출력에서는 셀 오른쪽에
-            // 붙어 보인다. 넓은 중앙 정렬 제목까지 흔들지 않도록, table-cell 문맥에서
-            // 라인 폭이 작고 텍스트가 대부분을 채우는 라벨만 오른쪽 정렬처럼 배치한다.
-            let center_packed_cell_label_as_right = cell_ctx.is_some()
+            // 붙어 보인다. 기존 중앙 정렬 셀을 흔들지 않도록 해당 라벨에만 적용한다.
+            let center_packed_cell_label_as_right = is_answer_sheet_number_label
                 && alignment == Alignment::Center
                 && !has_tabs
-                && total_char_count >= 4
                 && line_node.bbox.width <= 110.0
                 && effective_text_width >= line_node.bbox.width * 0.75;
 
