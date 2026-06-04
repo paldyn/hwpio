@@ -18,7 +18,7 @@ use super::utils::{
     expand_numbering_format, extract_shape_transform, find_bin_data,
     numbering_format_to_number_format, picture_display_size_hu, resolve_numbering_id,
 };
-use super::{CellContext, LayoutEngine};
+use super::{is_tolerated_endnote_column_bottom_bleed, CellContext, LayoutEngine};
 use crate::model::bin_data::BinDataContent;
 use crate::model::control::Control;
 use crate::model::paragraph::Paragraph;
@@ -465,6 +465,18 @@ fn has_treat_as_char_picture_or_shape(para: Option<&Paragraph>) -> bool {
         })
     })
     .unwrap_or(false)
+}
+
+fn is_blank_spacer_line(
+    para: Option<&Paragraph>,
+    is_endnote_virtual_para: bool,
+    runs_all_whitespace: bool,
+    line_tac_offsets: &[(usize, f64, usize)],
+) -> bool {
+    if !runs_all_whitespace || !line_tac_offsets.is_empty() {
+        return false;
+    }
+    is_endnote_virtual_para || para.map(|p| p.controls.is_empty()).unwrap_or(false)
 }
 
 fn tac_picture_label_extra_px(
@@ -1866,11 +1878,30 @@ impl LayoutEngine {
             // 클램프 없이 원래 y 에 그리면 piling 자체가 발생하지 않는다. 콘텐츠 손실
             // (stop drawing) 도 발생하지 않으며, drift 의 본질적 해결은 Stage 5 에서.
             let col_bottom = col_area.y + col_area.height;
-            if cell_ctx.is_none() && text_y + line_height > col_bottom + 0.5 {
+            let line_visual_bottom = text_y + line_height;
+            let is_body_flow_col_area = self.is_body_flow_col_area(col_area);
+            let is_endnote_virtual_para = para_index >= self.endnote_para_base.get();
+            let blank_spacer_line = is_blank_spacer_line(
+                para,
+                is_endnote_virtual_para,
+                runs_all_whitespace,
+                &line_tac_offsets,
+            );
+            let tolerated_endnote_bottom_bleed = is_tolerated_endnote_column_bottom_bleed(
+                is_body_flow_col_area && cell_ctx.is_none() && is_endnote_virtual_para,
+                line_visual_bottom,
+                col_bottom,
+            );
+            if is_body_flow_col_area
+                && cell_ctx.is_none()
+                && line_visual_bottom > col_bottom + 0.5
+                && !blank_spacer_line
+                && !tolerated_endnote_bottom_bleed
+            {
                 eprintln!(
                     "LAYOUT_OVERFLOW_DRAW: section={} pi={} line={} y={:.1} col_bottom={:.1} overflow={:.1}px",
                     section_index, para_index, line_idx,
-                    text_y + line_height, col_bottom, text_y + line_height - col_bottom,
+                    line_visual_bottom, col_bottom, line_visual_bottom - col_bottom,
                 );
             }
             // [Task #604 R3] wrap_anchor 가 있으면 본 문단은 anchor 그림/표 옆 wrap text.
@@ -3357,14 +3388,14 @@ impl LayoutEngine {
                                 } else {
                                     layout_box.height
                                 };
-                                // 텍스트와 섞인 인라인 수식은 baseline을 맞춘다. 단,
-                                // 본문/미주에서 공백 run 안에 TAC 수식만 있는 줄은 한컴처럼
-                                // 저장된 LINE_SEG y 흐름에 직접 붙인다.
+                                // 텍스트와 섞인 인라인 수식뿐 아니라 공백 run 안의 TAC 수식도
+                                // baseline을 맞춘다. 수식 renderer는 bbox 높이로 세로 스케일하지
+                                // 않으므로 y에 직접 붙이면 큰 루트/분수 수식이 아래 줄을 덮는다.
                                 let eq_y = if cell_ctx.is_none()
                                     && comp_line.runs.iter().all(|r| {
                                         !r.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}')
                                     }) {
-                                    y
+                                    y + baseline - layout_box.baseline
                                 } else {
                                     (y + baseline - layout_box.baseline).max(y)
                                 };
@@ -3972,7 +4003,7 @@ impl LayoutEngine {
                             let eq_y = if cell_ctx.is_some() {
                                 (y + baseline - layout_box.baseline).max(y)
                             } else {
-                                y
+                                y + baseline - layout_box.baseline
                             };
                             let (eq_cell_idx, eq_cell_para_idx) = if let Some(ref ctx) = cell_ctx {
                                 (
@@ -4491,7 +4522,12 @@ impl LayoutEngine {
             // 후행 줄간격을 콘텐츠 초과로 오판하지 않도록 한다(페이지네이터의 마지막 줄
             // trailing_ls 허용 #359/#404 와 정합). 매 줄 갱신 → 마지막 렌더 줄 값이 남는다.
             if cell_ctx.is_none() && !skip_advance_empty_line {
-                self.last_item_content_bottom.set(y + line_height);
+                let content_bottom = if blank_spacer_line {
+                    y
+                } else {
+                    y + line_height
+                };
+                self.last_item_content_bottom.set(content_bottom);
             }
             if endnote_line_vpos_base.is_some() {
                 let line_bottom = if skip_advance_empty_line {
@@ -4648,7 +4684,7 @@ impl LayoutEngine {
 
             // Task #332 Stage 4b: clamp 제거, overflow 그대로 그림 (piling 차단)
             let col_bottom = col_area.y + col_area.height;
-            if y + line_height > col_bottom + 0.5 {
+            if self.is_body_flow_col_area(col_area) && y + line_height > col_bottom + 0.5 {
                 eprintln!(
                     "LAYOUT_OVERFLOW_DRAW: line={} y={:.1} col_bottom={:.1} overflow={:.1}px (fast path)",
                     line_idx, y + line_height, col_bottom, y + line_height - col_bottom,

@@ -233,6 +233,18 @@ fn find_text_line_bbox(
         .find_map(|child| find_text_line_bbox(child, para_index, line_index))
 }
 
+fn count_text_line_nodes(node: &RenderNode, para_index: usize) -> usize {
+    let own = match &node.node_type {
+        RenderNodeType::TextLine(line) if line.para_index == Some(para_index) => 1,
+        _ => 0,
+    };
+    own + node
+        .children
+        .iter()
+        .map(|child| count_text_line_nodes(child, para_index))
+        .sum::<usize>()
+}
+
 fn max_equation_bottom_in_region(
     node: &RenderNode,
     x_min: f64,
@@ -257,6 +269,31 @@ fn max_equation_bottom_in_region(
                 max_equation_bottom_in_region(child, x_min, x_max, y_min, y_max)
             }),
         )
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+}
+
+fn max_equation_visual_bottom_in_region(
+    node: &RenderNode,
+    x_min: f64,
+    x_max: f64,
+    y_min: f64,
+    y_max: f64,
+) -> Option<f64> {
+    let own = match &node.node_type {
+        RenderNodeType::Equation(eq)
+            if node.bbox.x >= x_min
+                && node.bbox.x < x_max
+                && node.bbox.y >= y_min
+                && node.bbox.y < y_max =>
+        {
+            Some(node.bbox.y + eq.layout_box.height)
+        }
+        _ => None,
+    };
+    own.into_iter()
+        .chain(node.children.iter().filter_map(|child| {
+            max_equation_visual_bottom_in_region(child, x_min, x_max, y_min, y_max)
+        }))
         .max_by(|a, b| a.partial_cmp(b).unwrap())
 }
 
@@ -318,6 +355,58 @@ fn issue_1189_2022_nov_page1_question1_marker_gap_matches_pdf() {
     assert!(
         question1_eq.x >= 68.0,
         "문1 수식이 문항 번호와 겹치면 안 됨: {question1_eq:?}"
+    );
+}
+
+#[test]
+fn issue_1274_2022_nov_page11_empty_float_picture_host_has_no_phantom_overflow() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(10).expect("page 11 render tree");
+
+    let picture = find_image_bbox(&tree.root, 537, 0).expect("문12 그래프 그림");
+    assert!(
+        (175.0..=190.0).contains(&picture.y),
+        "빈 host 문단의 non-TAC 그림은 한컴/PDF처럼 우측 단 상단에 있어야 함: {picture:?}"
+    );
+    assert_eq!(
+        count_text_line_nodes(&tree.root, 537),
+        0,
+        "빈 그림 host 문단 pi=537은 실제 Shape item으로만 렌더되어야 하며 phantom TextLine을 남기면 안 됨"
+    );
+    let bottom = max_para_content_bottom(&tree.root, 537).expect("pi=537 content bottom");
+    assert!(
+        bottom < 360.0,
+        "pi=537 실제 콘텐츠 하단은 그림 bbox 하단이어야 하며 저장 vpos의 phantom line으로 페이지 밖을 가리키면 안 됨: bottom={bottom}, picture={picture:?}"
+    );
+}
+
+#[test]
+fn issue_1274_2022_nov_page11_partial_endnote_tail_stays_in_page_frame() {
+    let bytes = std::fs::read("samples/3-11월_실전_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+
+    let page11 = doc.dump_page_items(Some(10));
+    let page12 = doc.dump_page_items(Some(11));
+    assert!(
+        page11.contains("PartialParagraph  pi=553  lines=0..8"),
+        "한컴/PDF 기준 문14) 꼬리 첫 조각은 11쪽 끝에 남아야 함\n{page11}"
+    );
+    assert!(
+        page12.contains("PartialParagraph  pi=553  lines=8..11"),
+        "문14) 꼬리 나머지는 12쪽 첫머리에서 이어져야 함\n{page12}"
+    );
+
+    let tree = doc.build_page_render_tree(10).expect("page 11 render tree");
+    let last_line = find_text_line_bbox(&tree.root, 553, 7).expect("pi=553 line 7");
+    let last_line_bottom = last_line.y + last_line.height;
+    assert!(
+        last_line_bottom < 1113.0,
+        "compact 미주 마지막 줄은 본문 하단을 조금 넘더라도 페이지 테두리 안에 남아야 함: {last_line:?}"
+    );
+    assert!(
+        find_text_line_bbox(&tree.root, 553, 8).is_none(),
+        "다음 줄까지 11쪽에 끌고 오면 12쪽 시작 분기가 한컴/PDF와 달라짐"
     );
 }
 
@@ -1366,6 +1455,23 @@ fn issue_1261_2024_sep_page10_question12_tail_stays_inside_column() {
 }
 
 #[test]
+fn issue_1274_2022_sep_page18_question26_equation_paragraph_reserves_height() {
+    let bytes = std::fs::read("samples/3-09월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(17).expect("page 18 render tree");
+
+    let equation_bottom =
+        max_equation_visual_bottom_in_region(&tree.root, 20.0, 300.0, 1020.0, 1095.0)
+            .expect("문26 하단 수식");
+    let next_text = find_text_line_bbox(&tree.root, 949, 0).expect("문26 다음 본문");
+
+    assert!(
+        next_text.y >= equation_bottom + 0.5,
+        "빈 TAC 수식 문단 pi=948은 실제 수식 하단과 다음 문단이 겹치지 않아야 함: equation_bottom={equation_bottom}, next={next_text:?}"
+    );
+}
+
+#[test]
 fn issue_1189_2022_oct_page11_endnote_question_gaps_match_pdf() {
     let bytes = std::fs::read("samples/3-10월_교육_통합_2022.hwp").expect("sample");
     let doc = HwpDocument::from_bytes(&bytes).expect("parse");
@@ -1384,6 +1490,44 @@ fn issue_1189_2022_oct_page11_endnote_question_gaps_match_pdf() {
     assert!(
         (180.0..210.0).contains(&gap19_to_20),
         "11쪽 문19→문20 미주 간격도 한컴/PDF 흐름을 유지해야 함: q19={question19_y}, q20={question20_y}, gap={gap19_to_20}"
+    );
+}
+
+#[test]
+fn issue_1274_2022_oct_page11_question20_equation_tail_stays_in_frame() {
+    let bytes = std::fs::read("samples/3-10월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(10).expect("page 11 render tree");
+
+    let equation_bottom =
+        max_equation_visual_bottom_in_region(&tree.root, 395.0, 700.0, 1020.0, 1100.0)
+            .expect("문20 하단 수식");
+    assert!(
+        equation_bottom <= 1096.0,
+        "문20 하단 수식-only tail은 한컴/PDF처럼 11쪽 frame 안에 남아야 함: bottom={equation_bottom}"
+    );
+    assert!(
+        equation_bottom >= 1080.0,
+        "문20 수식 tail을 과도하게 끌어올리면 PDF의 하단 잔여 흐름과 달라짐: bottom={equation_bottom}"
+    );
+}
+
+#[test]
+fn issue_1274_2022_oct_page16_question30_title_keeps_first_line() {
+    let bytes = std::fs::read("samples/3-10월_교육_통합_2022.hwp").expect("sample");
+    let doc = HwpDocument::from_bytes(&bytes).expect("parse");
+    let tree = doc.build_page_render_tree(15).expect("page 16 render tree");
+
+    let title = find_text_line_bbox(&tree.root, 841, 0).expect("문30 제목");
+    let first_line = find_text_line_bbox(&tree.root, 842, 0).expect("문30 첫 본문 줄");
+
+    assert!(
+        (1060.0..=1085.0).contains(&title.y),
+        "문30 제목은 한컴/PDF처럼 16쪽 하단에 남아야 함: title={title:?}"
+    );
+    assert!(
+        first_line.y > title.y && first_line.y + first_line.height <= 1098.0,
+        "문30 첫 본문 줄도 제목과 함께 16쪽 frame 안에 보여야 함: title={title:?}, first_line={first_line:?}"
     );
 }
 

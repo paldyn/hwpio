@@ -228,6 +228,83 @@ fn para_has_visible_text(para: &Paragraph) -> bool {
     para.text.chars().any(|c| c > '\u{001F}' && c != '\u{FFFC}')
 }
 
+fn para_has_visible_textless_float_shape_item(
+    page_content: &PageContent,
+    para: &Paragraph,
+    para_index: usize,
+) -> bool {
+    if para_has_visible_text(para) {
+        return false;
+    }
+
+    para.controls
+        .iter()
+        .enumerate()
+        .any(|(control_index, ctrl)| {
+            let is_float_shape = match ctrl {
+                Control::Picture(pic) => !pic.common.treat_as_char,
+                Control::Shape(shape) => !shape.common().treat_as_char,
+                _ => false,
+            };
+            is_float_shape
+                && page_content.column_contents.iter().any(|cc| {
+                    cc.items.iter().any(|it| {
+                        matches!(
+                            it,
+                            PageItem::Shape {
+                                para_index: pi,
+                                control_index: ci,
+                            } if *pi == para_index && *ci == control_index
+                        )
+                    })
+                })
+        })
+}
+
+fn textless_infront_para_host_requires_line_advance(para: &Paragraph) -> bool {
+    if para_has_visible_text(para) {
+        return false;
+    }
+
+    para.controls.iter().any(|ctrl| match ctrl {
+        Control::Picture(pic) => {
+            let cm = &pic.common;
+            !cm.treat_as_char
+                && matches!(cm.text_wrap, TextWrap::InFrontOfText)
+                && matches!(cm.vert_rel_to, VertRelTo::Para)
+        }
+        Control::Shape(shape) => {
+            let cm = shape.common();
+            !cm.treat_as_char
+                && matches!(cm.text_wrap, TextWrap::InFrontOfText)
+                && matches!(cm.vert_rel_to, VertRelTo::Para)
+        }
+        _ => false,
+    })
+}
+
+fn paragraph_line_advance_px(
+    para: &Paragraph,
+    composed: Option<&ComposedParagraph>,
+    dpi: f64,
+) -> f64 {
+    let advance_hu: i32 = composed
+        .map(|comp| {
+            comp.lines
+                .iter()
+                .map(|line| line.line_height + line.line_spacing)
+                .sum()
+        })
+        .unwrap_or_else(|| {
+            para.line_segs
+                .iter()
+                .map(|seg| seg.line_height + seg.line_spacing)
+                .sum()
+        });
+
+    hwpunit_to_px(advance_hu.max(0), dpi)
+}
+
 fn square_wrap_table_line_anchor_y(
     para: &Paragraph,
     table: &crate::model::table::Table,
@@ -275,6 +352,24 @@ fn square_wrap_table_line_anchor_y(
     })?;
 
     Some(para_y + hwpunit_to_px(anchor.vertical_pos - first.vertical_pos, dpi))
+}
+
+pub(crate) const ENDNOTE_COLUMN_BOTTOM_BLEED_TOLERANCE_PX: f64 = 24.0;
+const ENDNOTE_COLUMN_BOTTOM_OVERFLOW_LOG_TOLERANCE_PX: f64 = 28.0;
+
+pub(crate) fn is_tolerated_endnote_column_bottom_bleed(
+    is_endnote_flow: bool,
+    content_bottom: f64,
+    col_bottom: f64,
+) -> bool {
+    // 한컴은 compact 미주 하단에서 마지막 줄을 본문 하단보다 약간 아래,
+    // 페이지 테두리 안쪽 여백에 남기기도 한다. 이 경우 줄을 다음 쪽으로
+    // 넘기면 시각 분기가 틀어지므로, 작은 bleed는 page overflow로 보지 않는다.
+    // 9pt 기본 미주에서 줄 높이 반올림까지 포함하면 26px 안팎까지 내려가지만,
+    // 조판 분기 기준은 기존 24px를 유지하고 렌더 overflow 로그만 더 넓게 본다.
+    is_endnote_flow
+        && content_bottom > col_bottom
+        && content_bottom <= col_bottom + ENDNOTE_COLUMN_BOTTOM_OVERFLOW_LOG_TOLERANCE_PX
 }
 
 /// 문단 번호 상태 (수준별 카운터)
@@ -634,6 +729,11 @@ impl LayoutEngine {
     fn record_overflow(&self, overflow: LayoutOverflow) {
         eprintln!("{}", overflow);
         self.layout_overflows.borrow_mut().push(overflow);
+    }
+
+    pub(crate) fn is_body_flow_col_area(&self, col_area: &LayoutRect) -> bool {
+        let (_, body_y, _, body_h) = self.current_body_area.get();
+        body_h > 0.0 && (col_area.y - body_y).abs() < 1.0 && (col_area.height - body_h).abs() < 1.0
     }
 
     fn object_stable_index(para_index: usize, control_index: usize) -> u32 {
@@ -3283,7 +3383,20 @@ impl LayoutEngine {
                 }
                 _ => y_offset,
             };
-            if check_y > col_bottom + tolerance {
+            // 마지막 continuation 직전 항목도 미주 꼬리로 본다. 작은 bottom
+            // bleed는 draw overflow가 없으면 한컴식 하단 배치 허용 범위다.
+            let is_endnote_tail_item = col_content.endnote_flow
+                && (item_ordinal + 1 == col_content.items.len()
+                    || (item_ordinal + 2 == col_content.items.len()
+                        && current_is_endnote_question_title)
+                    || (item_ordinal + 2 == col_content.items.len()
+                        && matches!(
+                            col_content.items.get(item_ordinal + 1),
+                            Some(PageItem::PartialParagraph { .. })
+                        )));
+            let tolerated_endnote_bottom_bleed =
+                is_tolerated_endnote_column_bottom_bleed(is_endnote_tail_item, check_y, col_bottom);
+            if check_y > col_bottom + tolerance && !tolerated_endnote_bottom_bleed {
                 let (item_type, para_idx) = match item {
                     PageItem::FullParagraph { para_index } => ("FullParagraph", *para_index),
                     PageItem::PartialParagraph { para_index, .. } => {
@@ -3687,6 +3800,25 @@ impl LayoutEngine {
                     return (y_offset, false);
                 }
                 if let Some(para) = paragraphs.get(*para_index) {
+                    if para_has_visible_textless_float_shape_item(page_content, para, *para_index) {
+                        // 빈 non-TAC 그림/도형 host 문단은 바로 뒤 Shape PageItem 이 실제
+                        // 개체를 렌더한다. 여기서 layout_paragraph 를 태우면 보이지 않는
+                        // 빈 줄이 저장 vpos 기준으로 페이지 밖에 기록되어 overflow 오탐이 난다.
+                        para_start_y.entry(*para_index).or_insert(y_offset);
+                        if textless_infront_para_host_requires_line_advance(para) {
+                            // HWPX 글앞으로 도장처럼 문단 기준으로 붙는 host 는 빈
+                            // 텍스트를 그리지 않더라도 한컴처럼 줄 진행량은 예약한다.
+                            // BehindText 배경 그림은 기존 비예약 경로를 유지한다.
+                            let advance = paragraph_line_advance_px(
+                                para,
+                                composed.get(*para_index),
+                                self.dpi,
+                            );
+                            return (y_offset + advance, false);
+                        }
+                        return (y_offset, false);
+                    }
+
                     let seg_width = para.line_segs.first().map(|s| s.segment_width).unwrap_or(0);
                     let has_block_table = para.controls.iter()
                         .any(|c| matches!(c, Control::Table(t) if !t.common.treat_as_char
