@@ -310,7 +310,69 @@ page 5: body_area x=94.5  y=113.4 w=510.2 h=895.8
 page 6: body_area x=189.0 y=113.4 w=510.2 h=895.8
 ```
 
-판정 대기:
+메인테이너 시각 판정:
 
-- 메인테이너 rhwp-studio page 4/5/6 시각 판정
-- 통과 시 `devel` 병합/push 및 PR/이슈 종료 처리
+```text
+2026-06-04 통과
+```
+
+## 11. CI 사전 점검
+
+GitHub CI 최근 실패 빈도가 높아져, 일반 PR/push에서 실행되는 workflow 기준으로 추가 사전 점검을 수행했다.
+
+Build & Test job 대응:
+
+```text
+cargo fmt --all -- --check
+통과
+
+cargo build --verbose
+통과
+
+cargo check --target wasm32-unknown-unknown --lib
+통과
+
+cargo test --features native-skia skia --lib --verbose
+test result: ok. 39 passed
+
+cargo test --verbose
+통과
+
+cargo clippy -- -D warnings
+통과
+```
+
+참고:
+
+- 로컬 `cargo build/test`에서 `failed to save last-use data` / `readonly database` 경고가 출력되었으나, cargo global cache 사용 기록 저장 경고이며 빌드/테스트는 종료 코드 0으로 통과했다.
+
+Render Diff job 대응:
+
+```text
+node --check e2e/canvas-render-diff.test.mjs
+통과
+
+node --check e2e/run-render-diff.mjs
+통과
+
+npm run e2e:render-diff:ci
+통과
+```
+
+Render Diff 결과:
+
+```text
+PASS: basic/KTX.hwp page 1: 94/889746 pixels differ (0.01056%), max channel delta 84
+PASS: biz_plan.hwp page 1: 0/889746 pixels differ (0.00000%), max channel delta 0
+PASS: tac-case-001.hwp page 1: 0/889746 pixels differ (0.00000%), max channel delta 0
+```
+
+참고:
+
+- sandbox 내부에서는 Vite dev server port listen이 제한되어 render-diff가 포트 탐색 단계에서 실패했다.
+- 동일 명령을 sandbox 외부에서 실행해 CI 성격의 실제 Vite/browser render-diff는 통과했다.
+
+잔여 절차:
+
+- `devel` 병합/push
+- PR #1287 및 관련 이슈 종료 처리
