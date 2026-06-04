@@ -49,6 +49,8 @@ fallback이 모두 이 캐시를 통과하도록 했다. custom font path로 로
 
 - `rg -n "match_family_style" src/renderer/skia -g '*.rs'`
   - 직접 호출은 `font_lookup.rs` helper 한 곳으로 제한됨
+- 작업지시자 macOS 직접 테스트
+  - PNG export가 hang 없이 완료됨을 확인
 
 ## 4. 리스크
 
@@ -61,4 +63,4 @@ fallback이 모두 이 캐시를 통과하도록 했다. custom font path로 로
 
 ## 5. 결론
 
-Task M100-823 구현과 검증을 완료했다. 작업지시자 승인 후 이슈를 close할 수 있다.
+Task M100-823 구현, 검증, 작업지시자 macOS 직접 확인을 완료했다. 이슈를 close할 수 있다.
