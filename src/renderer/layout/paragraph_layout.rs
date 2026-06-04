@@ -310,10 +310,13 @@ fn tac_offsets_for_line(
     };
     let start = line.char_start;
     let end = composed_line_char_end(comp, line_idx);
+    let is_last_line = comp.lines.get(line_idx + 1).is_none();
     tac_offsets_px
         .iter()
         .copied()
-        .filter(|(pos, _, _)| char_pos_in_line(*pos, start, end))
+        .filter(|(pos, _, _)| {
+            char_pos_in_line(*pos, start, end) || (is_last_line && end > start && *pos == end)
+        })
         .collect()
 }
 
@@ -1990,6 +1993,7 @@ impl LayoutEngine {
             let mut pending_right_tab_est: Option<(f64, u8, u8)> = None;
             let mut pending_right_leader_digit_est = false;
             let mut run_char_pos_est = comp_line.char_start;
+            let mut included_tac_width_in_est = 0.0f64;
             // cross-run 탭 감지용 inline_tabs(composed.tab_extended) 커서 — Task #290
             let mut inline_tab_cursor_est: usize = 0;
             for (run_idx_est, run) in comp_line.runs.iter().enumerate() {
@@ -2129,6 +2133,7 @@ impl LayoutEngine {
                         est_x += estimate_text_width(&seg, &ts);
                     }
                     est_x += tac_w;
+                    included_tac_width_in_est += tac_w;
                     seg_start_est = tac_rel;
                 }
                 // 마지막 세그먼트 처리
@@ -2257,8 +2262,9 @@ impl LayoutEngine {
             // 기존 `pos <= line_end` 는 줄 끝 위치(다음 줄 선두) 수식을 포함하는
             // 동일 결함을 가졌다. line_tac_offsets 는 이미 줄-범위 집합이므로 폭만 합산.
             let total_tac_width_in_line: f64 = line_tac_offsets.iter().map(|(_, w, _)| w).sum();
-            if total_tac_width_in_line > 0.0 && total_text_width < total_tac_width_in_line {
-                total_text_width += total_tac_width_in_line;
+            let missing_tac_width = (total_tac_width_in_line - included_tac_width_in_est).max(0.0);
+            if missing_tac_width > 0.0 && total_text_width < total_tac_width_in_line {
+                total_text_width += missing_tac_width;
             }
             let is_last_line_of_para = line_idx == end - 1 && end == composed.lines.len();
 
@@ -2431,17 +2437,56 @@ impl LayoutEngine {
                 (0.0, 0.0, 0.0)
             };
 
-            // 셀 underflow 분기로 자간 확장된 경우 정렬 기준 폭은 확장 후 폭이어야 함
-            let effective_text_width = if extra_char_sp > 0.0
+            // 셀 overflow/underflow 분기로 자간 보정된 경우 정렬 기준 폭은 실제 렌더 폭이어야 함.
+            // 특히 오른쪽 정렬 셀에서 음수 자간으로 압축된 텍스트를 자연 폭 기준으로 정렬하면
+            // 압축 후 남은 폭만큼 왼쪽에 붙는다.
+            let effective_text_width = if extra_char_sp.abs() > 0.001
                 && cell_ctx.is_some()
                 && !needs_justify
                 && !needs_distribute
                 && total_char_count > 1
+                && !has_tabs
             {
-                total_text_width + extra_char_sp * total_char_count as f64
+                comp_line
+                    .runs
+                    .iter()
+                    .map(|r| {
+                        let mut ts = resolved_to_text_style(styles, r.char_style_id, r.lang_index);
+                        ts.default_tab_width = tab_width;
+                        ts.tab_stops = tab_stops.clone();
+                        ts.auto_tab_right = auto_tab_right;
+                        ts.available_width = available_width;
+                        ts.text_start_offset = effective_margin_left;
+                        ts.inline_tabs = composed.tab_extended.clone();
+                        ts.extra_char_spacing = extra_char_sp;
+                        if r.char_overlap.is_some() {
+                            let fs = if ts.font_size > 0.0 {
+                                ts.font_size
+                            } else {
+                                12.0
+                            };
+                            let chars: Vec<char> = r.text.chars().collect();
+                            fs * crate::renderer::composer::char_overlap_advance_units(&chars)
+                                as f64
+                        } else {
+                            estimate_text_width(effective_text_for_metrics(r), &ts)
+                        }
+                    })
+                    .sum()
             } else {
                 total_text_width
             };
+
+            // [Task #1285] 답안지 머리말의 `수험번호` 같은 좁은 TAC 표 셀 라벨은
+            // 파일상 ParaShape가 Center로 들어오더라도 한컴 출력에서는 셀 오른쪽에
+            // 붙어 보인다. 넓은 중앙 정렬 제목까지 흔들지 않도록, table-cell 문맥에서
+            // 라인 폭이 작고 텍스트가 대부분을 채우는 라벨만 오른쪽 정렬처럼 배치한다.
+            let center_packed_cell_label_as_right = cell_ctx.is_some()
+                && alignment == Alignment::Center
+                && !has_tabs
+                && total_char_count >= 4
+                && line_node.bbox.width <= 110.0
+                && effective_text_width >= line_node.bbox.width * 0.75;
 
             // 비첫줄에서 번호 마커 오프셋 (첫 줄은 마커 렌더링이 x를 전진시킴)
             let num_x_offset = if num_offset > 0.0 && !(line_idx == start_line && start_line == 0) {
@@ -2458,10 +2503,12 @@ impl LayoutEngine {
             };
             let x_start = match alignment {
                 Alignment::Center => {
-                    x_base
-                        + inline_offset
-                        + num_x_offset
-                        + (available_width - effective_text_width).max(0.0) / 2.0
+                    let align_offset = if center_packed_cell_label_as_right {
+                        (available_width - effective_text_width).max(0.0)
+                    } else {
+                        (available_width - effective_text_width).max(0.0) / 2.0
+                    };
+                    x_base + inline_offset + num_x_offset + align_offset
                 }
                 Alignment::Distribute if !needs_distribute || total_char_count <= 1 => {
                     x_base
