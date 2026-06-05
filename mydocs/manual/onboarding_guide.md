@@ -27,7 +27,15 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Node.js (rhwp-studio 웹 에디터)
 # → Node.js 18+ 설치
+
+# SVG/PDF 시각 sweep 보조 도구 (교육 통합/렌더링 PR 검증용)
+# Ubuntu/WSL/Debian 기준
+sudo apt install librsvg2-bin poppler-utils
 ```
+
+`librsvg2-bin`은 `rsvg-convert`를 제공하고, `poppler-utils`는 `pdftoppm`과
+`pdftotext`를 제공한다. 이 세 도구는 PDF 기준 시각 sweep 자동화에 필요하다.
+자세한 절차는 [PDF/SVG visual sweep 가이드](visual_sweep_guide.md)를 참고한다.
 
 ### 2.2 빌드 확인
 
