@@ -52,6 +52,44 @@ which pdftoppm
 which pdftotext
 ```
 
+## 폰트 환경
+
+visual sweep은 SVG를 PNG로 변환한 결과와 한컴 기준 PDF raster를 비교한다. 따라서
+폰트 환경이 다르면 실제 레이아웃 회귀가 없어도 `line`, `column`, `order` 후보가
+false positive로 남을 수 있다.
+
+권장 기본 폰트:
+
+```bash
+sudo apt install fonts-noto-cjk fonts-nanum
+fc-list :lang=ko | head
+```
+
+한컴/HY 계열 전용 폰트는 라이선스가 있는 로컬 환경에서만 사용하고, 저장소나 PR
+첨부물에 포함하지 않는다. 정확한 한컴 기준 재현이 필요한 경우 프로젝트 외부의 폰트
+디렉터리를 사용한다.
+
+```bash
+rhwp export-svg samples/exam_kor.hwp \
+  --font-path /path/to/ttfs \
+  --output output/font-check/
+```
+
+`--font-path`는 여러 번 지정할 수 있으며, 기본 탐색 경로(`ttfs/`, 시스템 폰트)보다
+우선한다. 자세한 폰트 fallback 동작은 [export-png 명령 가이드](export_png_command.md)의
+폰트 섹션을 참고한다.
+
+현재 `scripts/task1274_visual_sweep.py`는 `export-svg` 호출에 `--font-path`를 전달하지
+않는다. 자동 sweep은 시스템 fontconfig와 기본 탐색 경로 기준으로 실행되므로,
+폰트 민감 문서는 다음 중 하나로 판정한다.
+
+- 컨트리뷰터와 메인테이너가 동일한 공개 한글 폰트 환경을 맞춘 뒤 sweep 실행
+- `rhwp export-svg --font-path ...`로 수동 SVG를 내보내고 별도 시각 판정
+- 필요 시 후속 작업으로 sweep 스크립트에 반복 가능한 `--font-path` 전달 옵션 추가
+
+PR 보고서에는 폰트 민감 판정일 경우 OS, 공개 한글 폰트 설치 여부, 한컴/HY 전용
+폰트 사용 여부를 함께 적는다.
+
 ## 사전 빌드
 
 현재 checkout 기준 `target/debug/rhwp`가 필요하다.
@@ -148,5 +186,5 @@ PR 리뷰/보고서에는 다음을 분리해 적는다.
 ## 한계
 
 - PDF는 한컴 편집기 직접 시각 판정의 완전한 대체물이 아니다.
-- OCR/폰트/anti-aliasing 차이 때문에 line/column/order 후보가 false positive로 남을 수 있다.
+- 폰트/anti-aliasing 차이 때문에 line/column/order 후보가 false positive로 남을 수 있다.
 - 최종 수용 여부는 자동 sweep + 회귀 테스트 + 메인테이너 시각 판정을 함께 보고 결정한다.
