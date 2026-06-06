@@ -455,6 +455,40 @@ mod tests {
     }
 
     #[test]
+    fn shape_component_attrs_are_serialized() {
+        let doc = make_doc_with_bin(1, "png");
+        let ctx = SerializeContext::collect_from_document(&doc);
+        let mut pic = make_picture(1);
+        pic.shape_attr.original_width = 23456;
+        pic.shape_attr.original_height = 12345;
+        pic.shape_attr.horz_flip = true;
+        pic.shape_attr.vert_flip = true;
+        pic.shape_attr.rotation_angle = 34;
+        pic.shape_attr.rotation_center.x = 11700;
+        pic.shape_attr.rotation_center.y = 14794;
+        pic.shape_attr.rotate_image = true;
+
+        let xml = serialize(&pic, &ctx);
+        assert!(
+            xml.contains(r#"<hp:orgSz width="23456" height="12345"/>"#),
+            "orgSz must use ShapeComponentAttr values: {}",
+            xml
+        );
+        assert!(
+            xml.contains(r#"<hp:flip horizontal="1" vertical="1"/>"#),
+            "flip must use ShapeComponentAttr values: {}",
+            xml
+        );
+        assert!(
+            xml.contains(
+                r#"<hp:rotationInfo angle="34" centerX="11700" centerY="14794" rotateimage="1"/>"#
+            ),
+            "rotationInfo must use ShapeComponentAttr values: {}",
+            xml
+        );
+    }
+
+    #[test]
     fn unresolved_bin_data_id_errors() {
         let doc = Document::default(); // bin_data 없음
         let ctx = SerializeContext::collect_from_document(&doc);
