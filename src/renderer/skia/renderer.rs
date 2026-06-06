@@ -8,9 +8,9 @@ use crate::error::HwpError;
 use crate::model::image::ImageEffect;
 use crate::model::ColorRef;
 use crate::paint::{
-    paint_op_replay_plane_with_layer, GlyphRunOrientation, GlyphRunReplayEligibility,
-    LayerGlyphRunPaint, LayerNode, LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp,
-    PaintReplayPlane, ResourceArena, TextVariantQuality,
+    layer_node_has_replay_plane, paint_op_replay_plane_with_layer, GlyphRunOrientation,
+    GlyphRunReplayEligibility, LayerGlyphRunPaint, LayerNode, LayerNodeKind, LayerOutputOptions,
+    PageLayerTree, PaintOp, PaintReplayPlane, ResourceArena, TextVariantQuality,
 };
 use crate::renderer::layer_renderer::{
     LayerRasterRenderer, LayerRenderResult, RasterOutputFormat, RasterRenderOptions,
@@ -365,6 +365,9 @@ impl SkiaLayerRenderer {
         }
         let mut next_text_source_id = 0_u32;
         for replay_plane in PaintReplayPlane::ORDERED {
+            if !layer_node_has_replay_plane(&tree.root, replay_plane) {
+                continue;
+            }
             self.render_node(
                 canvas,
                 &tree.root,

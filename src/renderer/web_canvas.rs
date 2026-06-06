@@ -27,8 +27,8 @@ use super::{
 use crate::model::style::ImageFillMode;
 use crate::model::style::UnderlineType;
 use crate::paint::{
-    paint_op_replay_plane_with_layer, ClipKind, GroupKind, LayerNode, LayerNodeKind, PageLayerTree,
-    PaintOp, PaintReplayPlane,
+    layer_node_has_replay_plane, paint_op_replay_plane_with_layer, ClipKind, GroupKind, LayerNode,
+    LayerNodeKind, PageLayerTree, PaintOp, PaintReplayPlane,
 };
 
 /// Hanyang-PUA 옛한글 코드포인트를 KS X 1026-1:2007 자모 시퀀스로 확장 (Task #528).
@@ -244,31 +244,6 @@ fn replay_plane_for_wrap(target: crate::model::shape::TextWrap) -> PaintReplayPl
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-fn layer_tree_contains_replay_plane(node: &LayerNode, target: PaintReplayPlane) -> bool {
-    layer_tree_contains_replay_plane_with_layer(node, target, None)
-}
-
-#[cfg(target_arch = "wasm32")]
-fn layer_tree_contains_replay_plane_with_layer(
-    node: &LayerNode,
-    target: PaintReplayPlane,
-    inherited_layer: Option<RenderLayerInfo>,
-) -> bool {
-    let active_layer = node.layer.or(inherited_layer);
-    match &node.kind {
-        LayerNodeKind::Group { children, .. } => children
-            .iter()
-            .any(|child| layer_tree_contains_replay_plane_with_layer(child, target, active_layer)),
-        LayerNodeKind::ClipRect { child, .. } => {
-            layer_tree_contains_replay_plane_with_layer(child, target, active_layer)
-        }
-        LayerNodeKind::Leaf { ops } => ops
-            .iter()
-            .any(|op| paint_op_replay_plane_with_layer(op, active_layer) == target),
-    }
-}
-
 /// web-sys의 CanvasRenderingContext2d를 사용하여 실제 브라우저 Canvas에 렌더링한다.
 /// WASM 환경에서만 컴파일된다.
 #[cfg(target_arch = "wasm32")]
@@ -366,7 +341,7 @@ impl WebCanvasRenderer {
             LayerFilter::All => false,
             LayerFilter::BackgroundOnly => false,
             LayerFilter::FlowOnly => {
-                layer_tree_contains_replay_plane(&tree.root, PaintReplayPlane::BehindText)
+                layer_node_has_replay_plane(&tree.root, PaintReplayPlane::BehindText)
             }
             LayerFilter::WrapOnly(_) => true,
         };
