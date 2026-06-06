@@ -656,26 +656,14 @@ impl DocumentCore {
                                 overflow_links,
                             );
                         }
-                        // 표: 건너뛰기 → 다음 위치로
-                        let skip = 1;
-                        if skip <= text_len {
-                            return NavResult::Text {
-                                sec,
-                                para,
-                                char_offset: skip,
-                                context: context.to_vec(),
-                            };
-                        }
-                        // 표만 있는 문단 → 다음 문단으로
-                        return self.navigate_next_editable(
+                        // 문단 경계에서 새 문단으로 진입할 때는 시작 위치에 멈춘다.
+                        // 수식/그림/표 같은 inline control 은 다음 오른쪽 이동에서 1글자처럼 소비된다.
+                        return NavResult::Text {
                             sec,
                             para,
-                            0,
-                            1,
-                            context,
-                            None,
-                            overflow_links,
-                        );
+                            char_offset: 0,
+                            context: context.to_vec(),
+                        };
                     }
                 }
                 if cpos > 0 {

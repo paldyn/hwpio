@@ -4062,11 +4062,10 @@ impl LayoutEngine {
                 } else {
                     0.0
                 };
-                let tac_base_x = if cell_ctx.is_some() {
-                    effective_col_x + effective_margin_left
-                } else {
-                    effective_col_x
-                };
+                // Empty-run TAC-only lines still belong to the visual line flow.
+                // Therefore paragraph margins and first-line/hanging indent must
+                // use the same x origin as ordinary TextLine nodes.
+                let tac_base_x = effective_col_x + effective_margin_left;
                 let mut inline_x = tac_base_x + align_offset;
                 for (tac_k, &(tac_pos, tac_w, tac_ci)) in tac_offsets_px.iter().enumerate() {
                     if !tac_on_line(tac_k, tac_pos) {
