@@ -74,8 +74,8 @@ jobs:
           echo "CHROME_PATH=$chrome_path" >> "$GITHUB_ENV"
           echo "PUPPETEER_EXECUTABLE_PATH=$chrome_path" >> "$GITHUB_ENV"
 
-      - name: Run native Skia full screenshot sweep
-        run: cargo test-skia-full-sweep
+      - name: Run native Skia tests
+        run: cargo test --features native-skia skia --lib --verbose
 
       - name: Build WASM package
         run: wasm-pack build --target web --release
@@ -84,11 +84,12 @@ jobs:
         working-directory: rhwp-studio
         run: npm run build
 
-      - name: Run browser full render sweep
+      - name: Run browser render diff sweep
         working-directory: rhwp-studio
         env:
           RHWP_RENDER_SAMPLE_SCOPE: full
-        run: npm run e2e:ci
+          RHWP_RENDER_DIFF_ALL: "1"
+        run: npm run e2e:render-diff:ci
 
       - name: Capture representative multi-profile baseline
         run: python3 scripts/renderer_baseline.py --profiles screen,print,high-quality,fast-preview --browser-mode headless --output output/renderer-baseline/workflow-dispatch
