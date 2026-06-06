@@ -1716,6 +1716,15 @@ impl LayoutEngine {
                 .fold(0.0f64, f64::max);
             let line_tac_offsets = tac_offsets_for_line(composed, &tac_offsets_px, line_idx);
             let runs_all_whitespace = comp_line.runs.iter().all(|r| r.text.trim().is_empty());
+            // [Task #1308 CI follow-up / #1256 regression]
+            // compact 미주 수식-only 문단은 저장 LINE_SEG 흐름이 이미 한컴의 x/y 배치를
+            // 담고 있다. 이 줄을 일반 wrap/forced-break 후속 줄처럼 보고 내어쓰기를 한 번
+            // 더 적용하면 문12 수식 블록이 오른쪽으로 밀린다. 본문 강제줄바꿈(#1308)은
+            // 내어쓰기 적용이 맞으므로 미주 가상 문단으로 한정한다.
+            let endnote_tac_only_line_uses_saved_x = para_index >= self.endnote_para_base.get()
+                && cell_ctx.is_none()
+                && runs_all_whitespace
+                && !line_tac_offsets.is_empty();
             let mut line_tac_offsets_for_width = line_tac_offsets.clone();
             if cell_ctx.is_some()
                 && alignment == Alignment::Right
@@ -1828,7 +1837,9 @@ impl LayoutEngine {
             // - 보통(ind=0): 모든 줄 margin_left
             // - 들여쓰기(ind>0): 첫줄 margin_left+indent, 다음줄 margin_left
             // - 내어쓰기(ind<0): 첫줄 margin_left, 다음줄 margin_left+|indent|
-            let line_indent = if indent > 0.0 {
+            let line_indent = if endnote_tac_only_line_uses_saved_x {
+                0.0
+            } else if indent > 0.0 {
                 if line_idx == 0 {
                     indent
                 } else {
@@ -2478,6 +2489,14 @@ impl LayoutEngine {
             let line_plain_text: String = comp_line.runs.iter().map(|r| r.text.as_str()).collect();
             let is_answer_sheet_number_label =
                 cell_ctx.is_some() && line_plain_text.trim() == "수험번호";
+            // [Task #1308 CI follow-up / #1256 regression]
+            // 본문/미주 흐름의 TAC-only 줄은 저장된 LINE_SEG x 흐름을 따라야 한다.
+            // 빈 TextRun 이 있는 수식-only 문단은 일반 정렬 경로로 들어오므로,
+            // Distribute/Center 의 잔여 폭 중앙 오프셋을 적용하면 한컴과 달리 수식 블록이
+            // 열 안쪽으로 밀린다. 표 셀 안 수식은 기존처럼 셀 정렬을 따른다.
+            let non_cell_tac_only_line = cell_ctx.is_none()
+                && !line_tac_offsets_for_width.is_empty()
+                && line_plain_text.trim().is_empty();
 
             // 셀 overflow/underflow 분기로 자간 보정된 경우 정렬 기준 폭은 실제 렌더 폭이어야 함.
             // 특히 #1285 답안지 `수험번호` 라벨은 음수 자간으로 압축된 텍스트를 자연 폭 기준으로
@@ -2553,16 +2572,20 @@ impl LayoutEngine {
                 Alignment::Center => {
                     let align_offset = if center_packed_cell_label_as_right {
                         (available_width - effective_text_width).max(0.0)
+                    } else if non_cell_tac_only_line {
+                        0.0
                     } else {
                         (available_width - effective_text_width).max(0.0) / 2.0
                     };
                     x_base + inline_offset + num_x_offset + align_offset
                 }
                 Alignment::Distribute if !needs_distribute || total_char_count <= 1 => {
-                    x_base
-                        + inline_offset
-                        + num_x_offset
-                        + (available_width - effective_text_width).max(0.0) / 2.0
+                    let align_offset = if non_cell_tac_only_line {
+                        0.0
+                    } else {
+                        (available_width - effective_text_width).max(0.0) / 2.0
+                    };
+                    x_base + inline_offset + num_x_offset + align_offset
                 }
                 Alignment::Right => {
                     x_base
