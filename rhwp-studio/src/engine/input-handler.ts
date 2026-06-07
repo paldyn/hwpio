@@ -29,6 +29,11 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const DRAG_SCROLL_EDGE_PX = 48;
 const DRAG_SCROLL_MIN_STEP_PX = 2;
 const DRAG_SCROLL_MAX_STEP_PX = 20;
+const PX_TO_RAW_2X = 150;
+
+function pxToRaw2x(px: number): number {
+  return Math.round(px * PX_TO_RAW_2X);
+}
 
 function createOverlaySvg(): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -1487,6 +1492,111 @@ export class InputHandler {
       this.afterEdit();
     } catch (err) {
       console.warn('[InputHandler] applyParaFormat 실패:', err);
+    }
+  }
+
+  /** 한컴식 Shift+Tab: 현재 커서 x 위치를 기준으로 문단 내어쓰기를 설정한다. */
+  applyHangingIndentAtCursor(): boolean {
+    if (this.cursor.isInHeaderFooter() || this.cursor.isInFootnote()) {
+      console.info('[InputHandler] Shift+Tab hanging indent: unsupported note/header context');
+      return false;
+    }
+
+    const pos = this.cursor.getPosition();
+    if (pos.isTextBox || (pos.cellPath?.length ?? 0) > 1) {
+      console.info('[InputHandler] Shift+Tab hanging indent: unsupported nested/textbox context');
+      return false;
+    }
+
+    try {
+      let cursorRect: CursorRect | null = this.cursor.getRect();
+      let lineStartRect: CursorRect;
+
+      if (pos.parentParaIndex !== undefined) {
+        const pathEntry = pos.cellPath?.[0];
+        const controlIndex = pathEntry?.controlIndex ?? pos.controlIndex;
+        const cellIndex = pathEntry?.cellIndex ?? pos.cellIndex;
+        const cellParaIndex = pathEntry?.cellParaIndex ?? pos.cellParaIndex;
+
+        if (controlIndex === undefined || cellIndex === undefined || cellParaIndex === undefined) {
+          console.warn('[InputHandler] Shift+Tab hanging indent: incomplete cell position', pos);
+          return false;
+        }
+
+        const lineInfo = this.wasm.getLineInfoInCell(
+          pos.sectionIndex,
+          pos.parentParaIndex,
+          controlIndex,
+          cellIndex,
+          cellParaIndex,
+          pos.charOffset,
+        );
+
+        if (pos.cellPath?.length === 1) {
+          const pathJson = JSON.stringify(pos.cellPath);
+          lineStartRect = this.wasm.getCursorRectByPath(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            pathJson,
+            lineInfo.charStart,
+          );
+          cursorRect ??= this.wasm.getCursorRectByPath(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            pathJson,
+            pos.charOffset,
+          );
+        } else {
+          lineStartRect = this.wasm.getCursorRectInCell(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            controlIndex,
+            cellIndex,
+            cellParaIndex,
+            lineInfo.charStart,
+          );
+          cursorRect ??= this.wasm.getCursorRectInCell(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            controlIndex,
+            cellIndex,
+            cellParaIndex,
+            pos.charOffset,
+          );
+        }
+
+        const hangingPx = Math.max(0, cursorRect.x - lineStartRect.x);
+        this.wasm.applyParaFormatInCell(
+          pos.sectionIndex,
+          pos.parentParaIndex,
+          controlIndex,
+          cellIndex,
+          cellParaIndex,
+          JSON.stringify({ indent: -pxToRaw2x(hangingPx) }),
+        );
+        this.afterEdit();
+        return true;
+      }
+
+      const lineInfo = this.wasm.getLineInfo(pos.sectionIndex, pos.paragraphIndex, pos.charOffset);
+      lineStartRect = this.wasm.getCursorRect(
+        pos.sectionIndex,
+        pos.paragraphIndex,
+        lineInfo.charStart,
+      );
+      cursorRect ??= this.wasm.getCursorRect(pos.sectionIndex, pos.paragraphIndex, pos.charOffset);
+
+      const hangingPx = Math.max(0, cursorRect.x - lineStartRect.x);
+      this.wasm.applyParaFormat(
+        pos.sectionIndex,
+        pos.paragraphIndex,
+        JSON.stringify({ indent: -pxToRaw2x(hangingPx) }),
+      );
+      this.afterEdit();
+      return true;
+    } catch (err) {
+      console.warn('[InputHandler] Shift+Tab hanging indent 실패:', err);
+      return false;
     }
   }
 
