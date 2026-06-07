@@ -882,6 +882,75 @@ impl DocumentCore {
         Ok(current_para)
     }
 
+    /// path 의 마지막 엔트리가 글상자(Shape text_box)를 가리키는지 판정한다.
+    ///
+    /// 표 셀 picture 삽입은 한컴 정합상 parent paragraph 의 sibling floating
+    /// picture 로 처리하지만, 글상자 내부 picture 는 text_box paragraph 안에
+    /// 실제 Picture control 로 들어가야 한다. `resolve_cell_by_path` 는 마지막
+    /// 엔트리가 표일 때만 성공하므로, insert path 에서는 표/글상자를 먼저 구분한다.
+    fn cell_path_terminates_at_textbox(
+        section: &crate::model::document::Section,
+        parent_para_idx: usize,
+        path: &[(usize, usize, usize)],
+    ) -> Result<bool, HwpError> {
+        let mut current_para = section.paragraphs.get(parent_para_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", parent_para_idx))
+        })?;
+
+        for (i, &(ctrl_idx, cell_idx, cell_para_idx)) in path.iter().enumerate() {
+            let ctrl = current_para.controls.get(ctrl_idx).ok_or_else(|| {
+                HwpError::RenderError(format!("경로[{}]: controls[{}] 범위 초과", i, ctrl_idx))
+            })?;
+            match ctrl {
+                crate::model::control::Control::Table(table) => {
+                    let cell = table.cells.get(cell_idx).ok_or_else(|| {
+                        HwpError::RenderError(format!("경로[{}]: cells[{}] 범위 초과", i, cell_idx))
+                    })?;
+                    if i == path.len() - 1 {
+                        return Ok(false);
+                    }
+                    current_para = cell.paragraphs.get(cell_para_idx).ok_or_else(|| {
+                        HwpError::RenderError(format!(
+                            "경로[{}]: paragraphs[{}] 범위 초과",
+                            i, cell_para_idx
+                        ))
+                    })?;
+                }
+                crate::model::control::Control::Shape(shape) => {
+                    if cell_idx != 0 {
+                        return Err(HwpError::RenderError(format!(
+                            "경로[{}]: 글상자의 cell_index는 0이어야 합니다 ({})",
+                            i, cell_idx
+                        )));
+                    }
+                    let text_box = get_textbox_from_shape(shape.as_ref()).ok_or_else(|| {
+                        HwpError::RenderError(format!(
+                            "경로[{}]: controls[{}]가 텍스트 글상자가 아닙니다",
+                            i, ctrl_idx
+                        ))
+                    })?;
+                    if i == path.len() - 1 {
+                        return Ok(true);
+                    }
+                    current_para = text_box.paragraphs.get(cell_para_idx).ok_or_else(|| {
+                        HwpError::RenderError(format!(
+                            "경로[{}]: 글상자문단 {} 범위 초과",
+                            i, cell_para_idx
+                        ))
+                    })?;
+                }
+                _ => {
+                    return Err(HwpError::RenderError(format!(
+                        "경로[{}]: controls[{}] 가 표/글상자가 아닙니다",
+                        i, ctrl_idx
+                    )))
+                }
+            }
+        }
+
+        Err(HwpError::RenderError("경로가 비어있습니다".to_string()))
+    }
+
     /// [Task #825] Picture 속성 JSON 적용 (mutation only). 후처리 (AutoNumber /
     /// recompose / paginate / event log) 는 호출자 책임.
     /// 반환: caption_created (true 면 호출자가 AutoNumber 후처리 필요).
@@ -1980,10 +2049,22 @@ impl DocumentCore {
                 "이미지 데이터가 비어 있습니다".to_string(),
             ));
         }
-        // cell_path 가 있으면 경로가 유효한지 사전 검증.
-        if !cell_path.is_empty() {
-            self.resolve_cell_by_path(section_idx, para_idx, cell_path)?;
-        }
+        // cell_path 가 있으면 경로가 유효한지 사전 검증한다.
+        //
+        // 표 셀 picture 는 한컴 정합상 표 sibling floating 으로 삽입하지만,
+        // 글상자(text_box) 내부 picture 는 글상자 문단의 control 로 들어가야 한다.
+        // 기존 resolve_cell_by_path 는 마지막 엔트리가 표일 때만 성공하므로
+        // 먼저 표/글상자를 구분한다.
+        let cell_path_is_textbox = if !cell_path.is_empty() {
+            let section = &self.document.sections[section_idx];
+            let is_textbox = Self::cell_path_terminates_at_textbox(section, para_idx, cell_path)?;
+            if !is_textbox {
+                self.resolve_cell_by_path(section_idx, para_idx, cell_path)?;
+            }
+            is_textbox
+        } else {
+            false
+        };
 
         // --- 1. BinDataContent 추가 ---
         let next_id = self.document.bin_data_content.len() as u16 + 1;
@@ -2037,6 +2118,75 @@ impl DocumentCore {
         };
 
         if !cell_path.is_empty() {
+            if cell_path_is_textbox {
+                // === 글상자 내부 picture 분기 (#1322 maintainer fix) ===
+                // hitTest 의 글상자 sentinel path (`cellIdx=0`) 가 넘어온 경우에는
+                // Picture 를 body paragraph 의 sibling 으로 띄우지 않고, 실제 text_box
+                // paragraph 안에 삽입한다. 글상자 내부 좌표계는 text_box content box
+                // 기준이므로 caller 가 전달한 offset 은 Para-relative 로 해석한다.
+                let (offset_x_hu, offset_y_hu) = match (paper_offset_x_hu, paper_offset_y_hu) {
+                    (Some(x), Some(y)) => (x, y),
+                    _ => (0, 0),
+                };
+
+                // CommonObjAttr (text_box 내부 floating):
+                //   bits 3-4=vert_rel_to(2=Para), bits 8-10=horz_rel_to(3=Para),
+                //   bits 15-17=width_criterion(4=Absolute),
+                //   bits 18-20=height_criterion(2=Absolute),
+                //   bits 21-23=text_wrap(0=Square)
+                let common_attr: u32 = (2 << 3) | (3 << 8) | (4 << 15) | (2 << 18);
+                let common = CommonObjAttr {
+                    ctrl_id: 0x67736F20,
+                    attr: common_attr,
+                    treat_as_char: false,
+                    vert_rel_to: VertRelTo::Para,
+                    horz_rel_to: HorzRelTo::Para,
+                    text_wrap: crate::model::shape::TextWrap::Square,
+                    horizontal_offset: offset_x_hu.max(0) as u32,
+                    vertical_offset: offset_y_hu.max(0) as u32,
+                    width,
+                    height,
+                    z_order: 1,
+                    description: description.to_string(),
+                    ..Default::default()
+                };
+                let pic = Picture {
+                    common,
+                    shape_attr,
+                    border_x: bx,
+                    border_y: by,
+                    crop,
+                    image_attr,
+                    ..Default::default()
+                };
+
+                let new_ctrl_idx = {
+                    let section = &mut self.document.sections[section_idx];
+                    section.raw_stream = None;
+                    let target_para =
+                        Self::resolve_cell_paragraph_mut(section, para_idx, cell_path)?;
+                    let new_ctrl_idx = target_para.controls.len();
+                    target_para.controls.push(Control::Picture(Box::new(pic)));
+                    target_para.ctrl_data_records.push(None);
+                    target_para.control_mask |= 0x00000800;
+                    new_ctrl_idx
+                };
+
+                self.mark_section_dirty(section_idx);
+                self.recompose_section(section_idx);
+                self.paginate_if_needed();
+                self.invalidate_page_tree_cache();
+
+                self.event_log.push(DocumentEvent::PictureInserted {
+                    section: section_idx,
+                    para: para_idx,
+                });
+                return Ok(super::super::helpers::json_ok_with(&format!(
+                    "\"paraIdx\":{},\"controlIdx\":{}",
+                    para_idx, new_ctrl_idx
+                )));
+            }
+
             // === 셀 floating picture 분기 (#1151 v2 — 한컴 패턴 정합) ===
             // Picture 는 표가 들어있는 paragraph 의 sibling control 로 append 된다.
             // tac=false, wrap=Square (어울림), horz/vert_rel_to=Paper, offset 은 사용자 클릭/드래그 위치.
@@ -8374,6 +8524,16 @@ mod issue_1280_textbox_creation_tests {
             .unwrap_or_else(|| panic!("missing {key} in {res}"))
     }
 
+    fn minimal_png() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x00, 0x00, 0x00,
+            0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]
+    }
+
     /// 도형 생성 후 (para_idx, ctrl_idx) 반환. 글상자는 한컴 기본값과 동일하게 treat_as_char=true.
     fn create_shape(core: &mut DocumentCore, shape_type: &str) -> (usize, usize) {
         let treat_as_char = shape_type == "textbox";
@@ -8510,6 +8670,62 @@ mod issue_1280_textbox_creation_tests {
             tb.paragraphs[0].text, "플로팅",
             "floating 글상자 내부 텍스트 보존"
         );
+    }
+
+    /// 글상자 안에서 이미지 배치 영역을 드래그한 경우, 그림은 body sibling 이 아니라
+    /// text_box 내부 paragraph 의 Picture control 로 들어가야 한다.
+    #[test]
+    fn insert_picture_into_textbox_uses_textbox_paragraph_control() {
+        use crate::model::shape::{HorzRelTo, TextWrap, VertRelTo};
+
+        let mut core = make_test_core();
+        let (para, ctrl) = create_textbox_with(&mut core, false, "InFrontOfText");
+        let body_control_count_before = core.document.sections[0].paragraphs[para].controls.len();
+        let cell_path = vec![(ctrl, 0, 0)];
+        let image = minimal_png();
+
+        core.insert_picture_native(
+            0,
+            para,
+            0,
+            &cell_path,
+            &image,
+            5000,
+            4000,
+            1,
+            1,
+            "png",
+            "textbox picture",
+            Some(750),
+            Some(1500),
+        )
+        .expect("글상자 내부 picture 삽입 성공");
+
+        let body = &core.document.sections[0].paragraphs[para];
+        assert_eq!(
+            body.controls.len(),
+            body_control_count_before,
+            "글상자 내부 삽입은 body sibling control 을 추가하면 안 된다"
+        );
+
+        let tb = textbox_of(&core, para, ctrl).expect("글상자 text_box 존재");
+        let picture = tb.paragraphs[0]
+            .controls
+            .iter()
+            .find_map(|c| match c {
+                Control::Picture(p) => Some(p.as_ref()),
+                _ => None,
+            })
+            .expect("글상자 내부 문단에 Picture control 이 있어야 한다");
+
+        assert!(!picture.common.treat_as_char);
+        assert_eq!(picture.common.horz_rel_to, HorzRelTo::Para);
+        assert_eq!(picture.common.vert_rel_to, VertRelTo::Para);
+        assert_eq!(picture.common.text_wrap, TextWrap::Square);
+        assert_eq!(picture.common.horizontal_offset, 750);
+        assert_eq!(picture.common.vertical_offset, 1500);
+        assert_eq!(picture.common.width, 5000);
+        assert_eq!(picture.common.height, 4000);
     }
 
     #[test]
