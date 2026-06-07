@@ -21,7 +21,9 @@
 
 use quick_xml::Writer;
 
-use crate::model::control::{Control, Equation};
+use crate::model::control::{
+    AutoNumberType, Control, Equation, NewNumber, PageHide, PageNumberPos,
+};
 use crate::model::document::{Document, Section};
 use crate::model::footnote::{Endnote, Footnote};
 use crate::model::paragraph::{ColumnBreakType, LineSeg, Paragraph};
@@ -405,6 +407,9 @@ fn is_hwpx_inline_slot(control: &Control) -> bool {
             | Control::Form(_)
             | Control::Footnote(_)
             | Control::Endnote(_)
+            | Control::PageHide(_)
+            | Control::PageNumberPos(_)
+            | Control::NewNumber(_)
     )
 }
 
@@ -453,8 +458,98 @@ fn render_control_slot(out: &mut String, control: &Control, ctx: &mut SerializeC
                 Err(e) => eprintln!("[hwpx] Field 직렬화 실패: {e}"),
             }
         }
+        Control::PageHide(ph) => out.push_str(&render_page_hiding(ph)),
+        Control::PageNumberPos(pn) => out.push_str(&render_page_num(pn)),
+        Control::NewNumber(nn) => out.push_str(&render_new_num(nn)),
         _ => {}
     }
+}
+
+/// `<hp:ctrl><hp:pageHiding .../></hp:ctrl>` — 감추기(PageHide) 컨트롤.
+/// `parse_page_hiding_attrs`의 역매핑. bool → "0"/"1" (한컴 정합).
+fn render_page_hiding(ph: &PageHide) -> String {
+    format!(
+        concat!(
+            r#"<hp:ctrl><hp:pageHiding hideHeader="{}" hideFooter="{}" "#,
+            r#"hideMasterPage="{}" hideBorder="{}" hideFill="{}" hidePageNum="{}"/></hp:ctrl>"#
+        ),
+        ph.hide_header as u8,
+        ph.hide_footer as u8,
+        ph.hide_master_page as u8,
+        ph.hide_border as u8,
+        ph.hide_fill as u8,
+        ph.hide_page_num as u8,
+    )
+}
+
+/// 쪽 번호 위치 코드(표 150) → HWPX `pos` 문자열. `parse_page_num_attrs`의 역매핑.
+fn page_num_pos_to_str(pos: u8) -> &'static str {
+    match pos {
+        0 => "NONE",
+        1 => "TOP_LEFT",
+        2 => "TOP_CENTER",
+        3 => "TOP_RIGHT",
+        4 => "BOTTOM_LEFT",
+        5 => "BOTTOM_CENTER",
+        6 => "BOTTOM_RIGHT",
+        7 => "OUTSIDE_TOP",
+        8 => "OUTSIDE_BOTTOM",
+        9 => "INSIDE_TOP",
+        10 => "INSIDE_BOTTOM",
+        _ => "BOTTOM_CENTER",
+    }
+}
+
+/// 번호 형식 코드(표 134) → HWPX `formatType` 문자열. `parse_page_num_attrs`의 역매핑.
+fn page_num_format_to_str(fmt: u8) -> &'static str {
+    match fmt {
+        0 => "DIGIT",
+        1 => "CIRCLE_DIGIT",
+        2 => "ROMAN_CAPITAL",
+        3 => "ROMAN_SMALL",
+        4 => "LATIN_CAPITAL",
+        5 => "LATIN_SMALL",
+        6 => "HANGUL",
+        7 => "HANJA",
+        _ => "DIGIT",
+    }
+}
+
+/// `<hp:ctrl><hp:pageNum .../></hp:ctrl>` — 쪽 번호 위치(PageNumberPos) 컨트롤.
+fn render_page_num(pn: &PageNumberPos) -> String {
+    // dash_char 기본값은 '-' (모델: 항상 '-'); '\0'이면 '-'로 폴백.
+    let side = if pn.dash_char == '\0' {
+        '-'
+    } else {
+        pn.dash_char
+    };
+    format!(
+        r#"<hp:ctrl><hp:pageNum pos="{}" formatType="{}" sideChar="{}"/></hp:ctrl>"#,
+        page_num_pos_to_str(pn.position),
+        page_num_format_to_str(pn.format),
+        xml_escape(&side.to_string()),
+    )
+}
+
+/// 번호 종류 → HWPX `numType` 문자열. `parse_num_type`의 역매핑(Picture→FIGURE).
+fn auto_number_type_to_str(t: AutoNumberType) -> &'static str {
+    match t {
+        AutoNumberType::Page => "PAGE",
+        AutoNumberType::Footnote => "FOOTNOTE",
+        AutoNumberType::Endnote => "ENDNOTE",
+        AutoNumberType::Picture => "FIGURE",
+        AutoNumberType::Table => "TABLE",
+        AutoNumberType::Equation => "EQUATION",
+    }
+}
+
+/// `<hp:ctrl><hp:newNum .../></hp:ctrl>` — 새 번호 지정(NewNumber) 컨트롤.
+fn render_new_num(nn: &NewNumber) -> String {
+    format!(
+        r#"<hp:ctrl><hp:newNum num="{}" numType="{}"/></hp:ctrl>"#,
+        nn.number,
+        auto_number_type_to_str(nn.number_type),
+    )
 }
 
 fn writer_to_string<F>(f: F) -> Result<String, SerializeError>
