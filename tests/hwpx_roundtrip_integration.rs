@@ -724,3 +724,36 @@ fn header_footer_preserved_on_roundtrip() {
     assert_eq!(h2, h1, "Header 컨트롤/내용 보존 실패");
     assert_eq!(f2, f1, "Footer 컨트롤/내용 보존 실패");
 }
+
+fn auto_nums(
+    doc: &rhwp::model::document::Document,
+) -> Vec<(u16, rhwp::model::control::AutoNumberType, u8)> {
+    use rhwp::model::control::Control;
+    let mut v = Vec::new();
+    for s in &doc.sections {
+        for p in &s.paragraphs {
+            for c in &p.controls {
+                if let Control::AutoNumber(an) = c {
+                    v.push((an.number, an.number_type, an.format));
+                }
+            }
+        }
+    }
+    v
+}
+
+#[test]
+fn auto_num_preserved_on_roundtrip() {
+    use rhwp::parser::hwpx::parse_hwpx;
+    use rhwp::serializer::hwpx::serialize_hwpx;
+
+    // eq-002: 본문에 autoNum 컨트롤 포함.
+    let bytes = include_bytes!("../samples/hwpx/eq-002.hwpx");
+    let d1 = parse_hwpx(bytes).expect("parse");
+    let an1 = auto_nums(&d1);
+    assert!(!an1.is_empty(), "fixture must contain autoNum");
+
+    let out = serialize_hwpx(&d1).expect("serialize");
+    let d2 = parse_hwpx(&out).expect("reparse");
+    assert_eq!(auto_nums(&d2), an1, "AutoNumber 컨트롤/값 보존 실패");
+}

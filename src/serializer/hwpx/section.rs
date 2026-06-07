@@ -22,7 +22,7 @@
 use quick_xml::Writer;
 
 use crate::model::control::{
-    AutoNumberType, Control, Equation, NewNumber, PageHide, PageNumberPos,
+    AutoNumber, AutoNumberType, Control, Equation, NewNumber, PageHide, PageNumberPos,
 };
 use crate::model::document::{Document, Section};
 use crate::model::footnote::{Endnote, Footnote};
@@ -413,6 +413,7 @@ fn is_hwpx_inline_slot(control: &Control) -> bool {
             | Control::NewNumber(_)
             | Control::Header(_)
             | Control::Footer(_)
+            | Control::AutoNumber(_)
     )
 }
 
@@ -466,8 +467,37 @@ fn render_control_slot(out: &mut String, control: &Control, ctx: &mut SerializeC
         Control::NewNumber(nn) => out.push_str(&render_new_num(nn)),
         Control::Header(h) => out.push_str(&render_header(h, ctx)),
         Control::Footer(f) => out.push_str(&render_footer(f, ctx)),
+        Control::AutoNumber(an) => out.push_str(&render_autonum(an)),
         _ => {}
     }
+}
+
+/// 장식 문자(userChar/prefixChar/suffixChar)용 속성값. '\0'(미설정)은 빈 문자열.
+fn ctrl_char_attr(c: char) -> String {
+    if c == '\0' {
+        String::new()
+    } else {
+        xml_escape(&c.to_string())
+    }
+}
+
+/// `<hp:ctrl><hp:autoNum num=".." numType=".."><hp:autoNumFormat .../></hp:autoNum></hp:ctrl>`
+/// 자동 번호(AutoNumber) 컨트롤. format은 pageNum formatType과 동일한 코드→문자열 매핑.
+fn render_autonum(an: &AutoNumber) -> String {
+    format!(
+        concat!(
+            r#"<hp:ctrl><hp:autoNum num="{num}" numType="{nt}">"#,
+            r#"<hp:autoNumFormat type="{ty}" userChar="{u}" prefixChar="{p}" "#,
+            r#"suffixChar="{s}" supscript="{sup}"/></hp:autoNum></hp:ctrl>"#
+        ),
+        num = an.number,
+        nt = auto_number_type_to_str(an.number_type),
+        ty = page_num_format_to_str(an.format),
+        u = ctrl_char_attr(an.user_symbol),
+        p = ctrl_char_attr(an.prefix_char),
+        s = ctrl_char_attr(an.suffix_char),
+        sup = an.superscript as u8,
+    )
 }
 
 /// 머리말/꼬리말 적용 범위 → HWPX `applyPageType`. `parse_apply_page_type`의 역매핑.
