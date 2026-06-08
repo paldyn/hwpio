@@ -89,8 +89,11 @@ function sampleFetchPath(filename) {
 /** CLI 인수에서 --mode=host|headless 파싱 */
 function parseMode() {
   const modeArg = process.argv.find(a => a.startsWith('--mode='));
-  if (modeArg) return modeArg.split('=')[1];
-  return 'host';
+  const mode = modeArg ? modeArg.split('=')[1] : 'host';
+  if (mode !== 'host' && mode !== 'headless') {
+    throw new Error(`unsupported browser mode: ${mode} (allowed: host, headless)`);
+  }
+  return mode;
 }
 
 const MODE = parseMode();
@@ -319,6 +322,39 @@ export async function captureCanvasScreenshot(page, outputPath, logLabel = 'Canv
   return { path: outputPath, buffer };
 }
 
+export function cropPngBuffer(buffer, { x = 0, y = 0, width, height }) {
+  const source = PNG.sync.read(buffer);
+  const cropX = Number(x);
+  const cropY = Number(y);
+  const cropWidth = Number(width);
+  const cropHeight = Number(height);
+  if (
+    !Number.isInteger(cropX)
+    || !Number.isInteger(cropY)
+    || !Number.isInteger(cropWidth)
+    || !Number.isInteger(cropHeight)
+    || cropX < 0
+    || cropY < 0
+    || cropWidth <= 0
+    || cropHeight <= 0
+    || cropX + cropWidth > source.width
+    || cropY + cropHeight > source.height
+  ) {
+    throw new Error(
+      `invalid PNG crop: ${cropX},${cropY} ${cropWidth}x${cropHeight} `
+        + `for ${source.width}x${source.height}`,
+    );
+  }
+
+  const cropped = new PNG({ width: cropWidth, height: cropHeight });
+  for (let row = 0; row < cropHeight; row += 1) {
+    const sourceStart = ((cropY + row) * source.width + cropX) * 4;
+    const targetStart = row * cropWidth * 4;
+    source.data.copy(cropped.data, targetStart, sourceStart, sourceStart + cropWidth * 4);
+  }
+  return PNG.sync.write(cropped);
+}
+
 /** 두 PNG 버퍼를 exact/tolerant 기준으로 비교한다 */
 export async function comparePngBuffers(expectedBuffer, actualBuffer, {
   threshold = 0,
@@ -365,12 +401,15 @@ export async function comparePngBuffers(expectedBuffer, actualBuffer, {
   const meanAbsChannelDelta = totalPixels > 0 ? totalChannelDelta / (totalPixels * 4) : 0;
   const hasPixelBudget = maxDiffPixels != null;
   const hasRatioBudget = maxDiffRatio != null;
-  const passed = (!hasPixelBudget || rawTolerantDiffPixels <= maxDiffPixels)
-    && (!hasRatioBudget || rawTolerantDiffRatio <= maxDiffRatio);
+  const hasPassBudget = hasPixelBudget || hasRatioBudget;
+  const passed = hasPassBudget
+    ? (!hasPixelBudget || rawTolerantDiffPixels <= maxDiffPixels)
+      && (!hasRatioBudget || rawTolerantDiffRatio <= maxDiffRatio)
+    : null;
 
   return {
     passed,
-    passMetric: hasPixelBudget || hasRatioBudget ? 'tolerant' : 'reportOnly',
+    passMetric: hasPassBudget ? 'tolerant' : 'reportOnly',
     width: expected.width,
     height: expected.height,
     exactDiffPixels,

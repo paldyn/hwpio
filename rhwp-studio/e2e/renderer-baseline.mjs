@@ -205,6 +205,10 @@ async function readRendererDiagnostics(page) {
   });
 }
 
+function isEvaluatedDiff(diff) {
+  return diff?.passMetric !== 'reportOnly';
+}
+
 const options = parseArgs();
 const requestedCanvasKitSurface = options.canvaskitSurface.trim().toLowerCase();
 if (requestedCanvasKitSurface === 'sw' || requestedCanvasKitSurface === 'cpu') {
@@ -381,6 +385,7 @@ for (const item of browserBackendComparisons) {
         compared: 0,
         passed: 0,
         failed: 0,
+        reportOnly: 0,
         missing: 0,
         errors: 0,
         worstSelectedDiffRatio: 0,
@@ -402,7 +407,9 @@ for (const item of browserBackendComparisons) {
       continue;
     }
     summary.compared += 1;
-    if (item.diff?.passed) {
+    if (!isEvaluatedDiff(item.diff)) {
+      summary.reportOnly += 1;
+    } else if (item.diff?.passed) {
       summary.passed += 1;
     } else {
       summary.failed += 1;
@@ -437,8 +444,11 @@ const browserBackendParity = {
   summary: {
     total: browserBackendComparisons.length,
     compared: browserBackendCompared.length,
-    passed: browserBackendCompared.filter((item) => item.diff?.passed).length,
-    failed: browserBackendCompared.filter((item) => !item.diff?.passed).length,
+    passed: browserBackendCompared
+      .filter((item) => isEvaluatedDiff(item.diff) && item.diff?.passed).length,
+    failed: browserBackendCompared
+      .filter((item) => isEvaluatedDiff(item.diff) && !item.diff?.passed).length,
+    reportOnly: browserBackendCompared.filter((item) => !isEvaluatedDiff(item.diff)).length,
     missing: browserBackendComparisons.filter((item) => item.status === 'missing').length,
     errors: browserBackendComparisons.filter((item) => item.status === 'error').length,
   },
@@ -455,7 +465,8 @@ const browserBackendParity = {
       profile: item.profile,
       targetBackend: item.targetBackend,
       canvaskitSurface: item.canvaskitSurface ?? null,
-      passed: !!item.diff?.passed,
+      passed: item.diff?.passed ?? null,
+      passMetric: item.diff?.passMetric ?? null,
       selectedDiffPixels: item.diff?.selectedDiffPixels ?? 0,
       selectedDiffRatio: item.diff?.selectedDiffRatio ?? 0,
       tolerantDiffRatio: item.diff?.tolerantDiffRatio ?? 0,

@@ -348,7 +348,7 @@ def capture_browser_baseline(
             "dev",
             "--",
             "--host",
-            "0.0.0.0",
+            "127.0.0.1",
             "--port",
             str(port),
             "--strictPort",
@@ -795,13 +795,14 @@ def write_reports(
                 f"- compared: {summary.get('compared', 0)}",
                 f"- passed: {summary.get('passed', 0)}",
                 f"- failed: {summary.get('failed', 0)}",
+                f"- report-only: {summary.get('reportOnly', 0)}",
                 f"- missing: {summary.get('missing', 0)}",
                 f"- errors: {summary.get('errors', 0)}",
                 "",
                 "### Target Backend Summary",
                 "",
-                "| Target Backend | Total | Compared | Passed | Failed | Missing | Errors | Worst Selected Diff Ratio | Worst Raw Diff Ratio | Worst Channel Delta |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Target Backend | Total | Compared | Passed | Failed | Report Only | Missing | Errors | Worst Selected Diff Ratio | Worst Raw Diff Ratio | Worst Channel Delta |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for item in browser_backend_parity.get("summaryByTargetBackend", []):
@@ -816,6 +817,7 @@ def write_reports(
                         format_count(item.get("compared")),
                         format_count(item.get("passed")),
                         format_count(item.get("failed")),
+                        format_count(item.get("reportOnly")),
                         format_count(item.get("missing")),
                         format_count(item.get("errors")),
                         f"{worst_ratio:.6f}" if isinstance(worst_ratio, (int, float)) else "-",
@@ -830,8 +832,8 @@ def write_reports(
                 "",
                 "### Profile Summary",
                 "",
-                "| Profile | Total | Compared | Passed | Failed | Missing | Errors | Worst Selected Diff Ratio | Worst Raw Diff Ratio | Worst Channel Delta |",
-                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                "| Profile | Total | Compared | Passed | Failed | Report Only | Missing | Errors | Worst Selected Diff Ratio | Worst Raw Diff Ratio | Worst Channel Delta |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
         for item in browser_backend_parity.get("summaryByProfile", []):
@@ -846,6 +848,7 @@ def write_reports(
                         format_count(item.get("compared")),
                         format_count(item.get("passed")),
                         format_count(item.get("failed")),
+                        format_count(item.get("reportOnly")),
                         format_count(item.get("missing")),
                         format_count(item.get("errors")),
                         f"{worst_ratio:.6f}" if isinstance(worst_ratio, (int, float)) else "-",
@@ -862,8 +865,8 @@ def write_reports(
                     "",
                     "### Category Summary",
                     "",
-                    "| Category | Total | Compared | Passed | Failed | Missing | Errors | Worst Selected Diff Ratio | Worst Raw Diff Ratio | Worst Channel Delta |",
-                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                    "| Category | Total | Compared | Passed | Failed | Report Only | Missing | Errors | Worst Selected Diff Ratio | Worst Raw Diff Ratio | Worst Channel Delta |",
+                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
                 ]
             )
             for item in category_summary:
@@ -878,6 +881,7 @@ def write_reports(
                             format_count(item.get("compared")),
                             format_count(item.get("passed")),
                             format_count(item.get("failed")),
+                            format_count(item.get("reportOnly")),
                             format_count(item.get("missing")),
                             format_count(item.get("errors")),
                             f"{worst_ratio:.6f}" if isinstance(worst_ratio, (int, float)) else "-",
@@ -909,7 +913,11 @@ def write_reports(
                         item.get("profile", "-"),
                         item.get("targetBackend", "-"),
                         item.get("canvaskitSurface") or "-",
-                        "yes" if item.get("passed") else "no",
+                        (
+                            "report-only"
+                            if item.get("passMetric") == "reportOnly"
+                            else "yes" if item.get("passed") is True else "no"
+                        ),
                         format_count(item.get("selectedDiffPixels")),
                         f"{diff_ratio:.6f}" if isinstance(diff_ratio, (int, float)) else "-",
                         f"{tolerant_ratio:.6f}" if isinstance(tolerant_ratio, (int, float)) else "-",
@@ -933,7 +941,10 @@ def write_reports(
             item_thresholds = item.get("thresholds") or thresholds
             passed = "-"
             if "passed" in diff:
-                passed = "yes" if diff.get("passed") else "no"
+                if diff.get("passMetric") == "reportOnly":
+                    passed = "report-only"
+                else:
+                    passed = "yes" if diff.get("passed") else "no"
             diff_pixels = diff.get("selectedDiffPixels")
             diff_ratio = diff.get("selectedDiffRatio")
             tolerant_ratio = diff.get("tolerantDiffRatio")
