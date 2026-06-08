@@ -2425,11 +2425,12 @@ impl LayoutEngine {
         let mut prev_zone_y_end: f64 = 0.0;
         let mut current_zone_start_y: f64 = 0.0;
         let mut last_zone_y_offset: f64 = -1.0;
-        // [Task #866 v2 Stage 3] zone 별 단 구분선 렌더용. 페이지 단일 layout 기준의 기존
-        // build_column_separators 는 shortcut.hwp 처럼 페이지 내 다단 zone 의 ColumnDef
-        // (예: pi=2 의 2단/구분선 type=7) 를 못 보므로 zone 별로 별도 렌더가 필요.
+        // [Task #866 v2 Stage 3] zone 별 단 구분선 렌더용. 페이지 내 다단 zone 의 ColumnDef
+        // (예: pi=2 의 2단/구분선 type=7) 를 반영하고, [Task #1333] 이후 단 구분선은
+        // 이 zone emit 경로 하나에서 그린다.
         let mut prev_zone_layout_for_sep: Option<PageLayoutInfo> = None;
         let mut prev_zone_sep_y_start: f64 = 0.0;
+        let mut prev_zone_sep_full_body: bool = false;
         // [Task #853/#866] 직전 zone 의 "디자인 spacing"(1단 ColumnDef 의 `간격`, 다단은 0).
         // 한컴은 zone 전환 시 (이전 zone 디자인 spacing /2)+(새 zone /2) 만큼 세로 여백을
         // 둔다(shortcut.hwp 1쪽 헤더 띠 ColumnDef 간격=10mm → 제목↔헤더 5mm, 헤더↔본문 5mm).
@@ -2479,12 +2480,17 @@ impl LayoutEngine {
             if is_new_zone {
                 // 직전 zone 의 단 구분선 emit (있다면).
                 if let Some(pz) = prev_zone_layout_for_sep.take() {
+                    let sep_y_end = if prev_zone_sep_full_body {
+                        pz.body_area.y + pz.body_area.height
+                    } else {
+                        prev_zone_y_end
+                    };
                     self.emit_zone_column_separators(
                         tree,
                         body_node,
                         &pz,
                         prev_zone_sep_y_start,
-                        prev_zone_y_end,
+                        sep_y_end,
                     );
                 }
                 // 새 zone 의 디자인 spacing = 이 zone 첫 paragraph 의 ColumnDef `간격`(1단 한정).
@@ -2553,16 +2559,17 @@ impl LayoutEngine {
                             .unwrap_or(false));
                 last_zone_y_offset = col_content.zone_y_offset;
                 // 본 zone 이 다단 + 구분선 보유 시 종료 시점에 emit 하기 위해 기록.
-                // [Task #1333 v2] zone emit(emit_zone_column_separators)이 단 구분선의 단일
-                // 경로다. zone_layout=None(초기 단정의·연속 페이지)은 unwrap_or(layout)로
-                // page layout 을 따르며, 콘텐츠가 채워진 높이까지만 구분선을 그린다(한컴 정합).
-                // 과거의 page-level build_column_separators(전체높이 고정)는 부분 페이지에서
-                // 구분선을 과도하게 길게 그려 제거됨.
+                // [Task #1333] zone emit(emit_zone_column_separators)이 단 구분선의 단일
+                // 경로다. zone_layout=None(초기 단정의·연속 페이지)은 page layout 을 따르며
+                // body 전체 높이를 사용한다. zone_layout=Some(페이지 내부 zone 전환)만 콘텐츠
+                // 높이를 사용해 shortcut.hwp 같은 혼합 zone 의 부분 구분선 정합을 유지한다.
                 if zone_layout.column_areas.len() >= 2 && zone_layout.separator_type > 0 {
                     prev_zone_layout_for_sep = Some(zone_layout.clone());
                     prev_zone_sep_y_start = current_zone_start_y.max(zone_layout.body_area.y);
+                    prev_zone_sep_full_body = col_content.zone_layout.is_none();
                 } else {
                     prev_zone_layout_for_sep = None;
+                    prev_zone_sep_full_body = false;
                 }
             }
 
@@ -2724,18 +2731,23 @@ impl LayoutEngine {
 
         // 마지막 zone 의 단 구분선 emit.
         if let Some(pz) = prev_zone_layout_for_sep.take() {
+            let sep_y_end = if prev_zone_sep_full_body {
+                pz.body_area.y + pz.body_area.height
+            } else {
+                prev_zone_y_end
+            };
             self.emit_zone_column_separators(
                 tree,
                 body_node,
                 &pz,
                 prev_zone_sep_y_start,
-                prev_zone_y_end,
+                sep_y_end,
             );
         }
     }
 
     /// [Task #866 v2 Stage 3] 단일 zone 의 단 구분선을 emit.
-    /// page 전역 build_column_separators 와 동일 모양이나 zone_layout 기준 + y 범위 인자 지정.
+    /// zone_layout 기준 + y 범위 인자로 단 구분선을 그린다.
     fn emit_zone_column_separators(
         &self,
         tree: &mut PageRenderTree,
