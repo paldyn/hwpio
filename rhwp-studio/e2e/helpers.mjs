@@ -89,11 +89,8 @@ function sampleFetchPath(filename) {
 /** CLI 인수에서 --mode=host|headless 파싱 */
 function parseMode() {
   const modeArg = process.argv.find(a => a.startsWith('--mode='));
-  const mode = modeArg ? modeArg.split('=')[1] : 'host';
-  if (mode !== 'host' && mode !== 'headless') {
-    throw new Error(`unsupported browser mode: ${mode} (allowed: host, headless)`);
-  }
-  return mode;
+  if (modeArg) return modeArg.split('=')[1];
+  return 'host';
 }
 
 const MODE = parseMode();
@@ -401,15 +398,12 @@ export async function comparePngBuffers(expectedBuffer, actualBuffer, {
   const meanAbsChannelDelta = totalPixels > 0 ? totalChannelDelta / (totalPixels * 4) : 0;
   const hasPixelBudget = maxDiffPixels != null;
   const hasRatioBudget = maxDiffRatio != null;
-  const hasPassBudget = hasPixelBudget || hasRatioBudget;
-  const passed = hasPassBudget
-    ? (!hasPixelBudget || rawTolerantDiffPixels <= maxDiffPixels)
-      && (!hasRatioBudget || rawTolerantDiffRatio <= maxDiffRatio)
-    : null;
+  const passed = (!hasPixelBudget || rawTolerantDiffPixels <= maxDiffPixels)
+    && (!hasRatioBudget || rawTolerantDiffRatio <= maxDiffRatio);
 
   return {
     passed,
-    passMetric: hasPassBudget ? 'tolerant' : 'reportOnly',
+    passMetric: hasPixelBudget || hasRatioBudget ? 'tolerant' : 'reportOnly',
     width: expected.width,
     height: expected.height,
     exactDiffPixels,
