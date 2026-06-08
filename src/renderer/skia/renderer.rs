@@ -7,10 +7,11 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::error::HwpError;
 use crate::model::image::ImageEffect;
 use crate::model::ColorRef;
+use crate::paint::replay_order::layer_node_has_replay_plane;
 use crate::paint::{
-    layer_node_has_replay_plane, paint_op_replay_plane_with_layer, GlyphRunOrientation,
-    GlyphRunReplayEligibility, LayerGlyphRunPaint, LayerNode, LayerNodeKind, LayerOutputOptions,
-    PageLayerTree, PaintOp, PaintReplayPlane, ResourceArena, TextVariantQuality,
+    paint_op_replay_plane_with_layer, GlyphRunOrientation, GlyphRunReplayEligibility,
+    LayerGlyphRunPaint, LayerNode, LayerNodeKind, LayerOutputOptions, PageLayerTree, PaintOp,
+    PaintReplayPlane, ResourceArena, TextVariantQuality,
 };
 use crate::renderer::layer_renderer::{
     LayerRasterRenderer, LayerRenderResult, RasterOutputFormat, RasterRenderOptions,

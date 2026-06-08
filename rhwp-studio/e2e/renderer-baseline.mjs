@@ -16,6 +16,7 @@ const DEFAULT_BROWSER_PARITY_THRESHOLDS = {
   ignoreChannelDelta: 8,
   maxDiffRatio: 0.005,
 };
+const ALLOWED_CANVASKIT_SURFACES = new Set(['auto', 'webgpu', 'webgl', 'software']);
 const BACKENDS = [
   {
     key: 'canvas2d',
@@ -210,10 +211,13 @@ if (requestedCanvasKitSurface === 'sw' || requestedCanvasKitSurface === 'cpu') {
   options.canvaskitSurface = 'software';
 } else if (requestedCanvasKitSurface === 'gpu') {
   options.canvaskitSurface = 'webgpu';
-} else if (['auto', 'webgpu', 'webgl', 'software'].includes(requestedCanvasKitSurface)) {
+} else if (ALLOWED_CANVASKIT_SURFACES.has(requestedCanvasKitSurface)) {
   options.canvaskitSurface = requestedCanvasKitSurface;
 } else {
-  options.canvaskitSurface = 'auto';
+  throw new Error(
+    `unsupported CanvasKit surface: ${options.canvaskitSurface} `
+      + `(allowed: ${[...ALLOWED_CANVASKIT_SURFACES].join(', ')}; aliases: gpu, sw, cpu)`,
+  );
 }
 const manifest = JSON.parse(fs.readFileSync(options.manifest, 'utf8'));
 const samples = normalizeSamples(manifest, options.filter);

@@ -26,9 +26,10 @@ use super::{
 };
 use crate::model::style::ImageFillMode;
 use crate::model::style::UnderlineType;
+use crate::paint::replay_order::layer_node_has_replay_plane;
 use crate::paint::{
-    layer_node_has_replay_plane, paint_op_replay_plane_with_layer, ClipKind, GroupKind, LayerNode,
-    LayerNodeKind, PageLayerTree, PaintOp, PaintReplayPlane,
+    paint_op_replay_plane_with_layer, ClipKind, GroupKind, LayerNode, LayerNodeKind, PageLayerTree,
+    PaintOp, PaintReplayPlane,
 };
 
 /// Hanyang-PUA 옛한글 코드포인트를 KS X 1026-1:2007 자모 시퀀스로 확장 (Task #528).

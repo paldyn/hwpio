@@ -120,7 +120,7 @@ async function comparePair(nativePath, canvaskitPath) {
     maxChannelDelta: diff.maxChannelDelta,
     meanAbsChannelDelta: diff.meanAbsChannelDelta,
     ignoreChannelDelta: diff.ignoreChannelDelta,
-    maxDiffRatio: DEFAULT_MAX_DIFF_RATIO,
+    maxDiffRatio: diff.maxDiffRatio,
     sizeNormalization,
   };
 }

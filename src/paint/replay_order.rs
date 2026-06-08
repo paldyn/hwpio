@@ -66,11 +66,11 @@ pub fn render_layer_replay_plane(layer: Option<RenderLayerInfo>) -> PaintReplayP
     }
 }
 
-pub fn layer_node_has_replay_plane(node: &LayerNode, target: PaintReplayPlane) -> bool {
+pub(crate) fn layer_node_has_replay_plane(node: &LayerNode, target: PaintReplayPlane) -> bool {
     layer_node_has_replay_plane_with_layer(node, target, None)
 }
 
-pub fn layer_node_has_replay_plane_with_layer(
+fn layer_node_has_replay_plane_with_layer(
     node: &LayerNode,
     target: PaintReplayPlane,
     inherited_layer: Option<RenderLayerInfo>,

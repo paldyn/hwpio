@@ -40,7 +40,13 @@ function resolveChromePath() {
   const candidates = [];
   while (stack.length) {
     const current = stack.pop();
-    for (const entry of readdirSync(current, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = readdirSync(current, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
       const candidate = path.join(current, entry.name);
       if (entry.isDirectory()) {
         stack.push(candidate);
@@ -327,11 +333,10 @@ export async function comparePngBuffers(expectedBuffer, actualBuffer, {
     throw new Error(`이미지 크기 불일치: ${expected.width}x${expected.height} vs ${actual.width}x${actual.height}`);
   }
 
-  const exactDiff = new PNG({ width: expected.width, height: expected.height });
   const exactDiffPixels = pixelmatch(
     expected.data,
     actual.data,
-    exactDiff.data,
+    null,
     expected.width,
     expected.height,
     { threshold, includeAA: true },
@@ -376,6 +381,9 @@ export async function comparePngBuffers(expectedBuffer, actualBuffer, {
     diffRatio: rawTolerantDiffRatio,
     maxChannelDelta,
     meanAbsChannelDelta,
+    ignoreChannelDelta,
+    maxDiffPixels,
+    maxDiffRatio,
   };
 }
 
