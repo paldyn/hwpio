@@ -97,7 +97,9 @@ git diff --check
 Safari/Firefox, 미설치 일반 브라우저 탭, 네이티브 OS registry 직접 제어는 이번
 범위가 아니다.
 
-## 6. 후속 절차
+## 6. 후속 절차 결과
 
-커밋 후 프로젝트 git workflow에 따라 `local/devel` / `devel` 반영, 검증, 이슈 close
-절차를 진행한다. 이슈 close는 작업지시자 승인 후 수행한다.
+- task 브랜치 커밋: `ac31cb99`
+- `local/devel` no-ff 병합: `5b9e08cc`
+- `devel` no-ff 병합 및 push: `91531bb7`
+- GitHub Issue #1341 close: completed, closedAt `2026-06-09T03:18:48Z`
