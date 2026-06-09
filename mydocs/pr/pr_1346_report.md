@@ -11,6 +11,8 @@
 | 통합 방식 | 현재 `local/devel` 기준 non-merge commit cherry-pick |
 | 원 PR head | `58168282` |
 | 반영 커밋 | `b5edc1db`, `4fb6a74f`, `d5aa4ebc` |
+| devel merge | `2bc411f4` |
+| PR close | `2026-06-09T23:53:48Z` |
 
 ## 2. 처리 내용
 
@@ -91,11 +93,11 @@ PageLayerTree option metadata 분리는 의미상 타당하다. `clipEnabled`와
 
 ## 6. 후속 절차
 
-보고서 승인 후 진행 대상:
+처리 완료:
 
-- [ ] `mydocs/pr/pr_1346_report.md` 및 주문서 갱신 커밋
-- [ ] `local/devel` → `devel` no-ff merge
-- [ ] `origin/devel` push
-- [ ] PR #1346에 처리 코멘트 작성
-- [ ] PR #1346 close
-- [ ] 관련 이슈 #536은 tracking issue이므로 close하지 않음
+- [x] `mydocs/pr/pr_1346_report.md` 및 주문서 갱신 커밋 — `fd734a48`
+- [x] `local/devel` → `devel` no-ff merge — `2bc411f4`
+- [x] `origin/devel` push — `2bc411f4`
+- [x] PR #1346에 처리 코멘트 작성 — https://github.com/edwardkim/rhwp/pull/1346#issuecomment-4665140905
+- [x] PR #1346 close — `2026-06-09T23:53:48Z`
+- [x] 관련 이슈 #536은 tracking issue이므로 close하지 않음
