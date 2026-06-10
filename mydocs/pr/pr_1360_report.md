@@ -11,9 +11,9 @@
 | 통합 방식 | 현재 `origin/devel` 기준 PR 단일 커밋 cherry-pick 검증 |
 | 원 PR head | `f41314e8` |
 | 반영 커밋 | `a547909e` |
-| 문서 정리 커밋 | 예정 |
-| PR close | 예정 |
-| Issue #1353 close | 예정 |
+| 문서 정리 커밋 | `1f98b1b6` |
+| PR close | `2026-06-10T15:51:04Z` |
+| Issue #1353 close | `2026-06-10T15:51:52Z` |
 
 ## 2. 처리 내용
 
@@ -81,7 +81,9 @@ GitHub checks:
 - [x] 작업지시자 승인
 - [x] `local/devel`에 PR 커밋 반영 — `a547909e`
 - [x] 최종 로컬 검증
-- [ ] 문서 정리 커밋
-- [ ] `origin/devel` push
-- [ ] PR #1360에 메인테이너 코멘트 작성 후 close
-- [ ] Issue #1353 처리 코멘트 작성 후 close
+- [x] 문서 정리 커밋 — `1f98b1b6`
+- [x] `origin/devel` push — `1f98b1b6`
+- [x] PR #1360에 메인테이너 코멘트 작성 — https://github.com/edwardkim/rhwp/pull/1360#issuecomment-4671961670
+- [x] PR #1360 close — `2026-06-10T15:51:04Z`
+- [x] Issue #1353 처리 코멘트 작성 — https://github.com/edwardkim/rhwp/issues/1353#issuecomment-4671967110
+- [x] Issue #1353 completed close — `2026-06-10T15:51:52Z`
