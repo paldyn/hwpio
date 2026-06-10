@@ -11,6 +11,9 @@
 | 통합 방식 | 현재 `origin/devel` 기준 PR 단일 커밋 cherry-pick 검증 |
 | 원 PR head | `5ffa0f1b` |
 | 반영 커밋 | `6918f2e0` |
+| 문서 정리 커밋 | `0950eb41` |
+| PR close | `2026-06-10T14:56:59Z` |
+| Issue #1357 close | `2026-06-10T14:57:03Z` |
 
 ## 2. 처리 내용
 
@@ -90,10 +93,12 @@ sweep가 확인한 주요 잔여:
 - #1357의 근본 해결은 아니다.
 - Issue #1357을 닫을 경우 "해결 완료"가 아니라 "바운드 추적으로 전환 / 후속 대형 타스크 분리"로 설명해야 한다.
 
-## 5. 남은 절차
+## 5. 후속 절차
 
-1. `local/devel` 문서 정리 커밋
-2. `origin/devel` push
-3. PR #1358에 메인테이너 코멘트 작성
-4. PR #1358 close
-5. Issue #1357은 deferred-tracked 설명과 함께 close 처리
+처리 완료:
+
+- [x] `local/devel` 문서 정리 커밋 — `0950eb41`
+- [x] `origin/devel` push — `0950eb41`
+- [x] PR #1358에 메인테이너 코멘트 작성 — https://github.com/edwardkim/rhwp/pull/1358#issuecomment-4671568633
+- [x] PR #1358 close — `2026-06-10T14:56:59Z`
+- [x] Issue #1357 deferred-tracked 설명과 함께 close — `2026-06-10T14:57:03Z`
