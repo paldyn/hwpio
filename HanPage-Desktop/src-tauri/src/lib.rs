@@ -323,6 +323,10 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }));
+
+        // [Task #26] updater: 새 릴리스 확인/다운로드/설치 (desktop 전용).
+        // 시작 시 자동 확인·메뉴 핸들러는 Stage 2 에서 추가한다.
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
 
     builder
