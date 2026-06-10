@@ -13,8 +13,8 @@
 | 검토 브랜치 | `local/pr1364-merge-test` |
 | 원 PR head | `17d6f445` |
 | 반영 커밋 | `2093c5dd`, `543e9edc`, `77d0b618` |
-| 문서 정리 커밋 | 예정 |
-| PR close | 예정 |
+| 문서 정리 커밋 | `ceb5ce51` |
+| PR close | `2026-06-10T16:28:47Z` |
 
 ## 2. 처리 내용
 
@@ -112,6 +112,7 @@ GitHub checks:
 - [x] `local/devel`에 PR 커밋 3개 반영
 - [x] devel 충돌 해결
 - [x] 최종 로컬 검증
-- [ ] 문서 정리 커밋
-- [ ] `origin/devel` push
-- [ ] PR #1364에 메인테이너 코멘트 작성 후 close
+- [x] 문서 정리 커밋 — `ceb5ce51`
+- [x] `origin/devel` push — `ceb5ce51`
+- [x] PR #1364에 메인테이너 코멘트 작성 — https://github.com/edwardkim/rhwp/pull/1364#issuecomment-4672215550
+- [x] PR #1364 close — `2026-06-10T16:28:47Z`
