@@ -187,6 +187,33 @@ fn test_serialize_char_shape_roundtrip() {
 }
 
 #[test]
+fn test_serialize_char_shape_use_font_space_bit() {
+    let mut cs = CharShape {
+        base_size: 1000,
+        ratios: [100; 7],
+        relative_sizes: [100; 7],
+        shade_color: 0x00FFFFFF,
+        shadow_color: 0x00B2B2B2,
+        use_font_space: true,
+        ..Default::default()
+    };
+
+    let data = serialize_char_shape(&cs);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+    r.skip(14 + 7 + 7 + 7 + 7 + 4).unwrap();
+    let attr = r.read_u32().unwrap();
+    assert_ne!(attr & (1 << 25), 0);
+
+    cs.attr = 1 << 25;
+    cs.use_font_space = false;
+    let data = serialize_char_shape(&cs);
+    let mut r = crate::parser::byte_reader::ByteReader::new(&data);
+    r.skip(14 + 7 + 7 + 7 + 7 + 4).unwrap();
+    let attr = r.read_u32().unwrap();
+    assert_eq!(attr & (1 << 25), 0);
+}
+
+#[test]
 fn test_serialize_para_shape_roundtrip() {
     let ps = ParaShape {
         raw_data: None,
