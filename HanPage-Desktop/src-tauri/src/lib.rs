@@ -161,8 +161,11 @@ fn build_app_menu(
     recent: &[RecentEntry],
 ) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     // 앱 메뉴(macOS): About / Quit (cross-platform predefined 만 사용).
+    // [Task #26] 업데이트 수동 확인 (macOS 네이티브 메뉴).
+    let check_update = MenuItemBuilder::with_id("app:check-update", "업데이트 확인").build(app)?;
     let app_menu = SubmenuBuilder::new(app, "HanPage")
         .about(None)
+        .item(&check_update)
         .separator()
         .quit()
         .build()?;
@@ -299,6 +302,71 @@ fn cmd_take_pending_documents(state: tauri::State<'_, PendingDocuments>) -> Vec<
         .unwrap_or_default()
 }
 
+/// [Task #26] 업데이트 확인·설치 (desktop 전용).
+/// - `manual=false`(시작 시): 새 버전이면 알림, 최신/오류는 조용히(로그만).
+/// - `manual=true`(메뉴): 최신·오류도 대화상자로 안내.
+#[cfg(desktop)]
+async fn check_update(app: tauri::AppHandle, manual: bool) {
+    use tauri_plugin_dialog::MessageDialogButtons;
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = match app.updater() {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("[updater] 초기화 실패: {e}");
+            return;
+        }
+    };
+    match updater.check().await {
+        Ok(Some(update)) => {
+            let ver = update.version.clone();
+            let app2 = app.clone();
+            app.dialog()
+                .message(format!(
+                    "새 버전 {ver} 이(가) 있습니다.\n지금 설치하면 내려받은 뒤 자동으로 다시 시작됩니다."
+                ))
+                .title("업데이트 있음")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "지금 설치".to_string(),
+                    "나중에".to_string(),
+                ))
+                .show(move |install| {
+                    if !install {
+                        return;
+                    }
+                    tauri::async_runtime::spawn(async move {
+                        match update.download_and_install(|_, _| {}, || {}).await {
+                            Ok(_) => app2.restart(),
+                            Err(e) => {
+                                app2.dialog()
+                                    .message(format!("업데이트 설치에 실패했습니다: {e}"))
+                                    .title("업데이트")
+                                    .show(|_| {});
+                            }
+                        }
+                    });
+                });
+        }
+        Ok(None) => {
+            if manual {
+                app.dialog()
+                    .message("이미 최신 버전입니다.")
+                    .title("업데이트")
+                    .show(|_| {});
+            }
+        }
+        Err(e) => {
+            eprintln!("[updater] 확인 실패: {e}");
+            if manual {
+                app.dialog()
+                    .message(format!("업데이트 확인에 실패했습니다: {e}"))
+                    .title("업데이트")
+                    .show(|_| {});
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default();
@@ -335,6 +403,12 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             app.manage(PendingDocuments::default());
+            // [Task #26] 시작 시 백그라운드 업데이트 확인(조용히; 새 버전이면 알림).
+            #[cfg(desktop)]
+            {
+                let h = app.handle().clone();
+                tauri::async_runtime::spawn(check_update(h, false));
+            }
             // 네이티브 메뉴는 macOS 시스템 메뉴바 전용. Win/Linux 는 창 내부에 그려져
             // 웹 UI 메뉴(#menu-bar)와 중복되므로 부착하지 않는다(이슈 #7).
             #[cfg(target_os = "macos")]
@@ -350,6 +424,13 @@ pub fn run() {
             if let Some(path) = id.strip_prefix("recent:") {
                 if path != "__none__" {
                     open_path(app, PathBuf::from(path));
+                }
+            } else if id == "app:check-update" {
+                // [Task #26] 메뉴 수동 확인 — 최신/오류도 안내(manual=true).
+                #[cfg(desktop)]
+                {
+                    let h = app.clone();
+                    tauri::async_runtime::spawn(check_update(h, true));
                 }
             } else {
                 // 사용자 정의 항목 id = rhwp-studio 커맨드 id → 웹뷰 브리지가 dispatch.
