@@ -97,4 +97,26 @@ git push --force-with-lease origin devel
 - 계획서: `plans/task_m100_hp23.md`·`plans/task_m100_hp23_impl.md`
 - 단계 보고서: `working/task_m100_hp23_stage{1,2,3,4}.md`
 - 최종 보고서: 본 문서
-- product 브랜치: `local/task23-rebase`(devel 후보)
+- product 브랜치: `local/task23-rebase` → **`devel` 반영 완료**(origin/devel=`64cd919d`)
+
+## 11. devel 반영 결과 (실행 완료)
+
+승인 후 force-push 실행. 단, 실행 중 **pdf-large LFS 블로커**가 발견되어 추가 처리함.
+
+### 11-1. pdf-large LFS 블로커와 해소
+- **증상**: candidate가 upstream에서 물려받은 `pdf-large/*.pdf`(11 LFS 객체) 때문에 push가 GH008로 거부.
+- **원인**: ① upstream(edwardkim/rhwp) **LFS 예산 초과**로 객체 획득 불가 ② paldyn LFS에도 없음 ③ paldyn main·devel은 애초에 pdf-large 미보유(LFS 히스토리 0). 즉 upstream 실제 커밋을 공유하려면 그 LFS 객체가 필요하나 영구 불가.
+- **해소**: `git filter-repo --invert-paths --path pdf-large --refs local/task23-rebase`로 candidate 히스토리에서 pdf-large를 제거(3070커밋 재작성, paldyn main/devel과 동일 자세). 엔진 src·브랜딩·데스크톱·mydocs 전부 보존(필터 전후 HEAD 트리 동일 확인).
+
+### 11-2. 반영 절차 (실행됨)
+1. 백업 태그 `backup/devel-pre-task23`(`5b70c294`) 생성 + **원격 푸시**(내구성) + 번들 백업(278M).
+2. `git push --force-with-lease=devel:5b70c294 origin local/task23-rebase:devel` → `5b70c294...64cd919d (forced update)`.
+3. 로컬 `devel` 동기화 + 원격 검증.
+
+### 11-3. 반영 검증 (origin/devel = `64cd919d`)
+- 엔진 `src/` diff vs upstream `f6ffe9d6` = **0** · `HanPage-Desktop/` 28 · 구 `rhwp-desktop/` 0(해소) · `pdf-large/` 0 · `CNAME`=hanpage.paldyn.com · crate `rhwp` 보존.
+
+### 11-4. 한계·후속
+- **merge-base 영향**: pdf-large 히스토리 제거로 재작성된 996커밋만큼 upstream과 해시 불일치 → future merge-base=`fe4676c3^`(2026-05-10). 향후 `git merge upstream/devel` 시 pdf-large가 재유입되므로 매 동기화 시 제거 필요. (upstream LFS 예산이 풀리거나 paldyn이 pdf-large를 자체 호스팅하면 근본 해소.)
+- **롤백**: `git push --force-with-lease origin backup/devel-pre-task23:devel` (또는 번들 복원).
+- **이슈 클로즈**: 작업지시자 승인 후.
