@@ -1,0 +1,96 @@
+# HWPX Roundtrip Baseline 가이드 (Task #1315)
+
+`samples/hwpx/` 전수에 대한 HWPX→IR→HWPX roundtrip 검증 체계의 사용·유지보수 매뉴얼.
+
+## 1. 개요
+
+HWPX serializer의 **구조(뼈대) 보존**을 회귀 게이트로 고정한다. 검증 기준:
+
+1. parse → serialize → 재parse 성공
+2. `diff_documents(doc1, doc2)` == 0 (IR 뼈대 비교)
+3. `check_package()` 통과 — 패키지(ZIP) 구조 규약
+4. 2-round 안정성 — 재직렬화 → 재파싱 후 `diff_documents(doc2, doc3)` == 0
+
+> **중요**: baseline 통과 = 시각 충실도 보장이 **아니다**. `diff_documents`는 섹션 수·문단 수·
+> DocInfo 리소스 수·BinData 수만 비교한다. 문단 내부 컨트롤 수/내용, lineseg 값은 비교하지
+> 않으므로 셀 내 그림 소실·페이지 수 변화도 baseline을 통과할 수 있다 (4단계 보고서 실증).
+> 시각 판정 권위는 작업지시자(한컴에디터)에게 있다.
+
+## 2. 등급 체계
+
+| 등급 | 의미 | 코드 위치 |
+|------|------|----------|
+| **A (baseline)** | 위 4개 기준 전부 통과. 신규 샘플 자동 포함 | `tests/hwpx_roundtrip_baseline.rs` 기본 대상 |
+| **B (xfail)** | 식별된 결함/미지원으로 baseline 제외. 사유 필수 | `XFAIL` 상수 |
+| **제외** | 샘플 자체가 HWPX가 아님 (serializer 결함 아님) | `EXCLUDED` 상수 |
+| **C (oracle 부적합)** | A이지만 full visual fidelity oracle 금지 (복합 실문서) | `ORACLE_UNFIT` 상수 |
+
+현황 (2026-06-11, .hwpx 54건): A=52, B=1(`exam_social.hwpx`), 제외=1(`hwpx-01.hwpx`), C=13(A의 부분집합).
+
+## 3. 통합 테스트 (`tests/hwpx_roundtrip_baseline.rs`)
+
+```bash
+cargo test --test hwpx_roundtrip_baseline    # debug 기준 약 1분
+```
+
+| 테스트 | 역할 |
+|--------|------|
+| `baseline_all_samples_roundtrip` | 전수 재귀 스캔 (XFAIL/EXCLUDED/LARGE 제외) — **신규 샘플 자동 포함** |
+| `baseline_large_samples_roundtrip` | 대형 3건(`LARGE`) 분리 — 하네스 병렬 실행으로 wall time 단축 |
+| `xfail_entries_still_fail` | xfail이 통과하게 되면 실패 → baseline 승격 강제 |
+| `grade_lists_are_consistent` | EXCLUDED/ORACLE_UNFIT 실재 + ORACLE_UNFIT ⊂ baseline 가드 |
+
+### 신규 샘플 추가 시
+
+`samples/hwpx/`에 `.hwpx`를 추가하면 자동으로 baseline 게이트에 포함된다.
+
+- 통과 → 끝 (A등급)
+- 실패 → 결함을 수정하거나, **사유와 함께** `XFAIL`에 등록 (사유 없는 등록 금지)
+- HWPX가 아닌 파일 → `EXCLUDED`에 등록
+- 복합 실문서 → A등급이어도 `ORACLE_UNFIT`에 추가 검토 (시각 판정은 작업지시자)
+
+### xfail 승격 절차
+
+serializer 결함이 해소되면 `xfail_entries_still_fail`이 실패한다.
+해당 항목을 `XFAIL`에서 제거하면 baseline으로 자동 승격된다.
+
+## 4. 배치 CLI (`rhwp hwpx-roundtrip`)
+
+```bash
+rhwp hwpx-roundtrip sample.hwpx                          # 단일 파일 검사
+rhwp hwpx-roundtrip --batch samples/hwpx                 # 폴더 전수 (재귀)
+rhwp hwpx-roundtrip --batch samples/hwpx -o output/poc/task1315   # 산출물 지정
+```
+
+- 산출물: `{out}/inventory.tsv` (13컬럼) + `{out}/{stem}.rt.hwpx` (재조립 파일)
+- 상태 우선순위: `PARSE_FAIL → SERIALIZE_FAIL → REPARSE_FAIL → IR_DIFF → PKG_FAIL → ROUND2_FAIL → ROUND2_DIFF → PASS`
+- 하드 실패 존재 시 종료 코드 1 (CI 사용 가능)
+
+## 5. 패키지 검사 (`check_package`)
+
+`src/serializer/hwpx/package_check.rs` — 재조립 ZIP을 IR 기준으로 검사:
+
+1. ZIP 아카이브로 열림
+2. `mimetype` — 최초 엔트리 + STORED + `application/hwp+zip`
+3. 필수 엔트리 9종 (version.xml, header.xml, content.hpf, Preview 2종, settings.xml, META-INF 3종)
+4. `Contents/section{N}.xml` 수 = IR 섹션 수
+5. `content.hpf` manifest href 전부 실재
+6. `BinData/` 수·확장자 멀티셋 = IR `bin_data_content` (serializer가 href를 재명명하므로 이름 비교 금지)
+
+## 6. Known limitations (별도 이슈 후보, 4단계 보고서)
+
+| 한계 | 증상 |
+|------|------|
+| 셀 subList 텍스트 전용 직렬화 (`table.rs` `write_sub_list`) | 셀 내 그림/컨트롤 소실 + 합성 lineseg |
+| 본문 lineseg 보존 불완전 | 페이지 수 변화 (form-002 10→17쪽, 보도자료 9→13쪽), 1~2px 시프트 |
+| `exam_social.hwpx` borderFillIDRef 31 미등록 | SERIALIZE_FAIL — xfail 등록됨 |
+
+시각 검증 자료: `output/poc/task1315/svg/` (대표 8건 원본·rt SVG쌍),
+rhwp-studio 로드 검증: `rhwp-studio/e2e/task1315-load.check.mjs` (호스트 Chrome CDP).
+
+## 7. 관련 문서
+
+- 수행/구현 계획: `mydocs/plans/task_m100_1315.md`, `task_m100_1315_impl.md`
+- 단계별 보고서: `mydocs/working/task_m100_1315_stage{1..4}.md`
+- 최종 보고서: `mydocs/report/task_m100_1315_report.md`
+- 트러블슈팅: `mydocs/troubleshootings/hwpx_lineseg_reflow_trap.md` (2-round 검사의 배경)
