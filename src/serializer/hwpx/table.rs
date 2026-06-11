@@ -35,7 +35,7 @@ use crate::model::shape::{
 use crate::model::table::{Cell, Table, TablePageBreak, VerticalAlign};
 
 use super::context::SerializeContext;
-use super::section::render_hp_t_content;
+use super::section::render_text_runs;
 use super::utils::{empty_tag, end_tag, start_tag, start_tag_attrs};
 use super::SerializeError;
 
@@ -247,13 +247,11 @@ fn write_sub_list<W: Write>(
         ],
     )?;
 
-    // 셀 내부 문단 재귀 — 각 문단은 간단한 <hp:p><hp:run><hp:t>텍스트</hp:t></hp:run></hp:p> 구조
+    // 셀 내부 문단 재귀 — 텍스트를 char_shapes 경계로 run 분할 출력 (#1378 3단계).
+    // 컨트롤 슬롯 출력은 #1379 범위.
     for para in cell.paragraphs.iter() {
         ctx.para_shape_ids.reference(para.para_shape_id);
         ctx.style_ids.reference(para.style_id as u16);
-        if let Some(cs_ref) = para.char_shapes.first() {
-            ctx.char_shape_ids.reference(cs_ref.char_shape_id);
-        }
 
         let pi_str = ctx.next_para_id().to_string();
         let ppr = para.para_shape_id.to_string();
@@ -271,15 +269,10 @@ fn write_sub_list<W: Write>(
             ],
         )?;
 
-        let cs = para
-            .char_shapes
-            .first()
-            .map(|r| r.char_shape_id)
-            .unwrap_or(0);
-        let cs_str = cs.to_string();
-        start_tag_attrs(w, "hp:run", &[("charPrIDRef", &cs_str)])?;
-        write_cell_text(w, &para.text, &para.tab_extended)?;
-        end_tag(w, "hp:run")?;
+        let runs = render_text_runs(para, ctx);
+        w.get_mut()
+            .write_all(runs.as_bytes())
+            .map_err(|e| SerializeError::XmlError(e.to_string()))?;
 
         // <hp:linesegarray> 최소 1개 lineseg
         start_tag(w, "hp:linesegarray")?;
@@ -305,19 +298,6 @@ fn write_sub_list<W: Write>(
     }
 
     end_tag(w, "hp:subList")?;
-    Ok(())
-}
-
-fn write_cell_text<W: Write>(
-    w: &mut Writer<W>,
-    text: &str,
-    tab_extended: &[[u16; 7]],
-) -> Result<(), SerializeError> {
-    let mut tab_idx = 0usize;
-    let xml = render_hp_t_content(text, tab_extended, &mut tab_idx);
-    w.get_mut()
-        .write_all(xml.as_bytes())
-        .map_err(|e| SerializeError::XmlError(e.to_string()))?;
     Ok(())
 }
 
@@ -476,6 +456,13 @@ mod tests {
         let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
         write_table(&mut w, table, &mut ctx).expect("write_table");
         String::from_utf8(w.into_inner()).unwrap()
+    }
+
+    fn cs(start_pos: u32, char_shape_id: u32) -> crate::model::paragraph::CharShapeRef {
+        crate::model::paragraph::CharShapeRef {
+            start_pos,
+            char_shape_id,
+        }
     }
 
     #[test]
@@ -698,6 +685,71 @@ mod tests {
                 r#"<hp:t>A<hp:tab width="2000" leader="0" type="1"/>B<hp:lineBreak/>C</hp:t>"#
             ),
             "cell text must emit hp:tab/hp:lineBreak instead of raw control chars: {}",
+            xml
+        );
+    }
+
+    #[test]
+    fn task1378_cell_paragraph_multi_run_split() {
+        // 셀 문단 다중 char_shapes → 경계 기준 다중 run 분할 (#1378 3단계).
+        let mut t = empty_table(1, 1);
+        {
+            let para = &mut t.cells[0].paragraphs[0];
+            para.text = "abcd".to_string();
+            para.char_offsets = vec![0, 1, 2, 3];
+            para.char_count = 5;
+            para.char_shapes = vec![cs(0, 1), cs(2, 2)];
+        }
+        let xml = serialize(&t);
+        assert!(
+            xml.contains(
+                r#"<hp:run charPrIDRef="1"><hp:t>ab</hp:t></hp:run><hp:run charPrIDRef="2"><hp:t>cd</hp:t></hp:run>"#
+            ),
+            "셀 문단이 경계에서 2 run 으로 분할되어야 함: {}",
+            xml
+        );
+    }
+
+    #[test]
+    fn task1378_cell_boundary_with_control_gap_offsets() {
+        // IR 내 컨트롤(8 유닛 갭)이 있어도 char_offsets 매핑으로 경계 위치가
+        // 어긋나지 않는다 (컨트롤 자체의 출력은 #1379 범위).
+        let mut t = empty_table(1, 1);
+        {
+            let para = &mut t.cells[0].paragraphs[0];
+            para.text = "abcd".to_string();
+            para.char_offsets = vec![0, 1, 10, 11];
+            para.char_count = 13;
+            para.char_shapes = vec![cs(0, 1), cs(10, 2)];
+        }
+        let xml = serialize(&t);
+        assert!(
+            xml.contains(
+                r#"<hp:run charPrIDRef="1"><hp:t>ab</hp:t></hp:run><hp:run charPrIDRef="2"><hp:t>cd</hp:t></hp:run>"#
+            ),
+            "경계(pos=10)가 컨트롤 갭 뒤 'c' 앞에 떨어져야 함: {}",
+            xml
+        );
+    }
+
+    #[test]
+    fn task1378_cell_tab_in_split_runs() {
+        // 탭 포함 셀 문단 run 분할 — 탭은 첫 run 에, 분할 텍스트는 새 run 에.
+        let mut t = empty_table(1, 1);
+        {
+            let para = &mut t.cells[0].paragraphs[0];
+            para.text = "a\tb".to_string();
+            para.char_offsets = vec![0, 1, 2];
+            para.char_count = 4;
+            para.char_shapes = vec![cs(0, 1), cs(2, 2)];
+            para.tab_extended = vec![[2000, 0, 0x0100, 0, 0, 0, 0]];
+        }
+        let xml = serialize(&t);
+        assert!(
+            xml.contains(
+                r#"<hp:run charPrIDRef="1"><hp:t>a<hp:tab width="2000" leader="0" type="1"/></hp:t></hp:run><hp:run charPrIDRef="2"><hp:t>b</hp:t></hp:run>"#
+            ),
+            "탭 포함 분할: run1=a+tab, run2=b 여야 함: {}",
             xml
         );
     }
