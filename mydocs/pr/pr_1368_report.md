@@ -14,6 +14,10 @@
 | 통합 방식 | PR 커밋 6개 cherry-pick + maintainer fix + contributor 문서 archive 정리 |
 | 리뷰 문서 커밋 | `eb54d714` |
 | 정리 커밋 | `5a087891` |
+| 처리 보고서 커밋 | `6b4d635b` |
+| devel merge | `5c79fde9` |
+| PR 처리 코멘트 | https://github.com/edwardkim/rhwp/pull/1368#issuecomment-4677353807 |
+| PR close | `2026-06-11T05:05:45Z` |
 | 처리 판정 | 조건부 수용 가능 |
 | #1363 처리 | 즉시 close 보류 |
 | 후속 PR | #1371 — 측정 SSOT A3 opt-in |
@@ -153,11 +157,11 @@ v1 부분 개선으로 수용할 수 있다.
 
 ## 7. 후속 절차
 
-처리 보고서 승인 후 진행:
+처리 완료:
 
-- [ ] `mydocs/pr/pr_1368_report.md` 및 주문서 갱신 커밋
-- [ ] `local/devel`을 `devel`에 no-ff merge
-- [ ] `origin/devel` push
-- [ ] PR #1368에 처리 코멘트 작성
-- [ ] PR #1368 close
-- [ ] #1363 close 보류, 잔여는 PR #1371에서 검토
+- [x] `mydocs/pr/pr_1368_report.md` 및 주문서 갱신 커밋 — `6b4d635b`
+- [x] `local/devel`을 `devel`에 no-ff merge — `5c79fde9`
+- [x] `origin/devel` push — `5c79fde9`
+- [x] PR #1368에 처리 코멘트 작성 — https://github.com/edwardkim/rhwp/pull/1368#issuecomment-4677353807
+- [x] PR #1368 close — `2026-06-11T05:05:45Z`
+- [x] #1363 close 보류, 잔여는 PR #1371에서 검토
