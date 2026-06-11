@@ -15,7 +15,10 @@
 | 통합 방식 | PR 커밋 6개 cherry-pick + contributor 문서 archive 정리 |
 | 리뷰 문서 커밋 | `f57a5028` |
 | 문서 정리 커밋 | `d12b9637` |
-| PR 처리 상태 | 최종 승인 대기 |
+| 처리 보고서 커밋 | `3188adcb` |
+| devel merge | `3c13532f` |
+| PR close | `2026-06-11T00:20:08Z` |
+| Issue #1323 close | `2026-06-11T00:20:21Z` |
 
 ## 2. 처리 내용
 
@@ -120,12 +123,13 @@ round-trip·SVG 이미지 방출까지 회귀 테스트가 보강되어 있다.
 
 ## 6. 후속 절차
 
-작업지시자 처리 보고서 승인 후 진행할 절차:
+처리 완료:
 
-- [ ] `mydocs/pr/pr_1367_report.md` 및 주문서 갱신 커밋
-- [ ] `local/devel`을 `devel`에 no-ff merge
-- [ ] `origin/devel` push
-- [ ] PR #1367에 처리 코멘트 작성
-- [ ] PR #1367 close
-- [ ] Issue #1323 close
-- [ ] 필요 시 `mydocs/pr/pr_1367_review.md`, `mydocs/pr/pr_1367_report.md`를 `mydocs/pr/archives/`로 이동
+- [x] `mydocs/pr/pr_1367_report.md` 및 주문서 갱신 커밋 — `3188adcb`
+- [x] `local/devel`을 `devel`에 no-ff merge — `3c13532f`
+- [x] `origin/devel` push — `3c13532f`
+- [x] PR #1367에 처리 코멘트 작성
+- [x] PR #1367 close — `2026-06-11T00:20:08Z`
+- [x] Issue #1323 close — `2026-06-11T00:20:21Z`
+
+PR 검토/처리 문서는 현재 `mydocs/pr/`에 유지한다.
