@@ -310,6 +310,51 @@ fn emit_field_end(out: &mut String, para: &Paragraph, control_idx: usize) {
     }
 }
 
+/// 문단 텍스트 전체를 char_shapes 경계로 분할하며 `splitter` 에 누적한다.
+///
+/// `char_offsets` 로 문자 idx → UTF-16 위치를 매핑하므로 IR 내 컨트롤(8 유닛 갭)이
+/// 있어도 경계 위치가 어긋나지 않는다.
+fn split_text_into(splitter: &mut RunSplitter, para: &Paragraph, tab_idx: &mut usize) {
+    let mut text_buf = String::new();
+    let mut running_pos = 0u32;
+    for (idx, c) in para.text.chars().enumerate() {
+        let char_pos = para.char_offsets.get(idx).copied().unwrap_or(running_pos);
+        if splitter.needs_cut(char_pos) {
+            flush_text_fragment(
+                &mut splitter.content,
+                &mut text_buf,
+                &para.tab_extended,
+                tab_idx,
+            );
+            splitter.cut_before(char_pos);
+        }
+        text_buf.push(c);
+        running_pos = char_pos
+            .max(running_pos)
+            .saturating_add(char_utf16_width(c));
+    }
+    flush_text_fragment(
+        &mut splitter.content,
+        &mut text_buf,
+        &para.tab_extended,
+        tab_idx,
+    );
+}
+
+/// 텍스트만 char_shapes 경계로 run 분할한 시퀀스 — 셀·글상자 경로 공유 헬퍼 (#1378 3단계).
+///
+/// 컨트롤 슬롯은 방출하지 않는다 (셀·글상자 컨트롤 보존은 #1379 범위).
+/// 문단의 모든 char_shapes entry 를 `ctx.char_shape_ids.reference()` 한다.
+pub(crate) fn render_text_runs(para: &Paragraph, ctx: &mut SerializeContext) -> String {
+    for cs in &para.char_shapes {
+        ctx.char_shape_ids.reference(cs.char_shape_id);
+    }
+    let mut splitter = RunSplitter::new(para);
+    let mut tab_idx = 0usize;
+    split_text_into(&mut splitter, para, &mut tab_idx);
+    splitter.finish()
+}
+
 /// Paragraph 본문을 완전한 `<hp:run>` 시퀀스로 직렬화한다 (#1378 다중 run 분할).
 fn render_runs(para: &Paragraph, ctx: &mut SerializeContext) -> String {
     // ID 참조 무결성 (구현계획서 1.5): 실제 char_shapes entry 만 reference.
@@ -354,30 +399,7 @@ fn render_runs(para: &Paragraph, ctx: &mut SerializeContext) -> String {
 
     // mismatch 경로: 슬롯 위치 추정 불가 — 텍스트(경계 분할 포함) 후 슬롯 일괄 방출
     if slot_count != slots.len() {
-        let mut text_buf = String::new();
-        let mut running_pos = 0u32;
-        for (idx, c) in para.text.chars().enumerate() {
-            let char_pos = para.char_offsets.get(idx).copied().unwrap_or(running_pos);
-            if splitter.needs_cut(char_pos) {
-                flush_text_fragment(
-                    &mut splitter.content,
-                    &mut text_buf,
-                    &para.tab_extended,
-                    &mut tab_idx,
-                );
-                splitter.cut_before(char_pos);
-            }
-            text_buf.push(c);
-            running_pos = char_pos
-                .max(running_pos)
-                .saturating_add(char_utf16_width(c));
-        }
-        flush_text_fragment(
-            &mut splitter.content,
-            &mut text_buf,
-            &para.tab_extended,
-            &mut tab_idx,
-        );
+        split_text_into(&mut splitter, para, &mut tab_idx);
         for slot in &slots {
             render_control_slot(&mut splitter.content, slot, ctx);
         }
@@ -829,10 +851,10 @@ where
         .map_err(|e| SerializeError::XmlError(format!("invalid UTF-8 from XML writer: {e}")))
 }
 
-fn render_shape(shape: &ShapeObject, ctx: &SerializeContext) -> String {
+fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
     // Rectangle: Writer-based serializer (drawText 포함)
     if let ShapeObject::Rectangle(r) = shape {
-        return match writer_to_string(|w| super::shape::write_rect(w, r)) {
+        return match writer_to_string(|w| super::shape::write_rect(w, r, ctx)) {
             Ok(xml) => xml,
             Err(e) => {
                 eprintln!("[hwpx] Shape::Rectangle 직렬화 실패: {e}");

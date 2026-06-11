@@ -23,6 +23,8 @@ use crate::model::shape::{
     VertAlign, VertRelTo,
 };
 
+use super::context::SerializeContext;
+use super::section::render_text_runs;
 use super::utils::{empty_tag, end_tag, start_tag, start_tag_attrs};
 use super::SerializeError;
 
@@ -34,6 +36,7 @@ use super::SerializeError;
 pub fn write_rect<W: Write>(
     w: &mut Writer<W>,
     rect: &RectangleShape,
+    ctx: &mut SerializeContext,
 ) -> Result<(), SerializeError> {
     let c = &rect.common;
     // 속성 (부모 AbstractShapeObjectType + 자신):
@@ -70,7 +73,7 @@ pub fn write_rect<W: Write>(
     // drawText: 글상자 내부 문단
     if let Some(ref tb) = rect.drawing.text_box {
         if !tb.paragraphs.is_empty() {
-            write_draw_text(w, tb)?;
+            write_draw_text(w, tb, ctx)?;
         }
     }
 
@@ -172,7 +175,11 @@ pub fn write_container_close<W: Write>(w: &mut Writer<W>) -> Result<(), Serializ
 // =====================================================================
 
 /// `<hp:drawText>` 직렬화 — TextBox의 paragraphs를 subList로 출력.
-pub fn write_draw_text<W: Write>(w: &mut Writer<W>, tb: &TextBox) -> Result<(), SerializeError> {
+pub fn write_draw_text<W: Write>(
+    w: &mut Writer<W>,
+    tb: &TextBox,
+    ctx: &mut SerializeContext,
+) -> Result<(), SerializeError> {
     let ml = tb.margin_left.to_string();
     let mr = tb.margin_right.to_string();
     let mt = tb.margin_top.to_string();
@@ -205,7 +212,7 @@ pub fn write_draw_text<W: Write>(w: &mut Writer<W>, tb: &TextBox) -> Result<(), 
     )?;
 
     for (idx, p) in tb.paragraphs.iter().enumerate() {
-        write_draw_text_paragraph(w, p, idx)?;
+        write_draw_text_paragraph(w, p, idx, ctx)?;
     }
 
     end_tag(w, "hp:subList")?;
@@ -217,6 +224,7 @@ fn write_draw_text_paragraph<W: Write>(
     w: &mut Writer<W>,
     p: &Paragraph,
     idx: usize,
+    ctx: &mut SerializeContext,
 ) -> Result<(), SerializeError> {
     let id = idx.to_string();
     let ps_id = p.para_shape_id.to_string();
@@ -235,19 +243,12 @@ fn write_draw_text_paragraph<W: Write>(
         ],
     )?;
 
-    let cs = p.char_shapes.first().map(|r| r.char_shape_id).unwrap_or(0);
-    let cs_str = cs.to_string();
-    start_tag_attrs(w, "hp:run", &[("charPrIDRef", &cs_str)])?;
-
-    // simple text output — XML escape
-    start_tag(w, "hp:t")?;
-    w.write_event(quick_xml::events::Event::Text(
-        quick_xml::events::BytesText::new(&super::utils::xml_escape(&p.text)),
-    ))
-    .map_err(|e| SerializeError::XmlError(format!("drawText text: {e}")))?;
-    end_tag(w, "hp:t")?;
-
-    end_tag(w, "hp:run")?;
+    // 텍스트를 char_shapes 경계로 run 분할 출력 (#1378 3단계) — 탭/lineBreak 는
+    // 본문 경로와 동일하게 `render_hp_t_content` 기반으로 처리된다.
+    let runs = render_text_runs(p, ctx);
+    w.get_mut()
+        .write_all(runs.as_bytes())
+        .map_err(|e| SerializeError::XmlError(format!("drawText text: {e}")))?;
 
     // minimal lineseg
     start_tag(w, "hp:linesegarray")?;
@@ -406,7 +407,8 @@ mod tests {
 
     fn serialize_rect(rect: &RectangleShape) -> String {
         let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
-        write_rect(&mut w, rect).expect("write_rect");
+        let mut ctx = SerializeContext::collect_from_document(&Default::default());
+        write_rect(&mut w, rect, &mut ctx).expect("write_rect");
         String::from_utf8(w.into_inner()).unwrap()
     }
 
@@ -414,6 +416,56 @@ mod tests {
         let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
         write_line(&mut w, line).expect("write_line");
         String::from_utf8(w.into_inner()).unwrap()
+    }
+
+    fn cs(start_pos: u32, char_shape_id: u32) -> crate::model::paragraph::CharShapeRef {
+        crate::model::paragraph::CharShapeRef {
+            start_pos,
+            char_shape_id,
+        }
+    }
+
+    fn rect_with_text_paragraph(p: Paragraph) -> RectangleShape {
+        let mut tb = TextBox::default();
+        tb.paragraphs.push(p);
+        let mut rect = RectangleShape::default();
+        rect.drawing.text_box = Some(tb);
+        rect
+    }
+
+    #[test]
+    fn task1378_drawtext_multi_run_split() {
+        // 글상자 문단 다중 char_shapes → 경계 기준 다중 run 분할 (#1378 3단계).
+        let mut p = Paragraph::default();
+        p.text = "abcd".to_string();
+        p.char_offsets = vec![0, 1, 2, 3];
+        p.char_count = 5;
+        p.char_shapes = vec![cs(0, 3), cs(2, 4)];
+        let xml = serialize_rect(&rect_with_text_paragraph(p));
+        assert!(
+            xml.contains(
+                r#"<hp:run charPrIDRef="3"><hp:t>ab</hp:t></hp:run><hp:run charPrIDRef="4"><hp:t>cd</hp:t></hp:run>"#
+            ),
+            "글상자 문단이 경계에서 2 run 으로 분할되어야 함: {}",
+            xml
+        );
+    }
+
+    #[test]
+    fn task1378_drawtext_tab_and_linebreak_rendered() {
+        // 기존 단순 escape 출력 → render_hp_t_content 기반으로 정렬 (#1378 3단계
+        // 출력 변화 명시): 탭/lineBreak 가 raw 제어문자 대신 인라인 요소로 방출된다.
+        let mut p = Paragraph::default();
+        p.text = "a\tb\nc".to_string();
+        p.tab_extended = vec![[2000, 0, 0x0100, 0, 0, 0, 0]];
+        let xml = serialize_rect(&rect_with_text_paragraph(p));
+        assert!(
+            xml.contains(
+                r#"<hp:t>a<hp:tab width="2000" leader="0" type="1"/>b<hp:lineBreak/>c</hp:t>"#
+            ),
+            "글상자 텍스트는 hp:tab/hp:lineBreak 인라인 요소로 방출되어야 함: {}",
+            xml
+        );
     }
 
     #[test]

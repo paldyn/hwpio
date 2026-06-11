@@ -92,10 +92,14 @@ pub enum IrDifference {
         expected: usize,
         actual: usize,
     },
-    /// 본문 문단의 char_shapes 시퀀스 불일치 — run 분할 보존 게이트 (#1378).
+    /// 문단의 char_shapes 시퀀스 불일치 — run 분할 보존 게이트 (#1378).
+    ///
+    /// `path` 는 중첩 위치 표기 — 본문 문단은 빈 문자열, 셀·글상자·각주/미주 내부
+    /// 문단은 `/ctrl[i]tbl.cell[j].p[k]` 식의 경로.
     ParagraphCharShapes {
         section: usize,
         paragraph: usize,
+        path: String,
         expected: String,
         actual: String,
     },
@@ -151,12 +155,13 @@ impl std::fmt::Display for IrDifference {
             ParagraphCharShapes {
                 section,
                 paragraph,
+                path,
                 expected,
                 actual,
             } => write!(
                 f,
-                "section[{}] paragraph[{}] char_shapes: expected={} actual={}",
-                section, paragraph, expected, actual
+                "section[{}] paragraph[{}]{} char_shapes: expected={} actual={}",
+                section, paragraph, path, expected, actual
             ),
         }
     }
@@ -200,24 +205,18 @@ pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
             });
         }
 
-        // 본문 문단별 char_shapes 시퀀스 비교 (#1378) — run 분할 보존 게이트.
+        // 문단별 char_shapes 시퀀스 비교 (#1378) — run 분할 보존 게이트.
+        // 본문 + 셀(Table)·글상자(Shape/TextBox)·각주/미주 내부 문단 재귀 (3단계 확장).
         let pp = ap.min(bp);
         for j in 0..pp {
-            let ca = &a.sections[i].paragraphs[j].char_shapes;
-            let cb = &b.sections[i].paragraphs[j].char_shapes;
-            let same = ca.len() == cb.len()
-                && ca
-                    .iter()
-                    .zip(cb.iter())
-                    .all(|(x, y)| x.start_pos == y.start_pos && x.char_shape_id == y.char_shape_id);
-            if !same {
-                diff.push(IrDifference::ParagraphCharShapes {
-                    section: i,
-                    paragraph: j,
-                    expected: format_char_shapes(ca),
-                    actual: format_char_shapes(cb),
-                });
-            }
+            diff_paragraph_char_shapes(
+                &mut diff,
+                i,
+                j,
+                "",
+                &a.sections[i].paragraphs[j],
+                &b.sections[i].paragraphs[j],
+            );
         }
     }
 
@@ -268,6 +267,110 @@ pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
     }
 
     diff
+}
+
+/// 문단 char_shapes 시퀀스를 비교하고, 컨트롤 내부 문단(셀·글상자·각주/미주)을
+/// 재귀 비교한다 (#1378 3단계).
+///
+/// 컨트롤 쌍은 인덱스 대응(zip)으로만 비교한다 — 컨트롤 수·타입 불일치(보존 소실)는
+/// 본 게이트(run 분할 보존)의 범위 밖이다 (#1379).
+fn diff_paragraph_char_shapes(
+    diff: &mut IrDiff,
+    section: usize,
+    paragraph: usize,
+    path: &str,
+    pa: &crate::model::paragraph::Paragraph,
+    pb: &crate::model::paragraph::Paragraph,
+) {
+    let ca = &pa.char_shapes;
+    let cb = &pb.char_shapes;
+    let same = ca.len() == cb.len()
+        && ca
+            .iter()
+            .zip(cb.iter())
+            .all(|(x, y)| x.start_pos == y.start_pos && x.char_shape_id == y.char_shape_id);
+    if !same {
+        diff.push(IrDifference::ParagraphCharShapes {
+            section,
+            paragraph,
+            path: path.to_string(),
+            expected: format_char_shapes(ca),
+            actual: format_char_shapes(cb),
+        });
+    }
+
+    use crate::model::control::Control;
+    for (ci, (ctrl_a, ctrl_b)) in pa.controls.iter().zip(pb.controls.iter()).enumerate() {
+        match (ctrl_a, ctrl_b) {
+            (Control::Table(ta), Control::Table(tb)) => {
+                for (cell_i, (cea, ceb)) in ta.cells.iter().zip(tb.cells.iter()).enumerate() {
+                    for (k, (qa, qb)) in
+                        cea.paragraphs.iter().zip(ceb.paragraphs.iter()).enumerate()
+                    {
+                        let p = format!("{path}/ctrl[{ci}]tbl.cell[{cell_i}].p[{k}]");
+                        diff_paragraph_char_shapes(diff, section, paragraph, &p, qa, qb);
+                    }
+                }
+            }
+            (Control::Shape(sa), Control::Shape(sb)) => {
+                let p = format!("{path}/ctrl[{ci}]shape");
+                diff_shape_char_shapes(diff, section, paragraph, &p, sa, sb);
+            }
+            (Control::Footnote(na), Control::Footnote(nb)) => {
+                for (k, (qa, qb)) in na.paragraphs.iter().zip(nb.paragraphs.iter()).enumerate() {
+                    let p = format!("{path}/ctrl[{ci}]fn.p[{k}]");
+                    diff_paragraph_char_shapes(diff, section, paragraph, &p, qa, qb);
+                }
+            }
+            (Control::Endnote(na), Control::Endnote(nb)) => {
+                for (k, (qa, qb)) in na.paragraphs.iter().zip(nb.paragraphs.iter()).enumerate() {
+                    let p = format!("{path}/ctrl[{ci}]en.p[{k}]");
+                    diff_paragraph_char_shapes(diff, section, paragraph, &p, qa, qb);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 도형 내부 글상자(TextBox) 문단 재귀 비교 — Group 은 자식 도형까지 재귀.
+fn diff_shape_char_shapes(
+    diff: &mut IrDiff,
+    section: usize,
+    paragraph: usize,
+    path: &str,
+    sa: &crate::model::shape::ShapeObject,
+    sb: &crate::model::shape::ShapeObject,
+) {
+    use crate::model::shape::ShapeObject;
+    if let (Some(ta), Some(tb)) = (shape_text_box(sa), shape_text_box(sb)) {
+        for (k, (qa, qb)) in ta.paragraphs.iter().zip(tb.paragraphs.iter()).enumerate() {
+            let p = format!("{path}.tb.p[{k}]");
+            diff_paragraph_char_shapes(diff, section, paragraph, &p, qa, qb);
+        }
+    }
+    if let (ShapeObject::Group(ga), ShapeObject::Group(gb)) = (sa, sb) {
+        for (k, (c1, c2)) in ga.children.iter().zip(gb.children.iter()).enumerate() {
+            let p = format!("{path}.child[{k}]");
+            diff_shape_char_shapes(diff, section, paragraph, &p, c1, c2);
+        }
+    }
+}
+
+/// ShapeObject 에서 글상자(TextBox) 참조를 꺼낸다 (없으면 None).
+fn shape_text_box(s: &crate::model::shape::ShapeObject) -> Option<&crate::model::shape::TextBox> {
+    use crate::model::shape::ShapeObject::*;
+    match s {
+        Line(x) => x.drawing.text_box.as_ref(),
+        Rectangle(x) => x.drawing.text_box.as_ref(),
+        Ellipse(x) => x.drawing.text_box.as_ref(),
+        Arc(x) => x.drawing.text_box.as_ref(),
+        Polygon(x) => x.drawing.text_box.as_ref(),
+        Curve(x) => x.drawing.text_box.as_ref(),
+        Chart(x) => x.drawing.text_box.as_ref(),
+        Ole(x) => x.drawing.text_box.as_ref(),
+        Group(_) | Picture(_) => None,
+    }
 }
 
 /// char_shapes 시퀀스를 `[(start_pos,id), ...]` 형태로 표기 (diff 메시지용).
@@ -334,11 +437,13 @@ mod tests {
             IrDifference::ParagraphCharShapes {
                 section,
                 paragraph,
+                path,
                 expected,
                 actual,
             } => {
                 assert_eq!(*section, 0);
                 assert_eq!(*paragraph, 0);
+                assert_eq!(path, "");
                 assert_eq!(expected, "[(0,5),(3,2)]");
                 assert_eq!(actual, "[(0,5)]");
             }
@@ -357,6 +462,195 @@ mod tests {
             diff.differences[0],
             IrDifference::ParagraphCharShapes { .. }
         ));
+    }
+
+    /// `(start_pos, char_shape_id)` 목록 → CharShapeRef 목록.
+    fn to_refs(refs: &[(u32, u32)]) -> Vec<CharShapeRef> {
+        refs.iter()
+            .map(|&(start_pos, char_shape_id)| CharShapeRef {
+                start_pos,
+                char_shape_id,
+            })
+            .collect()
+    }
+
+    /// 본문 문단 1개 + 컨트롤 1개를 가진 Document 생성.
+    fn doc_with_control(ctrl: crate::model::control::Control) -> Document {
+        let mut para = Paragraph::default();
+        para.controls.push(ctrl);
+        let mut doc = Document::default();
+        let mut section: crate::model::document::Section = Default::default();
+        section.paragraphs.push(para);
+        doc.sections.push(section);
+        doc
+    }
+
+    /// 1x1 표 컨트롤 — 셀 문단의 char_shapes 를 지정.
+    fn table_control(cell_refs: &[(u32, u32)]) -> crate::model::control::Control {
+        use crate::model::table::{Cell, Table};
+        let mut cell_para = Paragraph::default();
+        cell_para.char_shapes = to_refs(cell_refs);
+        let mut cell = Cell::default();
+        cell.col_span = 1;
+        cell.row_span = 1;
+        cell.paragraphs.push(cell_para);
+        let mut t = Table::default();
+        t.row_count = 1;
+        t.col_count = 1;
+        t.cells.push(cell);
+        t.rebuild_grid();
+        crate::model::control::Control::Table(Box::new(t))
+    }
+
+    /// 글상자(Rectangle drawText) 컨트롤 — 문단의 char_shapes 를 지정.
+    fn textbox_control(refs: &[(u32, u32)]) -> crate::model::control::Control {
+        use crate::model::shape::{RectangleShape, ShapeObject, TextBox};
+        let mut p = Paragraph::default();
+        p.char_shapes = to_refs(refs);
+        let mut tb = TextBox::default();
+        tb.paragraphs.push(p);
+        let mut rect = RectangleShape::default();
+        rect.drawing.text_box = Some(tb);
+        crate::model::control::Control::Shape(Box::new(ShapeObject::Rectangle(rect)))
+    }
+
+    /// 각주 컨트롤 — 문단의 char_shapes 를 지정.
+    fn footnote_control(refs: &[(u32, u32)]) -> crate::model::control::Control {
+        let mut p = Paragraph::default();
+        p.char_shapes = to_refs(refs);
+        let mut note = crate::model::footnote::Footnote::default();
+        note.paragraphs.push(p);
+        crate::model::control::Control::Footnote(Box::new(note))
+    }
+
+    /// 단일 ParagraphCharShapes 차이의 path 를 단언.
+    fn assert_single_char_shapes_diff(diff: &IrDiff, expected_path: &str) {
+        assert_eq!(diff.differences.len(), 1, "차이 1건이어야 함: {:?}", diff);
+        match &diff.differences[0] {
+            IrDifference::ParagraphCharShapes { path, .. } => {
+                assert_eq!(path, expected_path);
+            }
+            other => panic!("ParagraphCharShapes 여야 함: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn diff_documents_detects_cell_char_shapes() {
+        // 셀 내부 문단 평탄화 검출 (#1378 3단계 게이트 재귀 확장).
+        let a = doc_with_control(table_control(&[(0, 1), (3, 2)]));
+        let b = doc_with_control(table_control(&[(0, 1)]));
+        assert_single_char_shapes_diff(&diff_documents(&a, &b), "/ctrl[0]tbl.cell[0].p[0]");
+    }
+
+    #[test]
+    fn diff_documents_same_cell_char_shapes_is_empty() {
+        let a = doc_with_control(table_control(&[(0, 1), (3, 2)]));
+        let b = doc_with_control(table_control(&[(0, 1), (3, 2)]));
+        assert!(diff_documents(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn diff_documents_detects_textbox_char_shapes() {
+        // 글상자 내부 문단 평탄화 검출.
+        let a = doc_with_control(textbox_control(&[(0, 1), (3, 2)]));
+        let b = doc_with_control(textbox_control(&[(0, 1)]));
+        assert_single_char_shapes_diff(&diff_documents(&a, &b), "/ctrl[0]shape.tb.p[0]");
+    }
+
+    #[test]
+    fn diff_documents_detects_footnote_char_shapes() {
+        // 각주 내부 문단 평탄화 검출.
+        let a = doc_with_control(footnote_control(&[(0, 1), (3, 2)]));
+        let b = doc_with_control(footnote_control(&[(0, 1)]));
+        assert_single_char_shapes_diff(&diff_documents(&a, &b), "/ctrl[0]fn.p[0]");
+    }
+
+    /// serialize → parse 왕복용 본문 구성: p0(빈 첫 문단) + p1(컨트롤 1개, slot 정합).
+    fn roundtrip_doc_with_control(ctrl: crate::model::control::Control) -> Document {
+        use crate::model::style::CharShape;
+        let p0 = Paragraph::default();
+        let mut p1 = Paragraph::default();
+        p1.char_count = 9; // 슬롯 1개(8) + 1 — inferred_control_slot_count 정합
+        p1.char_shapes = to_refs(&[(0, 1)]);
+        p1.controls.push(ctrl);
+        let mut doc = Document::default();
+        doc.doc_info.char_shapes = vec![
+            CharShape::default(),
+            CharShape::default(),
+            CharShape::default(),
+        ];
+        // 셀 경로는 para_shape/style id 도 reference 하므로 0번을 등록해 둔다.
+        doc.doc_info.para_shapes = vec![Default::default()];
+        doc.doc_info.styles = vec![Default::default()];
+        let mut section: crate::model::document::Section = Default::default();
+        section.paragraphs.push(p0);
+        section.paragraphs.push(p1);
+        doc.sections.push(section);
+        doc
+    }
+
+    fn shapes_of(p: &Paragraph) -> Vec<(u32, u32)> {
+        p.char_shapes
+            .iter()
+            .map(|r| (r.start_pos, r.char_shape_id))
+            .collect()
+    }
+
+    #[test]
+    fn serialize_parse_roundtrip_preserves_cell_char_shapes() {
+        // 셀 다중 run 의 serialize → parse 왕복 보존 (#1378 3단계).
+        let mut doc = roundtrip_doc_with_control(table_control(&[(0, 1), (2, 2)]));
+        if let crate::model::control::Control::Table(t) =
+            &mut doc.sections[0].paragraphs[1].controls[0]
+        {
+            let para = &mut t.cells[0].paragraphs[0];
+            para.text = "abcd".to_string();
+            para.char_offsets = vec![0, 1, 2, 3];
+            para.char_count = 5;
+        } else {
+            panic!("Table 컨트롤이어야 함");
+        }
+
+        let bytes = serialize_hwpx(&doc).expect("serialize");
+        let doc2 = parse_hwpx(&bytes).expect("parse");
+        let cell_para = match &doc2.sections[0].paragraphs[1].controls[0] {
+            crate::model::control::Control::Table(t) => &t.cells[0].paragraphs[0],
+            other => panic!("Table 컨트롤이어야 함: {:?}", other),
+        };
+        assert_eq!(shapes_of(cell_para), vec![(0, 1), (2, 2)], "셀 문단");
+    }
+
+    #[test]
+    fn serialize_parse_roundtrip_preserves_textbox_char_shapes() {
+        // 글상자 다중 run 의 serialize → parse 왕복 보존 (#1378 3단계).
+        let mut doc = roundtrip_doc_with_control(textbox_control(&[(0, 1), (2, 2)]));
+        if let crate::model::control::Control::Shape(s) =
+            &mut doc.sections[0].paragraphs[1].controls[0]
+        {
+            if let crate::model::shape::ShapeObject::Rectangle(r) = s.as_mut() {
+                let para = &mut r.drawing.text_box.as_mut().unwrap().paragraphs[0];
+                para.text = "abcd".to_string();
+                para.char_offsets = vec![0, 1, 2, 3];
+                para.char_count = 5;
+            } else {
+                panic!("Rectangle 이어야 함");
+            }
+        } else {
+            panic!("Shape 컨트롤이어야 함");
+        }
+
+        let bytes = serialize_hwpx(&doc).expect("serialize");
+        let doc2 = parse_hwpx(&bytes).expect("parse");
+        let tb_para = match &doc2.sections[0].paragraphs[1].controls[0] {
+            crate::model::control::Control::Shape(s) => match s.as_ref() {
+                crate::model::shape::ShapeObject::Rectangle(r) => {
+                    &r.drawing.text_box.as_ref().expect("text_box").paragraphs[0]
+                }
+                other => panic!("Rectangle 이어야 함: {:?}", other),
+            },
+            other => panic!("Shape 컨트롤이어야 함: {:?}", other),
+        };
+        assert_eq!(shapes_of(tb_para), vec![(0, 1), (2, 2)], "글상자 문단");
     }
 
     #[test]

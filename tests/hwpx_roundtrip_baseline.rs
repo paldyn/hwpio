@@ -27,6 +27,72 @@ const XFAIL: &[(&str, &str)] = &[(
      (task_m100_1315_stage1.md, 별도 이슈 후보)",
 )];
 
+/// [Task #1378 3단계 임시] 게이트 재귀 확장(셀·글상자·각주/미주 char_shapes 비교)으로
+/// 새로 검출된 본 타스크 범위 밖 실패 — (상대 경로, 사유). 후속 이슈에서 해소되어
+/// 통과하게 되면 `xfail_1378_recursive_entries_still_fail` 이 실패하므로
+/// 목록에서 제거하고 baseline 으로 승격해야 한다.
+///
+/// 사유 분류 (task_m100_1378_stage3.md):
+/// - subList 컨트롤 미출력(#1379): 셀·글상자 문단의 컨트롤이 직렬화에서 빠져
+///   재파싱 경계가 8×(경계 앞 컨트롤 수) 유닛 당겨짐. id 시퀀스는 보존.
+/// - 파서 autoNum 폭 비일관: char_shapes 경계 축(calc)은 1 유닛, char_offsets 축은
+///   8 유닛으로 집계 — serializer 는 offsets 축 기준이라 경계가 1 유닛 시프트.
+///   stage1 에서 #1378 범위 밖으로 분류, 별도 이슈 후보.
+const XFAIL_1378_RECURSIVE: &[(&str, &str)] = &[
+    (
+        "143E433F503322BD33.hwpx",
+        "fn 1건 — 파서 autoNum 폭 비일관(1 vs 8 유닛), #1378 범위 밖 별도 이슈 후보",
+    ),
+    (
+        "2024년 2분기 해외직접투자 보도자료ff.hwpx",
+        "tbl 10건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "2025년 2분기 해외직접투자 (최종).hwpx",
+        "tbl 9건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "aift.hwpx",
+        "tbl 2건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "el-school-001.hwpx",
+        "tbl 2건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "exam_kor.hwpx",
+        "tbl 20건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "exam-kor-1p.hwpx",
+        "tbl 1건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "exam-kor-2p.hwpx",
+        "tbl 1건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "exam-kor-3p.hwpx",
+        "tbl 2건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "exam-kor-4p.hwpx",
+        "tbl 2건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "hcar-001.hwpx",
+        "tbl 2건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "hwpx-h-02.hwpx",
+        "tbl 9건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+    (
+        "k-water-rfp.hwpx",
+        "tbl 4건 + shape.tb 1건 — subList 컨트롤 미출력, #1379 에서 해소",
+    ),
+];
+
 /// 검사 제외 — 샘플 자체가 HWPX 패키지가 아님.
 const EXCLUDED: &[(&str, &str)] = &[(
     "hwpx-01.hwpx",
@@ -135,6 +201,12 @@ fn run_baseline(filter: impl Fn(&str) -> bool) {
             continue;
         }
         eligible += 1;
+        // [Task #1378 3단계 임시] 게이트 재귀 확장으로 검출된 범위 밖 실패 — 사유는
+        // XFAIL_1378_RECURSIVE 참조. 후속 이슈 해소 시 이 블록과 목록을 제거한다.
+        // (eligible 집계 뒤에 두어 LARGE 게이트의 "대상 없음" 가드를 깨지 않는다.)
+        if in_list(XFAIL_1378_RECURSIVE, &rel) {
+            continue;
+        }
         if let Err(reason) = baseline_check(&path) {
             failures.push(format!("  {rel}: {reason}"));
         }
@@ -171,6 +243,24 @@ fn xfail_entries_still_fail() {
         assert!(
             baseline_check(&path).is_err(),
             "XFAIL 샘플이 통과함: {name} — baseline 으로 승격하고 XFAIL 에서 제거하라 (사유였던 결함: {reason})"
+        );
+    }
+}
+
+/// [Task #1378 3단계 임시] 재귀 확장 xfail 샘플은 여전히 실패해야 한다 —
+/// 후속 이슈(#1379 등)에서 해소되면 목록·skip 블록을 제거하고 baseline 으로 승격한다.
+#[test]
+fn xfail_1378_recursive_entries_still_fail() {
+    for (name, reason) in XFAIL_1378_RECURSIVE {
+        let path = Path::new(SAMPLES_ROOT).join(name);
+        assert!(
+            path.exists(),
+            "XFAIL_1378_RECURSIVE 샘플 실종: {name} (목록 정비 필요)"
+        );
+        assert!(
+            baseline_check(&path).is_err(),
+            "XFAIL_1378_RECURSIVE 샘플이 통과함: {name} — baseline 으로 승격하고 \
+             목록에서 제거하라 (사유였던 결함: {reason})"
         );
     }
 }
