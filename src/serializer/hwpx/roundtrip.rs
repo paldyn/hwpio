@@ -12,6 +12,11 @@
 //! - 각 section의 paragraphs.len()
 //! - doc_info의 리소스 카운트 (char_shapes, para_shapes, border_fills 등)
 //! - bin_data_content.len()
+//!
+//! Task #1378 확장:
+//! - 본문(top-level) 문단별 `char_shapes` 시퀀스 — `(start_pos, char_shape_id)` 전체 비교.
+//!   serializer 의 run 평탄화(첫 run 서식으로 통일)를 검출한다.
+//!   셀·글상자 내부 문단 재귀 비교는 #1378 3단계에서 확장 예정.
 
 #![allow(dead_code)]
 
@@ -87,6 +92,13 @@ pub enum IrDifference {
         expected: usize,
         actual: usize,
     },
+    /// 본문 문단의 char_shapes 시퀀스 불일치 — run 분할 보존 게이트 (#1378).
+    ParagraphCharShapes {
+        section: usize,
+        paragraph: usize,
+        expected: String,
+        actual: String,
+    },
 }
 
 impl std::fmt::Display for IrDifference {
@@ -136,6 +148,16 @@ impl std::fmt::Display for IrDifference {
                 "bin_data_content count: expected={} actual={}",
                 expected, actual
             ),
+            ParagraphCharShapes {
+                section,
+                paragraph,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "section[{}] paragraph[{}] char_shapes: expected={} actual={}",
+                section, paragraph, expected, actual
+            ),
         }
     }
 }
@@ -176,6 +198,26 @@ pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
                 expected: ap,
                 actual: bp,
             });
+        }
+
+        // 본문 문단별 char_shapes 시퀀스 비교 (#1378) — run 분할 보존 게이트.
+        let pp = ap.min(bp);
+        for j in 0..pp {
+            let ca = &a.sections[i].paragraphs[j].char_shapes;
+            let cb = &b.sections[i].paragraphs[j].char_shapes;
+            let same = ca.len() == cb.len()
+                && ca
+                    .iter()
+                    .zip(cb.iter())
+                    .all(|(x, y)| x.start_pos == y.start_pos && x.char_shape_id == y.char_shape_id);
+            if !same {
+                diff.push(IrDifference::ParagraphCharShapes {
+                    section: i,
+                    paragraph: j,
+                    expected: format_char_shapes(ca),
+                    actual: format_char_shapes(cb),
+                });
+            }
         }
     }
 
@@ -228,9 +270,37 @@ pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
     diff
 }
 
+/// char_shapes 시퀀스를 `[(start_pos,id), ...]` 형태로 표기 (diff 메시지용).
+fn format_char_shapes(refs: &[crate::model::paragraph::CharShapeRef]) -> String {
+    let inner = refs
+        .iter()
+        .map(|r| format!("({},{})", r.start_pos, r.char_shape_id))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("[{}]", inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::paragraph::{CharShapeRef, Paragraph};
+
+    /// char_shapes 시퀀스를 가진 단일 문단 Document 생성.
+    fn doc_with_char_shapes(refs: &[(u32, u32)]) -> Document {
+        let mut para = Paragraph::default();
+        para.char_shapes = refs
+            .iter()
+            .map(|&(start_pos, char_shape_id)| CharShapeRef {
+                start_pos,
+                char_shape_id,
+            })
+            .collect();
+        let mut doc = Document::default();
+        let mut section: crate::model::document::Section = Default::default();
+        section.paragraphs.push(para);
+        doc.sections.push(section);
+        doc
+    }
 
     #[test]
     fn ir_diff_empty_default() {
@@ -244,6 +314,49 @@ mod tests {
         let b = Document::default();
         let diff = diff_documents(&a, &b);
         assert!(diff.is_empty(), "empty vs empty must have no diff");
+    }
+
+    #[test]
+    fn diff_documents_same_char_shapes_is_empty() {
+        let a = doc_with_char_shapes(&[(0, 5), (3, 2), (10, 5)]);
+        let b = doc_with_char_shapes(&[(0, 5), (3, 2), (10, 5)]);
+        assert!(diff_documents(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn diff_documents_detects_flattened_char_shapes() {
+        // run 평탄화: 다중 char_shapes → 첫 entry 만 출력된 경우를 검출해야 한다.
+        let a = doc_with_char_shapes(&[(0, 5), (3, 2)]);
+        let b = doc_with_char_shapes(&[(0, 5)]);
+        let diff = diff_documents(&a, &b);
+        assert_eq!(diff.differences.len(), 1);
+        match &diff.differences[0] {
+            IrDifference::ParagraphCharShapes {
+                section,
+                paragraph,
+                expected,
+                actual,
+            } => {
+                assert_eq!(*section, 0);
+                assert_eq!(*paragraph, 0);
+                assert_eq!(expected, "[(0,5),(3,2)]");
+                assert_eq!(actual, "[(0,5)]");
+            }
+            other => panic!("ParagraphCharShapes 여야 함: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn diff_documents_detects_char_shape_pos_change() {
+        // 같은 id 라도 start_pos 가 어긋나면 차이로 검출.
+        let a = doc_with_char_shapes(&[(0, 5), (3, 2)]);
+        let b = doc_with_char_shapes(&[(0, 5), (4, 2)]);
+        let diff = diff_documents(&a, &b);
+        assert_eq!(diff.differences.len(), 1);
+        assert!(matches!(
+            diff.differences[0],
+            IrDifference::ParagraphCharShapes { .. }
+        ));
     }
 
     #[test]
