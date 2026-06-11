@@ -153,7 +153,8 @@ pub fn roundtrip_ir_diff(hwpx_bytes: &[u8]) -> Result<IrDiff, SerializeError> {
 /// Stage 0 최소 필드 비교.
 ///
 /// Stage 1~5에서 비교 대상 필드를 누적 확장한다 (문단 텍스트, 표·그림 속성 등).
-fn diff_documents(a: &Document, b: &Document) -> IrDiff {
+/// `hwpx-roundtrip` 배치 진단(Task #1315)에서도 사용한다.
+pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
     let mut diff = IrDiff::default();
 
     // 섹션 수
