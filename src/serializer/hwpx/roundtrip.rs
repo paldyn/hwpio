@@ -22,6 +22,11 @@
 //! - 문단별 인라인 슬롯 컨트롤 타입 시퀀스 비교 (`is_hwpx_inline_slot` 기준, 본문 +
 //!   #1378 재귀 동승). 셀·글상자 subList 의 컨트롤 소실(그림 등)을 검출한다.
 //!   Bookmark 등 위치 없는 비슬롯 컨트롤은 비교 대상에서 제외.
+//!
+//! Task #1380 확장:
+//! - 문단별 `line_segs` 9필드 비교 (`diff_linesegs`) 를 `ParagraphLinesegs` 로 변환해
+//!   게이트 동승 (3단계). 파서 zero-default 주입 제거 + serializer 방출 생략(2단계)
+//!   이후의 원본 무 ↔ RT 유 합성 비대칭(개수·값 불일치)을 검출한다.
 
 #![allow(dead_code)]
 
@@ -119,6 +124,16 @@ pub enum IrDifference {
         expected: String,
         actual: String,
     },
+    /// 문단의 `line_segs` 불일치 — lineseg 원본 보존 게이트 (#1380).
+    ///
+    /// `path` 표기는 `ParagraphCharShapes` 와 동일. `detail` 은 `LinesegDiffKind` 의
+    /// 표시 문자열 (개수 불일치 또는 인덱스·필드 단위 값 불일치).
+    ParagraphLinesegs {
+        section: usize,
+        paragraph: usize,
+        path: String,
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for IrDifference {
@@ -189,6 +204,16 @@ impl std::fmt::Display for IrDifference {
                 f,
                 "section[{}] paragraph[{}]{} controls: expected={} actual={}",
                 section, paragraph, path, expected, actual
+            ),
+            ParagraphLinesegs {
+                section,
+                paragraph,
+                path,
+                detail,
+            } => write!(
+                f,
+                "section[{}] paragraph[{}]{} linesegs: {}",
+                section, paragraph, path, detail
             ),
         }
     }
@@ -293,10 +318,24 @@ pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
         });
     }
 
+    // 문단별 line_segs 비교 (#1380) — lineseg 원본 보존 게이트 (3단계 동승).
+    // 순회 경로는 diff_paragraph_char_shapes 와 동일 (본문 + 셀·글상자·각주/미주 재귀).
+    for d in diff_linesegs(a, b) {
+        diff.push(IrDifference::ParagraphLinesegs {
+            section: d.section,
+            paragraph: d.paragraph,
+            path: d.path,
+            detail: d.kind.to_string(),
+        });
+    }
+
     diff
 }
 
-/// 문단별 lineseg 측정 결과 1건 (Task #1380 — **게이트 비동승, 측정 전용**).
+/// 문단별 lineseg 비교 결과 1건 (Task #1380).
+///
+/// `diff_documents` 가 `IrDifference::ParagraphLinesegs` 로 변환해 게이트에 동승하고
+/// (3단계), `hwpx-roundtrip` 배치 진단의 필드 단위 TSV 측정에도 직접 사용한다.
 ///
 /// `path` 표기는 `IrDifference::ParagraphCharShapes` 와 동일
 /// (본문 문단은 빈 문자열, 중첩 문단은 `/ctrl[i]tbl.cell[j].p[k]` 식).
@@ -323,9 +362,30 @@ pub enum LinesegDiffKind {
     },
 }
 
-/// 문서 전체의 문단별 `line_segs` 를 비교한다 (Task #1380 1단계 측정 도구).
+impl std::fmt::Display for LinesegDiffKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LinesegDiffKind::CountMismatch { expected, actual } => {
+                write!(f, "count: expected={} actual={}", expected, actual)
+            }
+            LinesegDiffKind::ValueMismatch {
+                index,
+                field,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "[{}].{}: expected={} actual={}",
+                index, field, expected, actual
+            ),
+        }
+    }
+}
+
+/// 문서 전체의 문단별 `line_segs` 를 비교한다 (Task #1380).
 ///
-/// `diff_documents` 와 **별도** — baseline 게이트에 동승하지 않는다.
+/// 1단계에서는 측정 전용이었고, 3단계부터 `diff_documents` 가 이 결과를
+/// `ParagraphLinesegs` 로 변환해 baseline 게이트에 동승한다.
 /// 순회 경로는 `diff_paragraph_char_shapes` 와 동일 (본문 + 셀·글상자(Group 재귀)·
 /// 각주/미주). 개수 불일치 시에도 공통 구간(min)은 값 비교를 계속한다.
 pub fn diff_linesegs(a: &Document, b: &Document) -> Vec<LinesegDiff> {
@@ -1027,7 +1087,7 @@ mod tests {
         ));
     }
 
-    // ---------- #1380: diff_linesegs (측정 전용 — 게이트 비동승) ----------
+    // ---------- #1380: diff_linesegs (게이트 동승 + 배치 TSV 측정) ----------
 
     use crate::model::paragraph::LineSeg;
 
@@ -1141,11 +1201,67 @@ mod tests {
     }
 
     #[test]
-    fn diff_linesegs_not_in_gate() {
-        // lineseg 차이는 diff_documents(게이트)에 잡히지 않아야 한다 (1단계는 측정 전용).
+    fn task1380_lineseg_in_gate() {
+        // lineseg 값 차이는 diff_documents(게이트)에서 검출되어야 한다 (3단계 동승).
         let a = doc_with_linesegs(vec![seg(0, 21974)]);
         let b = doc_with_linesegs(vec![seg(0, 19924)]);
-        assert!(diff_documents(&a, &b).is_empty());
-        assert_eq!(diff_linesegs(&a, &b).len(), 1);
+        let diff = diff_documents(&a, &b);
+        assert_eq!(diff.differences.len(), 1, "{:?}", diff.differences);
+        match &diff.differences[0] {
+            IrDifference::ParagraphLinesegs {
+                section,
+                paragraph,
+                path,
+                detail,
+            } => {
+                assert_eq!(*section, 0);
+                assert_eq!(*paragraph, 0);
+                assert_eq!(path, "");
+                assert_eq!(detail, "[0].vertsize: expected=21974 actual=19924");
+            }
+            other => panic!("ParagraphLinesegs 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task1380_gate_detects_synthetic_lineseg_asymmetry() {
+        // #1380 결함 본체였던 원본 무 → RT 유 합성 비대칭(종전 파서 주입/serializer
+        // fallback 패턴)을 게이트가 개수 불일치로 검출하는지 고정.
+        let a = doc_with_linesegs(vec![]);
+        let b = doc_with_linesegs(vec![seg(0, 1000)]);
+        let diff = diff_documents(&a, &b);
+        assert_eq!(diff.differences.len(), 1, "{:?}", diff.differences);
+        match &diff.differences[0] {
+            IrDifference::ParagraphLinesegs { detail, .. } => {
+                assert_eq!(detail, "count: expected=0 actual=1");
+            }
+            other => panic!("ParagraphLinesegs 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task1380_two_round_stable_with_empty_linesegs() {
+        // linesegarray 부재 문단(38건)을 실제로 가진 H1 샘플의 2-round 안정성
+        // (구현계획서 3.3): round1·round2 모두 게이트(IrDiff, lineseg 동승) 0 —
+        // 빈 line_segs 가 어느 라운드에서도 합성(주입)되거나 소실되지 않는다.
+        let bytes = std::fs::read("samples/hwpx/business_overview.hwpx").expect("샘플 읽기");
+        let doc1 = parse_hwpx(&bytes).expect("parse 원본");
+        assert!(
+            doc1.sections
+                .iter()
+                .flat_map(|s| &s.paragraphs)
+                .any(|p| p.line_segs.is_empty()),
+            "픽스처 전제: linesegarray 부재(빈 line_segs) 문단이 있어야 한다"
+        );
+
+        let out1 = serialize_hwpx(&doc1).expect("serialize r1");
+        let doc2 = parse_hwpx(&out1).expect("parse r1");
+        let d1 = diff_documents(&doc1, &doc2);
+        assert!(d1.is_empty(), "round1: {:?}", d1.differences);
+
+        let out2 = serialize_hwpx(&doc2).expect("serialize r2");
+        let doc3 = parse_hwpx(&out2).expect("parse r2");
+        let d2 = diff_documents(&doc2, &doc3);
+        assert!(d2.is_empty(), "round2: {:?}", d2.differences);
     }
 }
