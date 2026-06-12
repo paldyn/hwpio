@@ -265,20 +265,8 @@ impl HwpDocument {
     pub fn create_empty() -> HwpDocument {
         let mut core = DocumentCore::new_empty();
         let mut section = Section::default();
-        // 한컴 새 문서 기본 용지: A4 세로, 여백 좌우 30mm / 위 20mm / 아래 15mm /
-        // 머리말·꼬리말 15mm (renderer/page_layout.rs의 a4_page_def와 동일 값)
-        section.section_def.page_def = crate::model::page::PageDef {
-            width: 59528,
-            height: 84188,
-            margin_left: 8504,
-            margin_right: 8504,
-            margin_top: 5669,
-            margin_bottom: 4252,
-            margin_header: 4252,
-            margin_footer: 4252,
-            margin_gutter: 0,
-            ..Default::default()
-        };
+        // set_document가 styles/composed 재구성 + paginate까지 수행한다.
+        section.section_def.page_def = crate::model::page::PageDef::a4_default();
         section.paragraphs.push(Paragraph::new_empty());
         let mut document = Document::default();
         document.sections.push(section);
