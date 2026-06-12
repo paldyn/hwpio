@@ -873,12 +873,29 @@ fn write_para_pr<W: Write>(
 
     // 자식 순서 (한컴 원본 관찰):
     // align, heading, breakSetting, autoSpacing, switch(margin+lineSpacing), border
+    //
+    // 종전엔 align@vertical, breakSetting@{breakNonLatinWord, widowOrphan,
+    // keepWithNext, keepLines, pageBreakBefore} 를 상수로 하드코딩해, 파서가
+    // attr1/attr2 비트로 보존한 값을 직렬화에서 모두 잃었다(예: vertical=CENTER →
+    // BASELINE, breakNonLatinWord=BREAK_WORD → KEEP_WORD). 이제 보존 비트에서
+    // 역매핑한다. (breakLatinWord/lineWrap 은 파서가 아직 미수집 → 상수 유지.)
+    let vertical = vertical_alignment_str((ps.attr1 >> 20) & 0x03);
+    // attr1 bit7: KEEP_WORD=1, BREAK_WORD=0 (parse_para_shape_child 와 정합).
+    let break_non_latin = if (ps.attr1 >> 7) & 1 == 1 {
+        "KEEP_WORD"
+    } else {
+        "BREAK_WORD"
+    };
+    let widow_orphan = ((ps.attr2 >> 5) & 1).to_string();
+    let keep_with_next = ((ps.attr2 >> 6) & 1).to_string();
+    let keep_lines = ((ps.attr2 >> 7) & 1).to_string();
+    let page_break_before = ((ps.attr2 >> 8) & 1).to_string();
     empty_tag(
         w,
         "hh:align",
         &[
             ("horizontal", alignment_str(ps.alignment)),
-            ("vertical", "BASELINE"),
+            ("vertical", vertical),
         ],
     )?;
     empty_tag(
@@ -895,11 +912,11 @@ fn write_para_pr<W: Write>(
         "hh:breakSetting",
         &[
             ("breakLatinWord", "KEEP_WORD"),
-            ("breakNonLatinWord", "KEEP_WORD"),
-            ("widowOrphan", "0"),
-            ("keepWithNext", "0"),
-            ("keepLines", "0"),
-            ("pageBreakBefore", "0"),
+            ("breakNonLatinWord", break_non_latin),
+            ("widowOrphan", &widow_orphan),
+            ("keepWithNext", &keep_with_next),
+            ("keepLines", &keep_lines),
+            ("pageBreakBefore", &page_break_before),
             ("lineWrap", "BREAK"),
         ],
     )?;
@@ -1032,6 +1049,16 @@ fn alignment_str(a: Alignment) -> &'static str {
         Center => "CENTER",
         Distribute => "DISTRIBUTE",
         Split => "DISTRIBUTE_SPACE",
+    }
+}
+
+/// `parse_vertical_alignment_bits` 의 역함수. attr1 bits 20..21 → OWPML 문자열.
+fn vertical_alignment_str(bits: u32) -> &'static str {
+    match bits {
+        1 => "TOP",
+        2 => "CENTER",
+        3 => "BOTTOM",
+        _ => "BASELINE",
     }
 }
 
@@ -1494,6 +1521,50 @@ mod tests {
         assert!(
             !xml.contains("<hh:intent"),
             "margin 자식이 hh: 네임스페이스로 남으면 안 됨: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_para_pr_emits_align_and_break_from_preserved_bits() {
+        // [Finding 18] align@vertical, breakSetting@{breakNonLatinWord, widowOrphan,
+        // keepWithNext, keepLines, pageBreakBefore} 가 상수 하드코딩이 아니라
+        // attr1/attr2 보존 비트에서 역매핑돼야 한다.
+        let mut ps = ParaShape::default();
+        ps.attr1 = (2 << 20) // vertical = CENTER
+            & !(1 << 7); // breakNonLatinWord = BREAK_WORD (bit7=0)
+        ps.attr2 = (1 << 5) // widowOrphan = 1
+            | (1 << 8); // pageBreakBefore = 1
+
+        let mut writer = Writer::new(Vec::new());
+        write_para_pr(&mut writer, 1, &ps).expect("write paraPr");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        assert!(
+            xml.contains(r#"vertical="CENTER""#),
+            "vertical 은 보존 비트(CENTER)에서 와야 함: {xml}"
+        );
+        assert!(
+            xml.contains(r#"breakNonLatinWord="BREAK_WORD""#),
+            "breakNonLatinWord 는 보존 비트(BREAK_WORD)에서 와야 함: {xml}"
+        );
+        assert!(
+            xml.contains(r#"widowOrphan="1" keepWithNext="0" keepLines="0" pageBreakBefore="1""#),
+            "widowOrphan/pageBreakBefore 보존 비트 역매핑: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_para_pr_default_vertical_is_baseline() {
+        // 기본 ParaShape(attr1=0) 의 vertical 은 BASELINE(bits 20..21 = 0). 파싱된
+        // 문단은 항상 bit7 을 명시 설정하므로 round-trip 은 정확하다(이 테스트는
+        // 신규 생성 기본 ParaShape 의 vertical 만 검증).
+        let ps = ParaShape::default();
+        let mut writer = Writer::new(Vec::new());
+        write_para_pr(&mut writer, 0, &ps).expect("write paraPr");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+        assert!(
+            xml.contains(r#"vertical="BASELINE""#),
+            "기본 vertical=BASELINE: {xml}"
         );
     }
 
