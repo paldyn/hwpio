@@ -563,7 +563,10 @@ fn parse_char_shape(
             b"textColor" => cs.text_color = parse_color(&attr),
             b"shadeColor" => cs.shade_color = parse_color(&attr),
             b"useFontSpace" => cs.use_font_space = parse_bool(&attr),
-            b"useKerning" | b"symMark" => {}
+            b"useKerning" => cs.kerning = parse_bool(&attr),
+            // symMark(강조점)은 현재 코퍼스에서 항상 "NONE" 이라 emphasis_dot 기본값
+            // (NONE)과 일치 → 무손실. 비-NONE 값이 발견되면 별도 수집 필요.
+            b"symMark" => {}
             b"borderFillIDRef" => cs.border_fill_id = parse_u16(&attr),
             _ => {}
         }
@@ -2425,6 +2428,35 @@ mod tests {
         assert_eq!(cs.shadow_color, 0x00C0C0C0);
         assert_eq!(cs.shadow_offset_x, 10);
         assert_eq!(cs.shadow_offset_y, 10);
+    }
+
+    #[test]
+    fn test_parse_char_pr_captures_use_kerning() {
+        // [Finding 20] useKerning 은 종전에 파서가 무시해 항상 false 로 직렬화됐다.
+        // 이제 cs.kerning 으로 보존해 round-trip 무손실.
+        let xml = r##"<?xml version="1.0" encoding="UTF-8"?>
+<hh:head xmlns:hh="http://www.hancom.co.kr/hwpml/2011/head">
+  <hh:refList>
+    <hh:charProperties itemCnt="2">
+      <hh:charPr id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="1" symMark="NONE">
+        <hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+      </hh:charPr>
+      <hh:charPr id="1" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE">
+        <hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
+      </hh:charPr>
+    </hh:charProperties>
+  </hh:refList>
+</hh:head>"##;
+
+        let (doc_info, _) = parse_hwpx_header(xml).unwrap();
+        assert!(
+            doc_info.char_shapes[0].kerning,
+            "useKerning=1 → kerning=true"
+        );
+        assert!(
+            !doc_info.char_shapes[1].kerning,
+            "useKerning=0 → kerning=false"
+        );
     }
 
     #[test]
