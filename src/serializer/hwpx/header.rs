@@ -364,7 +364,16 @@ fn write_border_line<W: Write>(
 }
 
 fn write_diagonal<W: Write>(w: &mut Writer<W>, d: &DiagonalLine) -> Result<(), SerializeError> {
-    let type_str = if d.width == 0 { "NONE" } else { "SOLID" };
+    // diagonal_type 코드 0 = 대각선 없음 → 엘리먼트 자체를 생략한다. 한컴 원본도
+    // 대각선이 없으면 <hh:diagonal> 를 쓰지 않고, 렌더러도 diagonal_type==0 을
+    // 미표시로 처리한다. 종전엔 width==0 으로 NONE 을 추론해 대각선 없는 borderFill
+    // 마다 <hh:diagonal type="NONE"/> 을 과다 출력했고(원본에 없던 요소 추가),
+    // 그 회피책으로 파서가 width 를 max(1) 로 띄워 0.1mm 대각선을 0.12mm 로 변질시켰다.
+    // 이제 선 종류는 width 가 아니라 diagonal_type 코드에서 직접 복원한다.
+    if d.diagonal_type == 0 {
+        return Ok(());
+    }
+    let type_str = border_line_type_str(border_line_type_from_code(d.diagonal_type));
     let width_mm = format!("{} mm", border_width_mm(d.width));
     let color = color_hex(d.color);
     empty_tag(
@@ -372,6 +381,33 @@ fn write_diagonal<W: Write>(w: &mut Writer<W>, d: &DiagonalLine) -> Result<(), S
         "hh:diagonal",
         &[("type", type_str), ("width", &width_mm), ("color", &color)],
     )
+}
+
+/// `parser::hwpx::header::parse_border_line_type_code` 의 역함수. 대각선 선 종류
+/// 코드(u8)를 [`BorderLineType`] 으로 되돌려 `border_line_type_str` 로 문자열화한다.
+fn border_line_type_from_code(code: u8) -> BorderLineType {
+    use BorderLineType::*;
+    match code {
+        0 => None,
+        1 => Solid,
+        2 => Dash,
+        3 => Dot,
+        4 => DashDot,
+        5 => DashDotDot,
+        6 => LongDash,
+        7 => Circle,
+        8 => Double,
+        9 => ThinThickDouble,
+        10 => ThickThinDouble,
+        11 => ThinThickThinTriple,
+        12 => Wave,
+        13 => DoubleWave,
+        14 => Thick3D,
+        15 => Thick3DReverse,
+        16 => Thin3D,
+        17 => Thin3DReverse,
+        _ => Solid,
+    }
 }
 
 fn border_line_type_str(t: BorderLineType) -> &'static str {
@@ -1468,6 +1504,34 @@ mod tests {
         assert_eq!(diagonal_shape_type(0b011), "CENTER_BELOW");
         assert_eq!(diagonal_shape_type(0b110), "CENTER_ABOVE");
         assert_eq!(diagonal_shape_type(0b111), "ALL");
+    }
+
+    #[test]
+    fn write_diagonal_omits_when_none_and_restores_type_from_code() {
+        // diagonal_type 코드 0 = 대각선 없음 → 엘리먼트 자체를 출력하지 않는다.
+        let none = DiagonalLine::default();
+        let mut w = Writer::new(Vec::new());
+        write_diagonal(&mut w, &none).expect("write");
+        assert_eq!(
+            String::from_utf8(w.into_inner()).unwrap(),
+            "",
+            "대각선 없음(code 0)은 미출력이어야 함"
+        );
+
+        // diagonal_type 1(SOLID) + width index 0(0.1mm): 선 종류는 코드에서 복원하고,
+        // width 는 max(1) 변질 없이 0.1mm 그대로여야 한다.
+        let solid = DiagonalLine {
+            diagonal_type: 1,
+            width: 0,
+            color: 0,
+        };
+        let mut w = Writer::new(Vec::new());
+        write_diagonal(&mut w, &solid).expect("write");
+        assert_eq!(
+            String::from_utf8(w.into_inner()).unwrap(),
+            r##"<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>"##,
+            "SOLID 대각선은 type 코드 복원 + width 무변질"
+        );
     }
 
     #[test]

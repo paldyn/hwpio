@@ -1341,7 +1341,7 @@ fn parse_border_fill(
                                         bf.diagonal.diagonal_type =
                                             parse_border_line_type_code(&attr)
                                     }
-                                    b"width" => bf.diagonal.width = parse_diagonal_width(&attr),
+                                    b"width" => bf.diagonal.width = parse_border_width(&attr),
                                     b"color" => bf.diagonal.color = parse_color(&attr),
                                     _ => {}
                                 }
@@ -1961,10 +1961,6 @@ fn set_diagonal_attr_bits(bf: &mut BorderFill, shift: u16, code: u8) {
     let mask = 0x07u16 << shift;
     bf.attr &= !mask;
     bf.attr |= ((code as u16) & 0x07) << shift;
-}
-
-fn parse_diagonal_width(attr: &quick_xml::events::attributes::Attribute) -> u8 {
-    parse_border_width(attr).max(1)
 }
 
 fn parse_border_width(attr: &quick_xml::events::attributes::Attribute) -> u8 {
