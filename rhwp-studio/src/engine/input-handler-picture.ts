@@ -2,6 +2,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { MovePictureCommand, MoveShapeCommand, ResizeObjectCommand } from './command';
+import type { ObjectResizeTarget } from './command';
+import { computeArrowResize, type ArrowKey } from './picture-resize';
 import type { CellPathLike } from '@/core/types';
 
 type PictureObjectRef = {
@@ -473,11 +475,52 @@ export function deleteObjectControl(this: any, ref: PictureObjectRef): void {
   }
 }
 
+// ─── Shift+방향키 크기 조절 (#1231) ─────────────────────
+
+/**
+ * 그림 객체 선택 모드에서 Shift+방향키로 개체 크기를 단계 조절한다 (한컴 정합).
+ * 이동(moveSelectedPicture)과 동일한 격자 단계를 쓰고, 드래그 리사이즈와 동일하게
+ * ResizeObjectCommand 로 Undo/Redo 를 기록한다. 셀/글상자/머리말 내 개체는
+ * get/setObjectProperties 의 경로 분기를 그대로 탄다.
+ */
+export function resizeSelectedPicture(this: any, key: ArrowKey): void {
+  const refs = this.cursor.getSelectedPictureRefs();
+  const ref = this.cursor.getSelectedPictureRef();
+  if (!ref) return;
+
+  const step = Math.round(this.gridStepMm * 7200 / 25.4); // mm → HWPUNIT
+  const targets = refs.length > 1 ? refs : [ref];
+  try {
+    const historyTargets: ObjectResizeTarget[] = [];
+    for (const r of targets) {
+      const props = getObjectProperties.call(this, r);
+      const resized = computeArrowResize(key, props.width, props.height, step);
+      if (!resized) continue;
+      setObjectProperties.call(this, r, resized.after);
+      historyTargets.push({
+        sec: r.sec,
+        ppi: r.ppi,
+        ci: r.ci,
+        type: r.type,
+        cellPath: r.cellPath,
+        before: resized.before,
+        after: resized.after,
+      });
+    }
+    if (historyTargets.length === 0) return;
+    this.executeOperation({ kind: 'record', command: new ResizeObjectCommand(historyTargets) });
+    this.eventBus.emit('document-changed');
+    this.renderPictureObjectSelection();
+  } catch (err) {
+    console.warn('[InputHandler] 개체 크기 조절 실패:', err);
+  }
+}
+
 // ─── 핸들 드래그 리사이즈 ─────────────────────────
 
 /** 1 page px = 7200/96 = 75 HWPUNIT */
 const PX_TO_HWP = 7200 / 96;
-const MIN_SIZE_HWP = 283; // ≈1mm
+const MIN_SIZE_HWP = 283; // ≈1mm — picture-resize.ts MIN_SIZE_HWP 와 동일 값 유지
 
 /**
  * 회전각을 반영하여 리사이즈 후 새 bbox(비회전 기준)를 계산한다.
