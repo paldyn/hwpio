@@ -142,6 +142,23 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
     // 1. ZIP 컨테이너 열기
     let mut reader = reader::HwpxReader::open(data)?;
 
+    // 1-1. 보조 엔트리 원본 보존 (라운드트립 무손실).
+    //   IR 로 모델링되지 않는 엔트리(version.xml/settings.xml/Preview/*)는
+    //   직렬화기가 하드코딩 상수로 재생성하면서 원본 플랫폼/인쇄설정/미리보기를
+    //   잃는다. 여기서 원본 바이트를 그대로 보존해 직렬화 시 passthrough 한다.
+    const HWPX_AUX_PATHS: &[&str] = &[
+        "version.xml",
+        "settings.xml",
+        "Preview/PrvText.txt",
+        "Preview/PrvImage.png",
+    ];
+    let mut hwpx_aux_entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for path in HWPX_AUX_PATHS {
+        if let Ok(bytes) = reader.read_file_bytes(path) {
+            hwpx_aux_entries.push((path.to_string(), bytes));
+        }
+    }
+
     // 2. content.hpf → 섹션 파일 목록 + BinData 목록
     let content_xml = reader.read_file("Contents/content.hpf")?;
     let package_info = content::parse_content_hpf(&content_xml)?;
@@ -319,6 +336,7 @@ pub fn parse_hwpx(data: &[u8]) -> Result<Document, HwpxError> {
         preview: None,
         bin_data_content,
         extra_streams: contract.streams,
+        hwpx_aux_entries,
         is_hwp3_variant: false,
     };
 
