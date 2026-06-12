@@ -296,6 +296,175 @@ pub fn diff_documents(a: &Document, b: &Document) -> IrDiff {
     diff
 }
 
+/// 문단별 lineseg 측정 결과 1건 (Task #1380 — **게이트 비동승, 측정 전용**).
+///
+/// `path` 표기는 `IrDifference::ParagraphCharShapes` 와 동일
+/// (본문 문단은 빈 문자열, 중첩 문단은 `/ctrl[i]tbl.cell[j].p[k]` 식).
+#[derive(Debug, Clone)]
+pub struct LinesegDiff {
+    pub section: usize,
+    pub paragraph: usize,
+    pub path: String,
+    pub kind: LinesegDiffKind,
+}
+
+/// lineseg 불일치 종류.
+#[derive(Debug, Clone)]
+pub enum LinesegDiffKind {
+    /// 문단의 lineseg 개수 불일치.
+    CountMismatch { expected: usize, actual: usize },
+    /// 같은 인덱스 lineseg 의 필드 값 불일치. `field` 는 HWPX 속성명
+    /// (textpos/vertpos/vertsize/textheight/baseline/spacing/horzpos/horzsize/flags).
+    ValueMismatch {
+        index: usize,
+        field: &'static str,
+        expected: i64,
+        actual: i64,
+    },
+}
+
+/// 문서 전체의 문단별 `line_segs` 를 비교한다 (Task #1380 1단계 측정 도구).
+///
+/// `diff_documents` 와 **별도** — baseline 게이트에 동승하지 않는다.
+/// 순회 경로는 `diff_paragraph_char_shapes` 와 동일 (본문 + 셀·글상자(Group 재귀)·
+/// 각주/미주). 개수 불일치 시에도 공통 구간(min)은 값 비교를 계속한다.
+pub fn diff_linesegs(a: &Document, b: &Document) -> Vec<LinesegDiff> {
+    let mut out = Vec::new();
+    let pairs = a.sections.len().min(b.sections.len());
+    for i in 0..pairs {
+        let pp = a.sections[i]
+            .paragraphs
+            .len()
+            .min(b.sections[i].paragraphs.len());
+        for j in 0..pp {
+            diff_paragraph_linesegs(
+                &mut out,
+                i,
+                j,
+                "",
+                &a.sections[i].paragraphs[j],
+                &b.sections[i].paragraphs[j],
+            );
+        }
+    }
+    out
+}
+
+/// 문단 1쌍의 lineseg 비교 + 컨트롤 내부 문단 재귀 (`diff_paragraph_char_shapes` 와
+/// 동일 경로 순회).
+fn diff_paragraph_linesegs(
+    out: &mut Vec<LinesegDiff>,
+    section: usize,
+    paragraph: usize,
+    path: &str,
+    pa: &crate::model::paragraph::Paragraph,
+    pb: &crate::model::paragraph::Paragraph,
+) {
+    use crate::model::control::Control;
+
+    let la = &pa.line_segs;
+    let lb = &pb.line_segs;
+    if la.len() != lb.len() {
+        out.push(LinesegDiff {
+            section,
+            paragraph,
+            path: path.to_string(),
+            kind: LinesegDiffKind::CountMismatch {
+                expected: la.len(),
+                actual: lb.len(),
+            },
+        });
+    }
+    for (idx, (sa, sb)) in la.iter().zip(lb.iter()).enumerate() {
+        let fields: [(&'static str, i64, i64); 9] = [
+            ("textpos", sa.text_start as i64, sb.text_start as i64),
+            ("vertpos", sa.vertical_pos as i64, sb.vertical_pos as i64),
+            ("vertsize", sa.line_height as i64, sb.line_height as i64),
+            ("textheight", sa.text_height as i64, sb.text_height as i64),
+            (
+                "baseline",
+                sa.baseline_distance as i64,
+                sb.baseline_distance as i64,
+            ),
+            ("spacing", sa.line_spacing as i64, sb.line_spacing as i64),
+            ("horzpos", sa.column_start as i64, sb.column_start as i64),
+            ("horzsize", sa.segment_width as i64, sb.segment_width as i64),
+            ("flags", sa.tag as i64, sb.tag as i64),
+        ];
+        for (field, ea, eb) in fields {
+            if ea != eb {
+                out.push(LinesegDiff {
+                    section,
+                    paragraph,
+                    path: path.to_string(),
+                    kind: LinesegDiffKind::ValueMismatch {
+                        index: idx,
+                        field,
+                        expected: ea,
+                        actual: eb,
+                    },
+                });
+            }
+        }
+    }
+
+    for (ci, (ctrl_a, ctrl_b)) in pa.controls.iter().zip(pb.controls.iter()).enumerate() {
+        match (ctrl_a, ctrl_b) {
+            (Control::Table(ta), Control::Table(tb)) => {
+                for (cell_i, (cea, ceb)) in ta.cells.iter().zip(tb.cells.iter()).enumerate() {
+                    for (k, (qa, qb)) in
+                        cea.paragraphs.iter().zip(ceb.paragraphs.iter()).enumerate()
+                    {
+                        let p = format!("{path}/ctrl[{ci}]tbl.cell[{cell_i}].p[{k}]");
+                        diff_paragraph_linesegs(out, section, paragraph, &p, qa, qb);
+                    }
+                }
+            }
+            (Control::Shape(sa), Control::Shape(sb)) => {
+                let p = format!("{path}/ctrl[{ci}]shape");
+                diff_shape_linesegs(out, section, paragraph, &p, sa, sb);
+            }
+            (Control::Footnote(na), Control::Footnote(nb)) => {
+                for (k, (qa, qb)) in na.paragraphs.iter().zip(nb.paragraphs.iter()).enumerate() {
+                    let p = format!("{path}/ctrl[{ci}]fn.p[{k}]");
+                    diff_paragraph_linesegs(out, section, paragraph, &p, qa, qb);
+                }
+            }
+            (Control::Endnote(na), Control::Endnote(nb)) => {
+                for (k, (qa, qb)) in na.paragraphs.iter().zip(nb.paragraphs.iter()).enumerate() {
+                    let p = format!("{path}/ctrl[{ci}]en.p[{k}]");
+                    diff_paragraph_linesegs(out, section, paragraph, &p, qa, qb);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 도형 내부 글상자(TextBox) 문단 lineseg 재귀 비교 — Group 은 자식 도형까지 재귀.
+fn diff_shape_linesegs(
+    out: &mut Vec<LinesegDiff>,
+    section: usize,
+    paragraph: usize,
+    path: &str,
+    sa: &crate::model::shape::ShapeObject,
+    sb: &crate::model::shape::ShapeObject,
+) {
+    use crate::model::shape::ShapeObject;
+    if let (Some(ta), Some(tb)) = (shape_text_box(sa), shape_text_box(sb)) {
+        for (k, (qa, qb)) in ta.paragraphs.iter().zip(tb.paragraphs.iter()).enumerate() {
+            let p = format!("{path}.tb.p[{k}]");
+            diff_paragraph_linesegs(out, section, paragraph, &p, qa, qb);
+        }
+    }
+    if let (ShapeObject::Group(ga), ShapeObject::Group(gb)) = (sa, sb) {
+        for (k, (c1, c2)) in ga.children.iter().zip(gb.children.iter()).enumerate() {
+            let p = format!("{path}.child[{k}]");
+            diff_shape_linesegs(out, section, paragraph, &p, c1, c2);
+        }
+    }
+}
+
 /// 문단 char_shapes 시퀀스(#1378)와 인라인 슬롯 컨트롤 타입 시퀀스(#1379)를 비교하고,
 /// 컨트롤 내부 문단(셀·글상자·각주/미주)을 재귀 비교한다.
 ///
@@ -856,5 +1025,127 @@ mod tests {
                 actual: 1
             }
         ));
+    }
+
+    // ---------- #1380: diff_linesegs (측정 전용 — 게이트 비동승) ----------
+
+    use crate::model::paragraph::LineSeg;
+
+    /// 지정 lineseg 들을 가진 단일 문단 Document 생성.
+    fn doc_with_linesegs(segs: Vec<LineSeg>) -> Document {
+        let mut para = Paragraph::default();
+        para.line_segs = segs;
+        let mut doc = Document::default();
+        let mut section: crate::model::document::Section = Default::default();
+        section.paragraphs.push(para);
+        doc.sections.push(section);
+        doc
+    }
+
+    fn seg(vertical_pos: i32, line_height: i32) -> LineSeg {
+        LineSeg {
+            vertical_pos,
+            line_height,
+            text_height: 1000,
+            baseline_distance: 850,
+            line_spacing: 600,
+            segment_width: 42520,
+            tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn diff_linesegs_equal_is_empty() {
+        let a = doc_with_linesegs(vec![seg(0, 1200), seg(1200, 1200)]);
+        let b = doc_with_linesegs(vec![seg(0, 1200), seg(1200, 1200)]);
+        assert!(diff_linesegs(&a, &b).is_empty());
+    }
+
+    #[test]
+    fn diff_linesegs_detects_value_mismatch() {
+        let a = doc_with_linesegs(vec![seg(0, 21974)]);
+        let b = doc_with_linesegs(vec![seg(0, 19924)]);
+        let diffs = diff_linesegs(&a, &b);
+        assert_eq!(diffs.len(), 1, "{diffs:?}");
+        match &diffs[0].kind {
+            LinesegDiffKind::ValueMismatch {
+                index,
+                field,
+                expected,
+                actual,
+            } => {
+                assert_eq!(*index, 0);
+                assert_eq!(*field, "vertsize");
+                assert_eq!(*expected, 21974);
+                assert_eq!(*actual, 19924);
+            }
+            other => panic!("ValueMismatch 여야 함: {other:?}"),
+        }
+        assert_eq!(diffs[0].path, "");
+    }
+
+    #[test]
+    fn diff_linesegs_detects_count_mismatch_and_compares_common() {
+        // 개수 불일치 + 공통 구간(min) 값 비교 계속.
+        let a = doc_with_linesegs(vec![seg(0, 1200), seg(1200, 1200)]);
+        let b = doc_with_linesegs(vec![seg(0, 1000)]);
+        let diffs = diff_linesegs(&a, &b);
+        assert!(
+            diffs.iter().any(|d| matches!(
+                d.kind,
+                LinesegDiffKind::CountMismatch {
+                    expected: 2,
+                    actual: 1
+                }
+            )),
+            "{diffs:?}"
+        );
+        assert!(
+            diffs.iter().any(|d| matches!(
+                d.kind,
+                LinesegDiffKind::ValueMismatch {
+                    index: 0,
+                    field: "vertsize",
+                    ..
+                }
+            )),
+            "{diffs:?}"
+        );
+    }
+
+    #[test]
+    fn diff_linesegs_recurses_into_cell() {
+        // 셀 내부 문단의 lineseg 차이를 path 와 함께 검출.
+        let make = |lh: i32| {
+            let mut doc = doc_with_control(table_control(&[(0, 1)]));
+            if let crate::model::control::Control::Table(t) =
+                &mut doc.sections[0].paragraphs[0].controls[0]
+            {
+                t.cells[0].paragraphs[0].line_segs = vec![seg(0, lh)];
+            }
+            doc
+        };
+        let a = make(1200);
+        let b = make(1000);
+        let diffs = diff_linesegs(&a, &b);
+        assert_eq!(diffs.len(), 1, "{diffs:?}");
+        assert_eq!(diffs[0].path, "/ctrl[0]tbl.cell[0].p[0]");
+        assert!(matches!(
+            diffs[0].kind,
+            LinesegDiffKind::ValueMismatch {
+                field: "vertsize",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn diff_linesegs_not_in_gate() {
+        // lineseg 차이는 diff_documents(게이트)에 잡히지 않아야 한다 (1단계는 측정 전용).
+        let a = doc_with_linesegs(vec![seg(0, 21974)]);
+        let b = doc_with_linesegs(vec![seg(0, 19924)]);
+        assert!(diff_documents(&a, &b).is_empty());
+        assert_eq!(diff_linesegs(&a, &b).len(), 1);
     }
 }
