@@ -54,6 +54,10 @@ pub fn write_header(doc: &Document, ctx: &SerializeContext) -> Result<Vec<u8>, S
                 "xmlns:ooxmlchart",
                 "http://www.hancom.co.kr/hwpml/2016/ooxmlchart",
             ),
+            (
+                "xmlns:hwpunitchar",
+                "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar",
+            ),
             ("xmlns:hpf", "http://www.hancom.co.kr/schema/2011/hpf"),
             (
                 "xmlns:config",
@@ -1139,6 +1143,11 @@ mod tests {
         let xml = std::str::from_utf8(&bytes).unwrap();
         assert!(xml.contains("<hh:head"));
         assert!(xml.contains("</hh:head>"));
+        // [Finding 15] hwpunitchar 네임스페이스 선언 누락 금지(원본 hh:head 에 존재).
+        assert!(
+            xml.contains(r#"xmlns:hwpunitchar="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar""#),
+            "hh:head 에 xmlns:hwpunitchar 선언이 있어야 함"
+        );
     }
 
     #[test]
