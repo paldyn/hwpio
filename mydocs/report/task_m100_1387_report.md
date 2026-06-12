@@ -58,11 +58,12 @@ serializer/게이트 한정, 렌더러·레이아웃·파서 무변경.
 | 캡션 autoNum 슬롯 끝 방출 + 재파싱 끝 공백 1자 (ta-pic) | **#1382 발현** — 파서가 placeholder를 1유닛 적재 → `inferred_control_slot_count` mismatch. 본문 143E xfail과 동일 계열 |
 | autoNum `numType` FIGURE 방출 → 한컴 캡션 번호 미출력 | **본 타스크에서 정정** — 1차 한컴 판정(ta-pic 번호 미출력)으로 실증. FIGURE는 한컴 생산 파일 비실재(전수 sweep 0건, 실물은 PICTURE 표기). `auto_number_type_to_str` Picture→"PICTURE" 정정 + 테스트 단정 추가. 파서는 FIGURE/PICTURE 양쪽 수용 유지 |
 
-## 5. 별도 이슈 제안 (승인 요청)
+## 5. 별도 이슈 등록 (승인 완료)
 
-**그림/도형 캡션(hp:caption) 미직렬화** — aift 실측 pic 8 + line 3 = 11건 소실.
-표 캡션과 달리 `ShapeComponent.caption` 경로(shape.rs serializer)로, 본 타스크 범위 밖.
-#1315 하위로 등록 제안.
+| 이슈 | 내용 |
+|------|------|
+| **#1403** | 그림/도형 캡션(hp:caption) 미직렬화 — aift 실측 pic 8 + line 3 = 11건 소실. `ShapeComponent.caption` 경로로 표 캡션과 별개 |
+| **#1402** | 열거 속성 표면 표기 정합 검사 — numType FIGURE 선례의 일반화. serializer 열거 토큰 방출 약 40여 함수가 동일 패턴 후보 (파서 관용 수용 → 게이트 비가시) |
 
 ## 6. 잔존 한계 (기지 이슈 귀속)
 
@@ -72,7 +73,8 @@ serializer/게이트 한정, 렌더러·레이아웃·파서 무변경.
 | hp:pic 크기 요소 IR 미반영 | #1389 |
 | 표 pageBreak 일괄 TABLE 방출 | #1393 |
 | MEMO subList / shapeComment 소실 | #1391 / #1392 |
-| 그림/도형 캡션 소실 | 신규 — 5절 등록 제안 |
+| 그림/도형 캡션 소실 | #1403 (5절) |
+| 열거 토큰 표기 정합 사각 | #1402 (5절) |
 
 ## 7. 한컴 판정
 
