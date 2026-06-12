@@ -743,8 +743,8 @@ fn write_para_pr<W: Write>(
         ],
     )?;
 
-    // 자식 순서 (ParaShapeType.cpp:50-56):
-    // align, heading, breakSetting, margin, lineSpacing, border, autoSpacing
+    // 자식 순서 (한컴 원본 관찰):
+    // align, heading, breakSetting, autoSpacing, switch(margin+lineSpacing), border
     empty_tag(
         w,
         "hh:align",
@@ -776,24 +776,14 @@ fn write_para_pr<W: Write>(
         ],
     )?;
 
-    // <hh:margin>: 자식 4개 (intent, left, right, prev, next) — 단위/값 지정
-    super::utils::start_tag(w, "hh:margin")?;
-    write_margin_child(w, "hh:intent", ps.indent)?;
-    write_margin_child(w, "hh:left", ps.margin_left)?;
-    write_margin_child(w, "hh:right", ps.margin_right)?;
-    write_margin_child(w, "hh:prev", ps.spacing_before)?;
-    write_margin_child(w, "hh:next", ps.spacing_after)?;
-    end_tag(w, "hh:margin")?;
-
     empty_tag(
         w,
-        "hh:lineSpacing",
-        &[
-            ("type", line_spacing_type_str(ps.line_spacing_type)),
-            ("value", &ps.line_spacing.to_string()),
-            ("unit", "HWPUNIT"),
-        ],
+        "hh:autoSpacing",
+        &[("eAsianEng", "0"), ("eAsianNum", "0")],
     )?;
+
+    // margin + lineSpacing 은 한컴 원본과 동일하게 <hp:switch>(case/default)로 감싼다.
+    write_para_margin_switch(w, ps)?;
 
     empty_tag(
         w,
@@ -809,16 +799,90 @@ fn write_para_pr<W: Write>(
         ],
     )?;
 
-    empty_tag(
-        w,
-        "hh:autoSpacing",
-        &[("eAsianEng", "0"), ("eAsianNum", "0")],
-    )?;
-
     end_tag(w, "hh:paraPr")?;
     Ok(())
 }
 
+/// paraPr 의 margin + lineSpacing 을 한컴 원본과 동일하게 `<hp:switch>` 구조로 쓴다.
+///
+/// `parse_para_shape_switch` 의 정확한 역. 파서는 HwpUnitChar `case` 값을 ×2 하여
+/// IR 에 적재하므로(`stored = case × 2`), 역으로:
+///   - `default` 값 = IR 저장값 (`ps.indent` 등)
+///   - `case`(HwpUnitChar) 값 = 저장값 / 2 (margin), lineSpacing 은 PERCENT=저장값,
+///     그 외(Fixed/SpaceOnly/Minimum)=저장값/2
+///
+/// 파서는 `case` 를 우선 읽으므로 라운드트립 시 `case × 2 = 저장값` 으로 IR 이
+/// 정확히 복원된다(한컴 원본의 저장값은 항상 짝수).
+fn write_para_margin_switch<W: Write>(
+    w: &mut Writer<W>,
+    ps: &ParaShape,
+) -> Result<(), SerializeError> {
+    super::utils::start_tag(w, "hp:switch")?;
+
+    start_tag_attrs(
+        w,
+        "hp:case",
+        &[(
+            "hp:required-namespace",
+            "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar",
+        )],
+    )?;
+    write_para_margin(w, ps, true)?;
+    write_para_line_spacing(w, ps, true)?;
+    end_tag(w, "hp:case")?;
+
+    super::utils::start_tag(w, "hp:default")?;
+    write_para_margin(w, ps, false)?;
+    write_para_line_spacing(w, ps, false)?;
+    end_tag(w, "hp:default")?;
+
+    end_tag(w, "hp:switch")?;
+    Ok(())
+}
+
+/// `<hh:margin>` (자식 5개: intent/left/right/prev/next). `half=true` 면 HwpUnitChar
+/// case 용으로 저장값의 절반을 쓴다.
+fn write_para_margin<W: Write>(
+    w: &mut Writer<W>,
+    ps: &ParaShape,
+    half: bool,
+) -> Result<(), SerializeError> {
+    let v = |x: i32| if half { x / 2 } else { x };
+    super::utils::start_tag(w, "hh:margin")?;
+    write_margin_child(w, "hc:intent", v(ps.indent))?;
+    write_margin_child(w, "hc:left", v(ps.margin_left))?;
+    write_margin_child(w, "hc:right", v(ps.margin_right))?;
+    write_margin_child(w, "hc:prev", v(ps.spacing_before))?;
+    write_margin_child(w, "hc:next", v(ps.spacing_after))?;
+    end_tag(w, "hh:margin")?;
+    Ok(())
+}
+
+/// `<hh:lineSpacing>`. HwpUnitChar case(`case=true`)에서 PERCENT 는 저장값과 동일,
+/// 그 외 유형은 저장값의 절반을 쓴다(파서가 ×2 적재).
+fn write_para_line_spacing<W: Write>(
+    w: &mut Writer<W>,
+    ps: &ParaShape,
+    case: bool,
+) -> Result<(), SerializeError> {
+    let value = if case && !matches!(ps.line_spacing_type, LineSpacingType::Percent) {
+        ps.line_spacing / 2
+    } else {
+        ps.line_spacing
+    };
+    empty_tag(
+        w,
+        "hh:lineSpacing",
+        &[
+            ("type", line_spacing_type_str(ps.line_spacing_type)),
+            ("value", &value.to_string()),
+            ("unit", "HWPUNIT"),
+        ],
+    )
+}
+
+/// margin 자식(`<hc:intent value="…" unit="HWPUNIT"/>`). 한컴 원본 속성 순서는
+/// value, unit 이며 네임스페이스는 `hc:` 다.
 fn write_margin_child<W: Write>(
     w: &mut Writer<W>,
     name: &str,
@@ -827,7 +891,7 @@ fn write_margin_child<W: Write>(
     empty_tag(
         w,
         name,
-        &[("unit", "HWPUNIT"), ("value", &value.to_string())],
+        &[("value", &value.to_string()), ("unit", "HWPUNIT")],
     )
 }
 
@@ -1060,6 +1124,53 @@ mod tests {
         assert!(
             !xml.contains("fillBrush"),
             "FillType::None 은 fillBrush 미출력: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_para_pr_emits_margin_switch_case_default() {
+        // paraPr margin/lineSpacing 은 <hp:switch>(case=저장값/2, default=저장값)
+        // 구조로, margin 자식은 hc: 네임스페이스(value, unit 순)로 출력되어야 한다.
+        let mut ps = ParaShape::default();
+        ps.indent = -2620; // default; case = -1310
+        ps.line_spacing = 130;
+        ps.line_spacing_type = LineSpacingType::Percent;
+
+        let mut writer = Writer::new(Vec::new());
+        write_para_pr(&mut writer, 1, &ps).expect("write paraPr");
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+
+        // case: HwpUnitChar required-namespace + 절반 값 + hc: 네임스페이스
+        assert!(
+            xml.contains(
+                r#"<hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"><hh:margin><hc:intent value="-1310" unit="HWPUNIT"/>"#
+            ),
+            "case 는 HwpUnitChar + intent 절반(-1310) + hc: 네임스페이스: {xml}"
+        );
+        // default: 저장값 그대로
+        assert!(
+            xml.contains(r#"<hp:default><hh:margin><hc:intent value="-2620" unit="HWPUNIT"/>"#),
+            "default 는 저장값(-2620): {xml}"
+        );
+        // PERCENT lineSpacing 은 case/default 동일
+        assert_eq!(
+            xml.matches(r#"<hh:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>"#)
+                .count(),
+            2,
+            "PERCENT lineSpacing 은 case/default 양쪽에 동일 값: {xml}"
+        );
+        // 자식 순서: autoSpacing → switch → border
+        let auto = xml.find("autoSpacing").unwrap();
+        let sw = xml.find("<hp:switch>").unwrap();
+        let border = xml.find("<hh:border ").unwrap();
+        assert!(
+            auto < sw && sw < border,
+            "순서 autoSpacing<switch<border: {xml}"
+        );
+        // 옛 평면 hh: 마진 네임스페이스는 더 이상 없어야 한다.
+        assert!(
+            !xml.contains("<hh:intent"),
+            "margin 자식이 hh: 네임스페이스로 남으면 안 됨: {xml}"
         );
     }
 
