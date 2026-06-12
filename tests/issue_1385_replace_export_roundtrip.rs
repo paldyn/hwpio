@@ -14,8 +14,10 @@ use std::path::Path;
 use rhwp::document_core::DocumentCore;
 use rhwp::model::control::Control;
 use rhwp::model::document::Document;
+use rhwp::model::shape::ShapeObject;
 
 /// 본문 + 표 셀 + 글상자 문단 텍스트를 전부 이어붙인다 (치환 보존 검증용).
+/// `replace_all_native` 의 검색 범위(search_all)와 동일하게 순회한다.
 fn collect_all_text(doc: &Document) -> String {
     let mut acc = String::new();
     for section in &doc.sections {
@@ -23,18 +25,49 @@ fn collect_all_text(doc: &Document) -> String {
             acc.push_str(&para.text);
             acc.push('\n');
             for ctrl in &para.controls {
-                if let Control::Table(table) = ctrl {
-                    for cell in &table.cells {
-                        for cell_para in &cell.paragraphs {
-                            acc.push_str(&cell_para.text);
-                            acc.push('\n');
+                match ctrl {
+                    Control::Table(table) => {
+                        for cell in &table.cells {
+                            for cell_para in &cell.paragraphs {
+                                acc.push_str(&cell_para.text);
+                                acc.push('\n');
+                            }
                         }
                     }
+                    Control::Shape(shape) => {
+                        // 글상자를 가질 수 있는 도형 종류 — document_core::helpers::
+                        // get_textbox_from_shape 와 동일 분기 (테스트는 공개 모델로 접근)
+                        let drawing = match shape.as_ref() {
+                            ShapeObject::Rectangle(s) => Some(&s.drawing),
+                            ShapeObject::Ellipse(s) => Some(&s.drawing),
+                            ShapeObject::Polygon(s) => Some(&s.drawing),
+                            ShapeObject::Curve(s) => Some(&s.drawing),
+                            _ => None,
+                        };
+                        if let Some(tb) = drawing.and_then(|d| d.text_box.as_ref()) {
+                            for tb_para in &tb.paragraphs {
+                                acc.push_str(&tb_para.text);
+                                acc.push('\n');
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
     }
     acc
+}
+
+/// `replace_all_native` 반환 JSON을 파싱해 (ok, count)를 돌려준다.
+/// 직렬화 포맷 변화에 흔들리지 않도록 substring 매칭 대신 필드로 단언한다.
+fn parse_replace_result(result: &str) -> (bool, u64) {
+    let v: serde_json::Value = serde_json::from_str(result)
+        .unwrap_or_else(|e| panic!("replace_all 반환 JSON 파싱 실패: {e}: {result}"));
+    (
+        v["ok"].as_bool().unwrap_or(false),
+        v["count"].as_u64().unwrap_or(0),
+    )
 }
 
 fn load(sample: &str) -> (DocumentCore, Vec<u8>) {
@@ -60,14 +93,9 @@ fn replace_all_body_text_survives_hwp_export() {
     let result = core
         .replace_all_native(needle, marker, true)
         .expect("replace_all_native should succeed");
-    assert!(
-        result.contains("\"ok\":true"),
-        "replace_all should report ok: {result}"
-    );
-    assert!(
-        !result.contains("\"count\":0"),
-        "replace_all should hit at least once: {result}"
-    );
+    let (ok, count) = parse_replace_result(&result);
+    assert!(ok, "replace_all should report ok: {result}");
+    assert!(count > 0, "replace_all should hit at least once: {result}");
 
     let exported = core
         .export_hwp_with_adapter()
@@ -99,10 +127,8 @@ fn replace_all_table_cell_text_survives_hwp_export() {
     let result = core
         .replace_all_native(needle, marker, true)
         .expect("replace_all_native should succeed");
-    assert!(
-        result.contains("\"ok\":true") && !result.contains("\"count\":0"),
-        "cell replace_all should hit: {result}"
-    );
+    let (ok, count) = parse_replace_result(&result);
+    assert!(ok && count > 0, "cell replace_all should hit: {result}");
 
     let exported = core
         .export_hwp_with_adapter()
