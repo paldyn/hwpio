@@ -3,7 +3,7 @@
 
 import { MovePictureCommand, MoveShapeCommand, ResizeObjectCommand } from './command';
 import type { ObjectResizeTarget } from './command';
-import { computeArrowResize, type ArrowKey } from './picture-resize';
+import { computeArrowResize, MIN_SIZE_HWP, type ArrowKey } from './picture-resize';
 import type { CellPathLike } from '@/core/types';
 
 type PictureObjectRef = {
@@ -491,24 +491,35 @@ export function resizeSelectedPicture(this: any, key: ArrowKey): void {
   const step = Math.round(this.gridStepMm * 7200 / 25.4); // mm → HWPUNIT
   const targets = refs.length > 1 ? refs : [ref];
   try {
-    const historyTargets: ObjectResizeTarget[] = [];
+    // 1단계: 조회/계산만 먼저 전부 수행 — 일부 개체 조회가 실패해도 문서는 무변경
+    const pending: { r: PictureObjectRef; target: ObjectResizeTarget }[] = [];
     for (const r of targets) {
       const props = getObjectProperties.call(this, r);
       const resized = computeArrowResize(key, props.width, props.height, step);
       if (!resized) continue;
-      setObjectProperties.call(this, r, resized.after);
-      historyTargets.push({
-        sec: r.sec,
-        ppi: r.ppi,
-        ci: r.ci,
-        type: r.type,
-        cellPath: r.cellPath,
-        before: resized.before,
-        after: resized.after,
+      pending.push({
+        r,
+        target: {
+          sec: r.sec,
+          ppi: r.ppi,
+          ci: r.ci,
+          type: r.type,
+          cellPath: r.cellPath,
+          before: resized.before,
+          after: resized.after,
+        },
       });
     }
-    if (historyTargets.length === 0) return;
-    this.executeOperation({ kind: 'record', command: new ResizeObjectCommand(historyTargets) });
+    if (pending.length === 0) return;
+    // 2단계: 적용 후 Undo 기록 (드래그 리사이즈와 동일 순서; 원본 ref 로 적용해
+    // headerFooter 등 dispatch 필드를 보존한다)
+    for (const { r, target } of pending) {
+      setObjectProperties.call(this, r, target.after);
+    }
+    this.executeOperation({
+      kind: 'record',
+      command: new ResizeObjectCommand(pending.map((p) => p.target)),
+    });
     this.eventBus.emit('document-changed');
     this.renderPictureObjectSelection();
   } catch (err) {
@@ -520,7 +531,7 @@ export function resizeSelectedPicture(this: any, key: ArrowKey): void {
 
 /** 1 page px = 7200/96 = 75 HWPUNIT */
 const PX_TO_HWP = 7200 / 96;
-const MIN_SIZE_HWP = 283; // ≈1mm — picture-resize.ts MIN_SIZE_HWP 와 동일 값 유지
+// MIN_SIZE_HWP 는 picture-resize.ts 에서 import (드래그/키보드 리사이즈 공용 하한)
 
 /**
  * 회전각을 반영하여 리사이즈 후 새 bbox(비회전 기준)를 계산한다.

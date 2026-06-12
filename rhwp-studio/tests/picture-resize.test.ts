@@ -46,6 +46,22 @@ test('computeArrowResize는 비정상 입력에 null을 돌려준다', () => {
   assert.equal(computeArrowResize('ArrowRight', 1000, Number.POSITIVE_INFINITY, STEP), null);
   assert.equal(computeArrowResize('ArrowRight', 1000, 1000, 0), null);
   assert.equal(computeArrowResize('ArrowRight', 1000, 1000, -5), null);
+  // 런타임 비검증 key — arrowResizeDelta 안전망이 무변화로 흡수해 null
+  assert.equal(computeArrowResize('PageUp' as ArrowKey, 1000, 1000, STEP), null);
+});
+
+test('computeArrowResize는 비변경 축의 비정수 값을 보정하지 않는다', () => {
+  // 가로만 변경: 세로의 소수값은 그대로 (의도치 않은 라운딩/Undo 기록 방지)
+  const r = computeArrowResize('ArrowRight', 1000, 1234.5, STEP);
+  assert.ok(r);
+  assert.equal(r.after.width, 1000 + STEP);
+  assert.equal(r.after.height, 1234.5);
+
+  // 세로만 변경: 가로의 소수값은 그대로
+  const r2 = computeArrowResize('ArrowDown', 999.25, 1000, STEP);
+  assert.ok(r2);
+  assert.equal(r2.after.width, 999.25);
+  assert.equal(r2.after.height, 1000 + STEP);
 });
 
 test('확대는 모든 방향에서 격자 step 정수 단위로 일관된다', () => {
