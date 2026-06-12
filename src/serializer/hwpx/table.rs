@@ -290,7 +290,8 @@ fn write_sub_list_paragraphs<W: Write>(
 /// 속성 순서는 한컴 실물(ta-pic-001-r) 기준: side, fullSz, width, gap, lastWidth.
 /// 캡션 subList 속성은 파서가 적재하지 않으며 samples/hwpx 전수 17건 동일
 /// (vertAlign=TOP lineWrap=BREAK textDirection=HORIZONTAL — 1단계 측정) — 실물 고정값 방출.
-fn write_caption<W: Write>(
+/// 그림/도형/묶음 캡션(#1403)도 동일 경로를 공유한다 (pub(super)).
+pub(super) fn write_caption<W: Write>(
     w: &mut Writer<W>,
     caption: &crate::model::shape::Caption,
     ctx: &mut SerializeContext,

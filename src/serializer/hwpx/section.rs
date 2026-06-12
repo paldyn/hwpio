@@ -967,7 +967,7 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
     }
     // Line: Writer-based serializer
     if let ShapeObject::Line(l) = shape {
-        return match writer_to_string(|w| super::shape::write_line(w, l)) {
+        return match writer_to_string(|w| super::shape::write_line(w, l, ctx)) {
             Ok(xml) => xml,
             Err(e) => {
                 eprintln!("[hwpx] Shape::Line 직렬화 실패: {e}");
@@ -986,18 +986,20 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
         for child in &g.children {
             xml.push_str(&render_shape(child, ctx));
         }
-        match writer_to_string(super::shape::write_container_close) {
+        // 캡션 (#1403) 은 자식 도형 뒤에 방출 — 한컴 실물(aift.hwpx) 순서
+        match writer_to_string(|w| super::shape::write_container_close(w, g.caption.as_ref(), ctx))
+        {
             Ok(close) => xml.push_str(&close),
             Err(e) => eprintln!("[hwpx] Shape::Group 닫기 실패: {e}"),
         }
         return xml;
     }
-    let (tag, c) = match shape {
+    let (tag, c, caption) = match shape {
         ShapeObject::Rectangle(_) | ShapeObject::Line(_) => unreachable!(),
-        ShapeObject::Ellipse(e) => ("ellipse", &e.common),
-        ShapeObject::Arc(a) => ("arc", &a.common),
-        ShapeObject::Polygon(p) => ("polygon", &p.common),
-        ShapeObject::Curve(cv) => ("curve", &cv.common),
+        ShapeObject::Ellipse(e) => ("ellipse", &e.common, &e.drawing.caption),
+        ShapeObject::Arc(a) => ("arc", &a.common, &a.drawing.caption),
+        ShapeObject::Polygon(p) => ("polygon", &p.common, &p.drawing.caption),
+        ShapeObject::Curve(cv) => ("curve", &cv.common, &cv.drawing.caption),
         ShapeObject::Group(_) => unreachable!(),
         ShapeObject::Picture(pic) => {
             return match writer_to_string(|w| picture::write_picture(w, pic, ctx)) {
@@ -1008,20 +1010,24 @@ fn render_shape(shape: &ShapeObject, ctx: &mut SerializeContext) -> String {
                 }
             };
         }
-        ShapeObject::Chart(ch) => ("chart", &ch.common),
-        ShapeObject::Ole(o) => ("ole", &o.common),
+        ShapeObject::Chart(ch) => ("chart", &ch.common, &ch.caption),
+        ShapeObject::Ole(o) => ("ole", &o.common, &o.caption),
     };
-    render_common_shape_xml(tag, c)
+    render_common_shape_xml(tag, c, caption, ctx)
 }
 
-fn render_common_shape_xml(tag: &str, c: &CommonObjAttr) -> String {
-    format!(
+fn render_common_shape_xml(
+    tag: &str,
+    c: &CommonObjAttr,
+    caption: &Option<crate::model::shape::Caption>,
+    ctx: &mut SerializeContext,
+) -> String {
+    let mut out = format!(
         concat!(
             r#"<hp:{tag} id="{id}" zOrder="{zo}" textWrap="{tw}" textFlow="BOTH_SIDES" lock="0">"#,
             r#"<hp:sz width="{w}" height="{h}" widthRelTo="ABSOLUTE" heightRelTo="ABSOLUTE"/>"#,
             r#"<hp:pos treatAsChar="{tac}" vertRelTo="{vr}" vertAlign="{va}" horzRelTo="{hr}" horzAlign="{ha}" vertOffset="{vo}" horzOffset="{ho}"/>"#,
             r#"<hp:outMargin left="{ml}" right="{mr}" top="{mt}" bottom="{mb}"/>"#,
-            r#"</hp:{tag}>"#,
         ),
         tag = tag,
         id = c.instance_id,
@@ -1040,7 +1046,17 @@ fn render_common_shape_xml(tag: &str, c: &CommonObjAttr) -> String {
         mr = c.margin.right,
         mt = c.margin.top,
         mb = c.margin.bottom,
-    )
+    );
+    // 캡션 (#1403) — HWP5 파서는 모든 도형의 캡션을 적재하므로(parser/control/shape.rs)
+    // legacy 경로(ellipse/arc/polygon/curve/chart/ole)도 방출해야 소실되지 않는다.
+    if let Some(cap) = caption {
+        match writer_to_string(|w| super::table::write_caption(w, cap, ctx)) {
+            Ok(xml) => out.push_str(&xml),
+            Err(e) => eprintln!("[hwpx] Shape({tag}) 캡션 직렬화 실패: {e}"),
+        }
+    }
+    out.push_str(&format!("</hp:{tag}>"));
+    out
 }
 
 fn render_note_sublist(
