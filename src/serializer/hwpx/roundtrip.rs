@@ -666,6 +666,16 @@ fn diff_paragraph_linesegs(
                     }
                 }
             }
+            // 그림 캡션 내부 문단 lineseg 재귀 (#1403 후속 — char_shapes 쪽과 대칭 복원).
+            (Control::Picture(pia), Control::Picture(pib)) => {
+                if let (Some(ca), Some(cb)) = (&pia.caption, &pib.caption) {
+                    for (k, (qa, qb)) in ca.paragraphs.iter().zip(cb.paragraphs.iter()).enumerate()
+                    {
+                        let p = format!("{path}/ctrl[{ci}]pic.caption.p[{k}]");
+                        diff_paragraph_linesegs(out, section, paragraph, &p, qa, qb);
+                    }
+                }
+            }
             (Control::Shape(sa), Control::Shape(sb)) => {
                 let p = format!("{path}/ctrl[{ci}]shape");
                 diff_shape_linesegs(out, section, paragraph, &p, sa, sb);
@@ -700,6 +710,13 @@ fn diff_shape_linesegs(
     if let (Some(ta), Some(tb)) = (shape_text_box(sa), shape_text_box(sb)) {
         for (k, (qa, qb)) in ta.paragraphs.iter().zip(tb.paragraphs.iter()).enumerate() {
             let p = format!("{path}.tb.p[{k}]");
+            diff_paragraph_linesegs(out, section, paragraph, &p, qa, qb);
+        }
+    }
+    // 도형/묶음 캡션 내부 문단 lineseg 재귀 (#1403 후속 — char_shapes 쪽과 대칭 복원).
+    if let (Some(ca), Some(cb)) = (shape_caption(sa), shape_caption(sb)) {
+        for (k, (qa, qb)) in ca.paragraphs.iter().zip(cb.paragraphs.iter()).enumerate() {
+            let p = format!("{path}.caption.p[{k}]");
             diff_paragraph_linesegs(out, section, paragraph, &p, qa, qb);
         }
     }
@@ -1683,6 +1700,53 @@ mod tests {
     }
 
     // ---------- #1403: 그림/도형/묶음 캡션 (게이트 동승) ----------
+
+    #[test]
+    fn task1403_pic_caption_lineseg_recursed_in_gate() {
+        // #1403 후속 — 객체 캡션 내부 문단의 lineseg 차이가 char_shapes 와 대칭으로
+        // `pic.caption.p[k]` 경로에서 검출되는지 고정 (merge 시 보완 1건).
+        let mut ca = caption_with_paras(1);
+        ca.paragraphs[0].line_segs = vec![seg(0, 1000)];
+        let mut cb = caption_with_paras(1);
+        cb.paragraphs[0].line_segs = vec![seg(0, 2000)];
+        let mut pa = crate::model::image::Picture::default();
+        pa.caption = Some(ca);
+        let mut pb = crate::model::image::Picture::default();
+        pb.caption = Some(cb);
+        let a = doc_with_control(crate::model::control::Control::Picture(Box::new(pa)));
+        let b = doc_with_control(crate::model::control::Control::Picture(Box::new(pb)));
+        let diff = diff_documents(&a, &b);
+        assert_eq!(diff.differences.len(), 1, "{:?}", diff.differences);
+        match &diff.differences[0] {
+            IrDifference::ParagraphLinesegs { path, detail, .. } => {
+                assert_eq!(path, "/ctrl[0]pic.caption.p[0]");
+                assert_eq!(detail, "[0].vertsize: expected=1000 actual=2000");
+            }
+            other => panic!("ParagraphLinesegs 여야 함: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn task1403_shape_caption_lineseg_recursed_in_gate() {
+        // 도형(drawing.caption) 경로의 lineseg 재귀 — `shape.caption.p[k]`.
+        let mk = |vs: i32| {
+            let mut cap = caption_with_paras(1);
+            cap.paragraphs[0].line_segs = vec![seg(0, vs)];
+            let mut el = crate::model::shape::EllipseShape::default();
+            el.drawing.caption = Some(cap);
+            doc_with_control(crate::model::control::Control::Shape(Box::new(
+                crate::model::shape::ShapeObject::Ellipse(el),
+            )))
+        };
+        let diff = diff_documents(&mk(1000), &mk(2000));
+        assert_eq!(diff.differences.len(), 1, "{:?}", diff.differences);
+        match &diff.differences[0] {
+            IrDifference::ParagraphLinesegs { path, .. } => {
+                assert_eq!(path, "/ctrl[0]shape.caption.p[0]");
+            }
+            other => panic!("ParagraphLinesegs 여야 함: {other:?}"),
+        }
+    }
 
     #[test]
     fn task1403_pic_caption_loss_in_gate() {
