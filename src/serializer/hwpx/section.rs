@@ -1401,6 +1401,40 @@ mod tests {
     }
 
     #[test]
+    fn secpr_emits_tab_stop_val_and_unit() {
+        // [Finding 14] 원본 secPr 의 tabStopVal="4000" tabStopUnit="HWPUNIT" (한컴
+        // 기본 탭 폭 상수) 이 직렬화에서 누락되지 않아야 한다. 순서는
+        // tabStop → tabStopVal → tabStopUnit → outlineShapeIDRef.
+        let mut para = Paragraph::default();
+        para.text = "x".to_string();
+        let (doc, section) = make_doc_with_paragraph(para);
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let xml = String::from_utf8(write_section(&section, &doc, 0, &mut ctx).unwrap()).unwrap();
+        assert!(
+            xml.contains(
+                r#"tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1""#
+            ),
+            "secPr 에 tabStopVal/tabStopUnit 이 정확 순서로 있어야 함: {}",
+            &xml[..600.min(xml.len())]
+        );
+    }
+
+    #[test]
+    fn section_root_declares_hwpunitchar_namespace() {
+        // [Finding 15] hs:sec 루트의 xmlns:hwpunitchar 선언(원본에 존재, 미사용
+        // 이지만 무손실 위해 보존)이 누락되지 않아야 한다.
+        let mut para = Paragraph::default();
+        para.text = "x".to_string();
+        let (doc, section) = make_doc_with_paragraph(para);
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let xml = String::from_utf8(write_section(&section, &doc, 0, &mut ctx).unwrap()).unwrap();
+        assert!(
+            xml.contains(r#"xmlns:hwpunitchar="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar""#),
+            "hs:sec 에 xmlns:hwpunitchar 선언이 있어야 함"
+        );
+    }
+
+    #[test]
     fn hp_run_reflects_first_char_shape_id() {
         let mut para = Paragraph::default();
         para.text = "hello".to_string();
