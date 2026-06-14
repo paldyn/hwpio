@@ -32,7 +32,9 @@ jobs:
         include:
           - platform: macOS (aarch64)
             runner: macos-14
-            args: '--bundles dmg'
+            # [Task #26 후속] app 번들 추가 → updater 아티팩트(.app.tar.gz + .sig) 생성.
+            # dmg 만으론 macOS 자동업데이트 아티팩트가 안 만들어져 latest.json darwin 이 누락된다.
+            args: '--bundles app,dmg'
           - platform: Windows (x64)
             runner: windows-latest
             args: '--bundles nsis'
