@@ -2,6 +2,9 @@
 /target/
 /target-local/
 Cargo.lock
+# 데스크톱 앱(바이너리)은 재현 빌드를 위해 lock 을 커밋(엔진/라이브러리는 위 규칙으로 무시).
+# CI 가 lock 없이 brotli-decompressor 5.0.2(회귀)를 새로 해석해 빌드 실패한 사례(Task #4) 방지.
+!HanPage-Desktop/src-tauri/Cargo.lock
 
 # WebAssembly
 /pkg/
