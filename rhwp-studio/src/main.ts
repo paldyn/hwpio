@@ -22,6 +22,7 @@ import { ContextMenu } from '@/ui/context-menu';
 import { CommandPalette } from '@/ui/command-palette';
 import { showValidationModalIfNeeded } from '@/ui/validation-modal';
 import { showToast } from '@/ui/toast';
+import { installAppDownloadButton } from '@/ui/app-download';
 import { initRhwpDev } from '@/core/rhwp-dev';
 import { DocumentDirtyState } from '@/core/document-dirty-state';
 import { CellSelectionRenderer } from '@/engine/cell-selection-renderer';
@@ -187,6 +188,9 @@ async function initialize(): Promise<void> {
     );
 
     new MenuBar(document.getElementById('menu-bar')!, eventBus, dispatcher);
+
+    // [Task #29] 웹 헤더에 데스크톱 앱 다운로드 버튼(데스크톱 앱 내부에선 미표시).
+    installAppDownloadButton(document.getElementById('menu-bar')!);
 
     // 툴바 내 data-cmd 버튼 클릭 → 커맨드 디스패치
     document.querySelectorAll('.tb-btn[data-cmd]').forEach(btn => {
