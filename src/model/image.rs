@@ -38,6 +38,8 @@ pub struct Picture {
     pub instance_id: u32,
     /// SHAPE_PICTURE 레코드의 파싱된 필드 이후 추가 바이트 (라운드트립 보존용)
     pub raw_picture_extra: Vec<u8>,
+    /// HWPX `<hp:effects>` 그림 효과 정보.
+    pub effects: PictureEffects,
     /// 캡션
     pub caption: Option<super::shape::Caption>,
 }
@@ -69,27 +71,68 @@ pub struct ImageAttr {
     pub external_path: Option<String>,
 }
 
-impl ImageAttr {
-    /// 워터마크 효과가 적용되어 있는지 식별 (Task #516).
-    /// effect 가 RealPic 이 아니고 brightness/contrast 중 하나라도 변경된 경우.
-    pub fn is_watermark(&self) -> bool {
-        !matches!(self.effect, ImageEffect::RealPic) && (self.brightness != 0 || self.contrast != 0)
-    }
+/// HWPX 그림 효과 (`hp:effects`).
+#[derive(Debug, Clone, Default)]
+pub struct PictureEffects {
+    pub shadow: Option<PictureShadow>,
+}
 
-    /// 한컴 자동 워터마크 프리셋 정합 여부 (Task #516).
-    /// 한컴 도구의 "이미지 → 회색조 → 워터마크 효과" 체크 시 자동 적용:
-    /// effect=GrayScale, brightness=70, contrast=-50.
-    pub fn is_hancom_watermark_preset(&self) -> bool {
-        matches!(self.effect, ImageEffect::GrayScale)
-            && self.brightness == 70
-            && self.contrast == -50
+/// HWPX 그림 그림자 효과 (`hp:shadow`).
+#[derive(Debug, Clone, Default)]
+pub struct PictureShadow {
+    pub style: Option<String>,
+    pub alpha: Option<String>,
+    pub radius: Option<String>,
+    pub direction: Option<String>,
+    pub distance: Option<String>,
+    pub align_style: Option<String>,
+    pub rotation_style: Option<String>,
+    pub skew: Option<EffectPoint>,
+    pub scale: Option<EffectPoint>,
+    pub color: Option<EffectColor>,
+}
+
+/// HWPX 효과의 x/y 좌표성 값 (`hp:skew`, `hp:scale`).
+#[derive(Debug, Clone, Default)]
+pub struct EffectPoint {
+    pub x: Option<String>,
+    pub y: Option<String>,
+}
+
+/// HWPX 효과 색상 (`hp:effectsColor`).
+#[derive(Debug, Clone, Default)]
+pub struct EffectColor {
+    pub color_type: Option<String>,
+    pub scheme_idx: Option<String>,
+    pub system_idx: Option<String>,
+    pub preset_idx: Option<String>,
+    pub rgb: Option<EffectRgb>,
+}
+
+/// HWPX 효과 RGB 색상 (`hp:rgb`).
+#[derive(Debug, Clone, Default)]
+pub struct EffectRgb {
+    pub r: Option<String>,
+    pub g: Option<String>,
+    pub b: Option<String>,
+}
+
+impl ImageAttr {
+    /// 워터마크 효과가 적용되어 있는지 식별 (Task #516, Issue #1156 정정).
+    ///
+    /// HWP/HWPX 에는 워터마크 적용을 나타내는 별도 비트/속성이 **존재하지 않는다**
+    /// (한컴 공식 파일구조 3.0/5.0 + water-mark.hwp/.hwpx 두 그림 비교로 확정).
+    /// 한컴 편집기는 "워터마크 효과" 체크를 해제하면 밝기·대비를 모두 0 으로
+    /// 되돌리고, 체크하면 0 이 아닌 밝기·대비 값을 부여한다 (기본 70/-50, 사용자
+    /// 변경 가능). 따라서 워터마크 여부는 **밝기·대비가 둘 다 0 이 아닌 경우**
+    /// 로 판정한다 (effect 종류 무관, 한쪽이라도 0 이면 워터마크 아님).
+    pub fn is_watermark(&self) -> bool {
+        self.brightness != 0 && self.contrast != 0
     }
 
     /// 워터마크 preset 분류 (Task #516, AI 메타정보).
     pub fn watermark_preset(&self) -> Option<&'static str> {
-        if self.is_hancom_watermark_preset() {
-            Some("hancom-watermark")
-        } else if self.is_watermark() {
+        if self.is_watermark() {
             Some("custom")
         } else {
             None

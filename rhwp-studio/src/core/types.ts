@@ -4,6 +4,7 @@ export interface DocumentInfo {
   sectionCount: number;
   pageCount: number;
   encrypted: boolean;
+  hwp3Variant?: boolean;
   fallbackFont: string;
   fontsUsed: string[];  // 문서에서 사용하는 폰트 이름 목록
 }
@@ -28,6 +29,14 @@ export interface PageInfo {
   marginHeader: number;
   /** 꼬리말 여백 (px) */
   marginFooter: number;
+  /** 쪽 테두리/쪽 영역 왼쪽 위치 (px) */
+  pageBorderLeft?: number;
+  /** 쪽 테두리/쪽 영역 오른쪽 여백 (px) */
+  pageBorderRight?: number;
+  /** 쪽 테두리/쪽 영역 위쪽 위치 (px) */
+  pageBorderTop?: number;
+  /** 쪽 테두리/쪽 영역 아래쪽 여백 (px) */
+  pageBorderBottom?: number;
   /** 단별 영역 (px, 페이지 좌표) */
   columns?: { x: number; width: number }[];
 }
@@ -46,6 +55,79 @@ export interface PageDef {
   landscape: boolean;
   /** 0=한쪽, 1=맞쪽, 2=위로 */
   binding: number;
+}
+
+export interface BorderLineProps {
+  type: number;
+  width: number;
+  color: string;
+}
+
+/** WASM getPageBorderFill() 반환 타입 */
+export interface PageBorderFillSettings {
+  attr: number;
+  basis: 'paper' | 'page';
+  spacingLeft: number;
+  spacingRight: number;
+  spacingTop: number;
+  spacingBottom: number;
+  borderFillId: number;
+  headerInside: boolean;
+  footerInside: boolean;
+  fillArea: 'paper' | 'page' | 'border';
+  hideBorder: boolean;
+  hideFill: boolean;
+  borderLeft: BorderLineProps;
+  borderRight: BorderLineProps;
+  borderTop: BorderLineProps;
+  borderBottom: BorderLineProps;
+  fillType: 'none' | 'solid' | string;
+  fillColor: string;
+  patternColor: string;
+  patternType: number;
+  applyPage?: 'all' | 'exceptFirst' | 'firstOnly';
+}
+
+export type EndnoteNumberFormat =
+  | 'digit'
+  | 'circledDigit'
+  | 'upperRoman'
+  | 'lowerRoman'
+  | 'upperAlpha'
+  | 'lowerAlpha'
+  | 'hangulSyllable'
+  | 'hangulJamo'
+  | 'hangulDigit'
+  | 'hanjaDigit';
+
+/** WASM getEndnoteShape() 반환 타입 — HWPUNIT 원본값 */
+export interface EndnoteShapeSettings {
+  ok?: boolean;
+  numberFormat: EndnoteNumberFormat | string;
+  userChar: string;
+  prefixChar: string;
+  suffixChar: string;
+  startNumber: number;
+  separatorEnabled: boolean;
+  separatorLength: number;
+  separatorMarginTop: number;
+  separatorMarginBottom: number;
+  noteSpacing: number;
+  separatorLineType: number;
+  separatorLineWidth: number;
+  separatorColor: string;
+  numbering: 'continue' | 'restartSection' | 'restartPage' | string;
+  placement: 'documentEnd' | 'sectionEnd' | string;
+}
+
+export interface NoteEditInfo {
+  ok: boolean;
+  kind: 'footnote' | 'endnote' | string;
+  pageNum: number;
+  footnoteIndex: number;
+  fnParaIndex: number;
+  charOffset: number;
+  virtualParaIndex?: number;
 }
 
 /** 구역 정의 (SectionDef) */
@@ -72,6 +154,19 @@ export interface CellPathEntry {
   cellIndex: number;
   cellParaIndex: number;
 }
+
+/**
+ * [Task #1138] 표 셀 by_path WASM API 의 path segment.
+ * Rust API 의 JSON key (`controlIdx`/`cellIdx`/`cellParaIdx`) 와 일치하는 짧은 형식.
+ * `CellPathEntry` 와 의미는 같으나 직렬화 시 key 형식이 다름.
+ */
+export interface CellPathSegment {
+  controlIdx: number;
+  cellIdx: number;
+  cellParaIdx: number;
+}
+export type CellPath = CellPathSegment[];
+export type CellPathLike = Array<CellPathEntry | CellPathSegment>;
 
 /** 문서 트리 DFS 순회 컨텍스트 엔트리 */
 export interface NavContextEntry {
@@ -413,8 +508,17 @@ export interface TableProperties {
 }
 
 /** WASM getPageControlLayout() 반환 요소 */
+export interface NoteControlRef {
+  kind: 'footnote' | 'endnote';
+  sectionIdx: number;
+  paraIdx: number;
+  controlIdx: number;
+  noteParaIdx: number;
+  innerControlIdx: number;
+}
+
 export interface ControlLayoutItem {
-  type: 'table' | 'image' | 'shape' | 'equation' | 'group';
+  type: 'table' | 'image' | 'shape' | 'equation' | 'group' | 'line';
   x: number;
   y: number;
   w: number;
@@ -426,6 +530,22 @@ export interface ControlLayoutItem {
   cellIdx?: number;
   /** 표 셀 내 수식인 경우: 셀 내 문단 인덱스 */
   cellParaIdx?: number;
+  /** 각주/미주 내부 컨트롤인 경우 원본 위치 */
+  noteRef?: NoteControlRef;
+  outerTableControlIdx?: number;
+  headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number };
+  /**
+   * [Task #1280 v2] 렌더 정렬키 — 겹침 클릭 시 "최상단 개체" 판정용.
+   * Rust `paper_node_sort_key`(layout.rs)와 단일 진실 원천. 클수록 위.
+   * plane: BehindText=1, 어울림/기본=2, InFrontOfText=3.
+   */
+  plane?: number;
+  /** [Task #1280 v2] 개체 z-order (작을수록 먼저 그림 = 아래). */
+  zOrder?: number;
+  /** [Task #1280 v2] 같은 plane/zOrder 내 안정 정렬 tie-breaker. */
+  stableIndex?: number;
+  /** [Task #1280 v2] 텍스트 어울림 모드(이미지뿐 아니라 shape/line/group에도 노출). */
+  wrap?: string;
 }
 
 /** 개체 참조 (그림/글상자 공용) */
@@ -433,11 +553,12 @@ export interface ObjectRef {
   sec: number;
   ppi: number;
   ci: number;
-  type: 'image' | 'shape' | 'equation' | 'group';
+  type: 'image' | 'shape' | 'equation' | 'group' | 'line';
   /** 표 셀 내 수식인 경우: 셀 인덱스 */
   cellIdx?: number;
   /** 표 셀 내 수식인 경우: 셀 내 문단 인덱스 */
   cellParaIdx?: number;
+  noteRef?: NoteControlRef;
 }
 
 /** WASM getShapeProperties() 반환 타입 */
@@ -486,6 +607,27 @@ export interface ShapeProperties {
 
 /** WASM getEquationProperties() 반환 타입 */
 export interface EquationProperties {
+  width?: number;
+  height?: number;
+  treatAsChar?: boolean;
+  vertRelTo?: string;
+  vertAlign?: string;
+  horzRelTo?: string;
+  horzAlign?: string;
+  vertOffset?: number;
+  horzOffset?: number;
+  textWrap?: string;
+  zOrder?: number;
+  instanceId?: number;
+  outerMarginLeft?: number;
+  outerMarginTop?: number;
+  outerMarginRight?: number;
+  outerMarginBottom?: number;
+  hasCaption?: boolean;
+  captionDirection?: string;
+  captionWidth?: number;
+  captionSpacing?: number;
+  description?: string;
   script: string;
   fontSize: number;
   color: number;
@@ -703,13 +845,23 @@ export interface PageLayerTree {
   unit?: 'px';
   coordinateSystem?: string;
   profile?: LayerRenderProfile;
+  buildOptions?: {
+    showTransparentBorders?: boolean;
+    clipEnabled?: boolean;
+  };
+  debugOptions?: {
+    debugOverlay?: boolean;
+  };
   pageWidth: number;
   pageHeight: number;
   outputOptions?: {
     showParagraphMarks?: boolean;
     showControlCodes?: boolean;
+    /** Compatibility mirror; prefer buildOptions.showTransparentBorders. */
     showTransparentBorders?: boolean;
+    /** Compatibility mirror; prefer buildOptions.clipEnabled. */
     clipEnabled?: boolean;
+    /** Compatibility mirror; prefer debugOptions.debugOverlay. */
     debugOverlay?: boolean;
   };
   resources?: LayerResources;
@@ -726,11 +878,18 @@ export interface LayerResources {
   svgKeys?: string[];
 }
 
+export interface LayerInfo {
+  textWrap?: string | null;
+  zOrder: number;
+  stableIndex: number;
+}
+
 export type LayerNode = LayerGroupNode | LayerClipNode | LayerLeafNode;
 
 export interface LayerGroupNode {
   kind: 'group';
   bounds: LayerBounds;
+  layer?: LayerInfo;
   groupKind?: { kind: string; [key: string]: unknown };
   cacheHint?: LayerCacheHint;
   children: LayerNode[];
@@ -739,14 +898,16 @@ export interface LayerGroupNode {
 export interface LayerClipNode {
   kind: 'clipRect';
   bounds: LayerBounds;
+  layer?: LayerInfo;
   clip: LayerBounds;
-  clipKind: 'body' | 'tableCell' | 'generic';
+  clipKind: 'body' | 'tableCell' | 'textBox' | 'generic';
   child: LayerNode;
 }
 
 export interface LayerLeafNode {
   kind: 'leaf';
   bounds: LayerBounds;
+  layer?: LayerInfo;
   ops: LayerPaintOp[];
 }
 
@@ -978,6 +1139,7 @@ export interface LayerGlyphOutlineOp {
   bbox: LayerBounds;
   variant?: LayerTextVariantMeta;
   payloadKind?: LayerGlyphOutlinePayloadKind;
+  payloadResourceKey?: string;
   placement?: { runToPage?: LayerAffineTransform; baselineY?: number };
   paths?: LayerGlyphOutlinePath[];
   stroke?: LayerGlyphOutlineStroke;
@@ -1107,6 +1269,12 @@ export interface LayerFontColorGlyphRef {
   colorFormat?: 'colrV0' | 'colrV1' | 'other' | string;
 }
 
+export interface LayerPaletteRef {
+  id?: string;
+  index?: number;
+  cpalDigest?: string;
+}
+
 export interface LayerColorPaintGraphNode {
   nodeId?: number;
   kind?: string;
@@ -1128,11 +1296,13 @@ export interface LayerColorPaintGraphPayload {
 export interface LayerColorLayersPayload {
   colorFormat?: 'colrV0' | 'colrV1' | 'other' | string;
   sourceFontRef?: LayerFontColorGlyphRef;
+  paletteRef?: LayerPaletteRef;
   layers?: Array<{
     layerIndex?: number | null;
     glyphId?: number;
     glyphRange?: LayerTextRange;
     sourceRangeUtf8?: LayerTextRange;
+    sourceFontRef?: LayerFontColorGlyphRef;
     commands?: LayerPathCommand[];
     fill?: LayerResolvedColor;
     fillRule?: 'nonzero' | 'evenodd' | string;

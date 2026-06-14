@@ -130,7 +130,62 @@ const FRAC_LINE_PAD: f64 = 0.2; // 분수선 상하 여백 (font_size 비율)
 const FRAC_LINE_THICK: f64 = 0.04; // 분수선 두께 (font_size 비율)
 const SQRT_PAD: f64 = 0.1; // 제곱근 내부 상단 여백
 const PAREN_PAD: f64 = 0.08; // 괄호 내부 좌우 여백
-pub(crate) const BIG_OP_SCALE: f64 = 1.5; // 큰 연산자 크기 비율
+pub(crate) const BIG_OP_SCALE: f64 = 1.5; // 큰 연산자(∑/∏) 크기 비율
+/// 적분(∫/∮ 등) 전용 크기 비율 — Task #1313.
+/// 적분 글리프는 ∑/∏ 보다 세로로 길게 그려져야 정답(한글 2022)과 정합한다. BIG_OP_SCALE
+/// (1.5) 로는 글리프가 작아 상·하한이 기호와 벌어져 보이므로 적분만 별도 스케일을 쓴다.
+pub(crate) const INTEGRAL_SCALE: f64 = 2.5;
+
+/// 적분 글리프 path 기하 — Task #1317.
+///
+/// 적분기호(∫)를 폰트 `<text>` 가 아닌 stroke path 로 그릴 때의 글리프 형상과,
+/// layout 의 상·하한 attach point 가 **공유하는 단일 기준(SSOT)**. SVG/Canvas/Skia 가
+/// 동일한 path·attach point 를 써서 폰트 대체에 무관하게 정합한다.
+///
+/// 모든 좌표는 글리프 박스(좌상단 원점, 높이 = `fs*INTEGRAL_SCALE`) 기준 상대 px 이며,
+/// y 는 아래로 증가한다. 비율은 정답(한글 2022) `pdf/3-10월_교육_통합_2022.pdf` 9p 적분
+/// (`∫_0^2(-2x^2+6x)dx`) 시각 정합 기준.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct IntegralGeom {
+    /// 글리프 가로 폭(상·하 갈고리 포함, trailing pad 제외)
+    pub width: f64,
+    /// 줄기 stroke 두께
+    pub stroke_w: f64,
+    /// path 상단(상단 갈고리 끝) y
+    pub top_y: f64,
+    /// path 하단(하단 갈고리 끝) y
+    pub bottom_y: f64,
+    /// 상단 갈고리 우측 끝 x — 상한(sup) attach 기준
+    pub top_hook_x: f64,
+    /// 하단 갈고리 좌측 끝 x — 하한(sub) attach 기준
+    pub bottom_hook_x: f64,
+}
+
+/// 글꼴 크기 `fs` 에 대한 적분 글리프 기하를 산출한다(SSOT).
+pub(crate) fn integral_geom(fs: f64) -> IntegralGeom {
+    let h = fs * INTEGRAL_SCALE;
+    IntegralGeom {
+        width: fs * 0.52,
+        stroke_w: fs * 0.06,
+        top_y: h * 0.04,
+        bottom_y: h * 0.96,
+        top_hook_x: fs * 0.50,
+        bottom_hook_x: fs * 0.04,
+    }
+}
+
+/// 큰 연산자(Σ/∏/∫) 뒤 피연산자와의 trailing 간격 (font_size 비율) — Task #1233.
+/// layout_row 는 형제를 간격 0으로 붙이므로, 큰 연산자 box width 에 이 trailing 공백을
+/// 더해 피연산자가 연산자에 붙지 않게 한다(TeX thin/med space 관례, 한컴 PDF 정합).
+///
+/// 인라인 수식은 svg.rs 에서 컨트롤 advance(tac_w)로 가로 스케일(scale_x = tac_w/자연폭)
+/// 되므로, 자연폭에 더한 pad 는 scale_x 만큼 줄어 렌더된다. 분수·괄호를 포함한 큰 수식은
+/// scale_x 가 작아(0.6~0.9) pad 가 약화되므로, 압축 후에도 충분한 간격이 남도록 0.45 로
+/// 둔다(작업지시자 시각 판정 — 0.25 는 부족, 0.45 가 적정).
+///
+/// 렌더러(svg_render/canvas_render)는 limits 연산자를 `max_w = lb.width - fs*PAD` 에
+/// 중앙정렬하므로(이 const 참조), pad 전체가 **순수 trailing** 이 되고 연산자는 첨자와 정렬된다.
+pub(crate) const BIG_OP_TRAIL_PAD: f64 = 0.45;
 const MATRIX_COL_GAP: f64 = 0.8; // 행렬 열 간격 (font_size 비율)
 const MATRIX_ROW_GAP: f64 = 0.3; // 행렬 행 간격 (font_size 비율)
 /// 수식 축 높이 (TeX axis_height = 0.25em) — 분수선이 배치되는 기준 위치
@@ -297,14 +352,16 @@ impl EqLayout {
     }
 
     fn layout_math_symbol(&self, text: &str, fs: f64) -> LayoutBox {
-        // 적분 기호: 큰 크기로 렌더링 (BIG_OP_SCALE 적용)
+        // 적분 기호: 큰 크기로 렌더링 (INTEGRAL_SCALE 적용 — Task #1313)
+        // Task #1317: 글리프를 path 로 그리므로 advance 는 path 폭(geom.width)을 쓴다.
         if is_integral_symbol(text) {
-            let op_fs = fs * BIG_OP_SCALE;
-            let w = estimate_text_width(text, op_fs, false);
+            let op_fs = fs * INTEGRAL_SCALE;
+            let geom = integral_geom(fs);
             return LayoutBox {
                 x: 0.0,
                 y: 0.0,
-                width: w,
+                // Task #1233: 첨자 없는 bare 적분도 뒤 피연산자와 trailing 간격 유지.
+                width: geom.width + fs * BIG_OP_TRAIL_PAD,
                 height: op_fs,
                 baseline: op_fs * 0.7, // 적분 기호 baseline: 기호 높이의 70%
                 kind: LayoutKind::MathSymbol(text.to_string()),
@@ -449,9 +506,14 @@ impl EqLayout {
 
         let (base_y, sup_y, total_h);
         if sup_shift >= 0.0 {
-            // 위첨자가 base 높이 내에 들어감 — sup를 상단에, base를 아래로
+            // [Task #1300] 위첨자 상단을 base 상단에 맞춘다 (한컴 정합).
+            // 기존엔 base 를 sup_shift(=b.baseline 비례) 만큼 아래로 밀어 위첨자를
+            // 박스 최상단에 두었는데, 키 큰 base(괄호 분수 등)에서 위첨자가 base 상단
+            // 위로 과하게 치솟아 윗줄을 침범했다(#1300). base 를 밀지 않고(상단 정렬)
+            // 위첨자 상단이 base 상단과 같은 높이에 오도록 한다.
+            // base 가 sup 보다 낮은 경우만 sup 를 담도록 base 를 내린다.
             sup_y = 0.0;
-            base_y = sup_shift.max(s.height - b.height).max(0.0);
+            base_y = (s.height - b.height).max(0.0);
             total_h = (base_y + b.height).max(s.height);
         } else {
             // 위첨자가 base 상단 위로 확장 — sup를 상단에, base를 |sup_shift|만큼 내림
@@ -522,30 +584,44 @@ impl EqLayout {
         let sp = self.layout_node(sup, fs * SCRIPT_SCALE);
 
         if is_integral {
-            // 적분 전용 배치: 상한은 기호 상단 오른쪽, 하한은 기호 하단 오른쪽
-            let sup_offset_y = fs * 0.13; // 상한: 기호 상단에서 위로 ~2mm
-            let sub_offset_y = fs * 0.25; // 하한: 기호 하단에서 위로 이동
-            let sub_offset_x = -(fs * 0.42); // 하한: 왼쪽으로 추가 1mm
+            // 적분 전용 배치 (Task #1317): 글리프를 stroke path 로 그리므로 상·하한 attach
+            // point 를 path 기하(`integral_geom`)에 맞춰 산출한다. SVG/Canvas/Skia 가 동일
+            // geom 을 공유하여 폰트 대체에 무관하게 정합한다(정답 한글 2022 비례).
+            //   - 상한(sup): 상단 갈고리 우측, 글리프 최상단 근처
+            //   - 하한(sub): 하단 갈고리 우측, 글리프 최하단(=baseline 근처)
+            let geom = integral_geom(fs);
+            // 상·하한이 적분 줄기에 붙지 않도록 **가로 간격(gap_x)만** 키워 띄운다.
+            // 세로로 벌리면 적분 박스 높이가 커져 줄 간격이 위/아래로 넓어지므로
+            // 세로 위치는 컴팩트하게 유지한다 (작업지시자 피드백, Task #1317 v4).
+            let gap_x = fs * 0.22;
 
             let mut base_box = b;
-            let sup_y = 0.0; // 상단에 배치
-            let base_y = sp.height - sup_offset_y; // 상한 아래에 기호
             base_box.x = 0.0;
-            base_box.y = base_y.max(0.0);
+            base_box.width = geom.width; // 글리프 advance = path 폭
+
+            // 글리프 기준 첨자 세로 위치(박스 상단 원점) — 컴팩트(글리프 상·하단 근처).
+            let sup_dy = geom.top_y - sp.height * 0.30; // 상한: 최상단 근처
+            let sub_dy = geom.bottom_y - sb.height * 0.72; // 하한: 최하단 근처
+
+            // 상한이 박스 위로 넘치지 않도록 글리프를 그만큼 아래로 내린다.
+            let head = (-sup_dy).max(0.0);
+            base_box.y = head;
 
             let mut sup_box = sp;
-            sup_box.x = base_box.width;
-            sup_box.y = sup_y;
+            sup_box.x = base_box.x + geom.top_hook_x + gap_x;
+            sup_box.y = base_box.y + sup_dy;
 
             let mut sub_box = sb;
-            sub_box.x = base_box.width + sub_offset_x;
-            sub_box.y = base_box.y + base_box.height - sub_offset_y;
+            sub_box.x = base_box.x + geom.bottom_hook_x + gap_x;
+            sub_box.y = base_box.y + sub_dy;
 
-            let script_w = sup_box
-                .width
-                .max(sub_box.x + sub_box.width - base_box.width);
-            let total_w = base_box.width + script_w.max(0.0);
-            let total_h = (sub_box.y + sub_box.height).max(base_box.y + base_box.height);
+            let right = (sup_box.x + sup_box.width)
+                .max(sub_box.x + sub_box.width)
+                .max(base_box.x + geom.width);
+            let total_w = right + fs * BIG_OP_TRAIL_PAD;
+            let total_h = (sub_box.y + sub_box.height)
+                .max(base_box.y + base_box.height)
+                .max(sup_box.y + sup_box.height);
 
             return LayoutBox {
                 x: 0.0,
@@ -668,7 +744,9 @@ impl EqLayout {
         LayoutBox {
             x: 0.0,
             y: 0.0,
-            width: max_w,
+            // Task #1233: 피연산자가 연산자에 붙지 않도록 trailing 간격 추가.
+            // sup/sub 중앙정렬은 max_w 기준 유지 → 연산자는 좌측, 우측에 순수 공백.
+            width: max_w + fs * BIG_OP_TRAIL_PAD,
             height: total_h,
             baseline,
             kind: LayoutKind::BigOp {
@@ -725,7 +803,8 @@ impl EqLayout {
         LayoutBox {
             x: 0.0,
             y: 0.0,
-            width: total_w,
+            // Task #1233: 적분 뒤 피연산자(예: f(x)dx)가 첨자에 붙지 않도록 trailing 간격.
+            width: total_w + fs * BIG_OP_TRAIL_PAD,
             height: total_h,
             baseline: op_baseline,
             kind: LayoutKind::BigOp {
@@ -1031,9 +1110,19 @@ impl EqLayout {
 
     fn layout_paren(&self, left: &str, right: &str, body: &EqNode, fs: f64) -> LayoutBox {
         let b = self.layout_node(body, fs);
-        let pad = fs * PAREN_PAD;
-        // Times New Roman '(' advance (em 기준) = 0.333. 글리프/path 공통 폭. (Task #283)
-        let paren_w = fs * 0.333;
+        let use_stretch_round = b.height > fs * 1.2 && matches!((left, right), ("(", ")"));
+        let pad = if use_stretch_round {
+            fs * 0.03
+        } else {
+            fs * PAREN_PAD
+        };
+        // Times New Roman '(' advance (em 기준) = 0.333. 텍스트 높이 glyph는 이 폭을 유지하고,
+        // 큰 둥근 괄호 path는 한컴 HyhwpEQ 출력에 가깝게 더 좁게 잡는다. (Task #283, #1139)
+        let paren_w = if use_stretch_round {
+            fs * 0.27
+        } else {
+            fs * 0.333
+        };
 
         let left_w = if left.is_empty() { 0.0 } else { paren_w };
         let right_w = if right.is_empty() { 0.0 } else { paren_w };
@@ -1126,7 +1215,7 @@ pub(crate) fn is_integral_symbol(symbol: &str) -> bool {
 }
 
 /// 텍스트 폭 추정
-fn estimate_text_width(text: &str, font_size: f64, italic: bool) -> f64 {
+pub(crate) fn estimate_text_width(text: &str, font_size: f64, italic: bool) -> f64 {
     let mut w = 0.0;
     for ch in text.chars() {
         let ratio = if ch.is_ascii() {
@@ -1220,11 +1309,92 @@ mod tests {
         assert!(lb.height > 20.0); // 분수는 기본 높이보다 높아야 함
     }
 
+    /// Task #1233: 큰 연산자(Σ)는 box width 에 trailing 간격(fs×BIG_OP_TRAIL_PAD)을 포함해야
+    /// 피연산자가 붙지 않는다.
+    #[test]
+    fn test_big_op_trailing_pad() {
+        // 트리 어디서든 첫 BigOp LayoutBox 를 찾는다 (top-level Row/단독 모두 대응)
+        fn find_big_op(b: &LayoutBox) -> Option<&LayoutBox> {
+            if matches!(b.kind, LayoutKind::BigOp { .. }) {
+                return Some(b);
+            }
+            if let LayoutKind::Row(children) = &b.kind {
+                for c in children {
+                    if let Some(f) = find_big_op(c) {
+                        return Some(f);
+                    }
+                }
+            }
+            None
+        }
+        let fs = 20.0;
+        let lb = parse_and_layout("sum_{n=1}^{N} b", fs);
+        let big = find_big_op(&lb).expect("BigOp 노드가 있어야 함");
+        // 내부(중앙정렬된 sub/sup)의 우측 끝
+        let inner = match &big.kind {
+            LayoutKind::BigOp { sub, sup, .. } => {
+                let s = sub.as_ref().map(|b| b.x + b.width).unwrap_or(0.0);
+                let p = sup.as_ref().map(|b| b.x + b.width).unwrap_or(0.0);
+                s.max(p)
+            }
+            _ => unreachable!(),
+        };
+        assert!(
+            big.width - inner >= fs * BIG_OP_TRAIL_PAD * 0.9,
+            "BigOp trailing 간격 부재: width={} inner={}",
+            big.width,
+            inner
+        );
+    }
+
     #[test]
     fn test_superscript_layout() {
         let lb = parse_and_layout("x^2", 20.0);
         assert!(lb.width > 0.0);
         assert!(lb.height > 0.0);
+    }
+
+    #[test]
+    fn test_superscript_tall_base_no_overshoot() {
+        // [#1300] 키 큰 base(괄호 분수 등)의 위첨자가 baseline 위로 과하게 치솟아
+        // 윗줄을 침범하던 문제. base 밀어내기(base_y)는 sup 높이를 넘지 않아야 한다.
+        fn find_sup(lb: &LayoutBox) -> Option<(&LayoutBox, &LayoutBox)> {
+            match &lb.kind {
+                LayoutKind::Superscript { base, sup } => Some((base, sup)),
+                LayoutKind::Row(ch) => ch.iter().rev().find_map(find_sup),
+                _ => None,
+            }
+        }
+        // 위첨자 상단이 base 상단보다 위로 치솟지 않아야 한다(상단 정렬). 즉 sup.y >= base.y.
+        // (이전 버그: 키 큰 base 를 아래로 밀어 sup.y=0 < base.y 가 되어 위첨자가 base 상단 위로 떠올랐다.)
+        const MARGIN: f64 = 0.01;
+
+        // 키 큰 base: 괄호로 감싼 분수 — 상단 정렬(base_y≈0) 확인
+        let tall = parse_and_layout("LEFT ( {1} over {6} RIGHT )^4", 12.0);
+        let (b_tall, s_tall) = find_sup(&tall).expect("tall superscript");
+        assert!(
+            s_tall.y >= b_tall.y - MARGIN,
+            "tall: sup.y ({}) must not rise above base.y ({})",
+            s_tall.y,
+            b_tall.y
+        );
+        // 합성 baseline 이 base 자연 baseline 과 일치(이중 가산 없음)
+        assert!(
+            (tall.baseline - (b_tall.y + b_tall.baseline)).abs() < MARGIN,
+            "tall: box baseline ({}) should equal base baseline ({})",
+            tall.baseline,
+            b_tall.y + b_tall.baseline
+        );
+
+        // 짧은 base: x^4 도 동일 불변(상단 정렬) — 위첨자가 base 상단 위로 안 떠오름
+        let short = parse_and_layout("x^4", 12.0);
+        let (b_short, s_short) = find_sup(&short).expect("short superscript");
+        assert!(
+            s_short.y >= b_short.y - MARGIN,
+            "short: sup.y ({}) must not rise above base.y ({})",
+            s_short.y,
+            b_short.y
+        );
     }
 
     #[test]

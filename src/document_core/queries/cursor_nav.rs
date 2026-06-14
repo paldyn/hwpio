@@ -17,16 +17,47 @@ impl DocumentCore {
         para_idx: usize,
         char_offset: usize,
     ) -> Result<String, HwpError> {
-        let para = self
+        let para = self.get_render_paragraph_ref(section_idx, para_idx)?;
+
+        Self::compute_line_info(para, char_offset)
+    }
+
+    pub(crate) fn get_render_paragraph_ref(
+        &self,
+        section_idx: usize,
+        para_idx: usize,
+    ) -> Result<&Paragraph, HwpError> {
+        let section = self.document.sections.get(section_idx).ok_or_else(|| {
+            HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
+        })?;
+
+        if let Some(para) = section.paragraphs.get(para_idx) {
+            return Ok(para);
+        }
+
+        let local_idx = para_idx
+            .checked_sub(section.paragraphs.len())
+            .ok_or_else(|| HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", para_idx)))?;
+
+        self.pagination
+            .get(section_idx)
+            .and_then(|pagination| pagination.endnote_paragraphs.get(local_idx))
+            .ok_or_else(|| HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", para_idx)))
+    }
+
+    fn render_paragraph_count_in_section(&self, section_idx: usize) -> usize {
+        let body_count = self
             .document
             .sections
             .get(section_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx)))?
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", para_idx)))?;
-
-        Self::compute_line_info(para, char_offset)
+            .map(|section| section.paragraphs.len())
+            .unwrap_or(0);
+        let endnote_count = self
+            .pagination
+            .get(section_idx)
+            .map(|pagination| pagination.endnote_paragraphs.len())
+            .unwrap_or(0);
+        body_count + endnote_count
     }
 
     /// 셀 내 문단의 줄 정보를 반환한다 (네이티브).
@@ -342,13 +373,7 @@ impl DocumentCore {
                     ))
                 })
         } else {
-            self.document
-                .sections
-                .get(sec)
-                .ok_or_else(|| HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", sec)))?
-                .paragraphs
-                .get(para)
-                .ok_or_else(|| HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", para)))
+            self.get_render_paragraph_ref(sec, para)
         }
     }
 
@@ -646,6 +671,31 @@ impl DocumentCore {
         Ok(para)
     }
 
+    /// [Task #1161] 컨트롤 복사/조회용으로 본문 또는 셀 경로의 문단을 통일 반환한다.
+    ///
+    /// `cell_path` 가 비어 있으면 본문 `sections[sec].paragraphs[para]` 를,
+    /// 아니면 `resolve_paragraph_by_path` 로 셀/글상자 안 문단을 반환한다.
+    /// 클립보드 native(copy/export/image) 들이 동일한 컨트롤 접근 진입점을
+    /// 공유하도록 일원화한다.
+    pub(crate) fn resolve_control_para<'a>(
+        &'a self,
+        sec: usize,
+        para: usize,
+        cell_path: &[(usize, usize, usize)],
+    ) -> Result<&'a Paragraph, HwpError> {
+        if cell_path.is_empty() {
+            self.document
+                .sections
+                .get(sec)
+                .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", sec)))?
+                .paragraphs
+                .get(para)
+                .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para)))
+        } else {
+            self.resolve_paragraph_by_path(sec, para, cell_path)
+        }
+    }
+
     /// 경로가 가리키는 컨테이너(표 셀/글상자)의 문단 수를 반환한다.
     pub(crate) fn resolve_container_para_count_by_path(
         &self,
@@ -867,35 +917,87 @@ impl DocumentCore {
             .sections
             .get(sec)
             .ok_or_else(|| HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", sec)))?;
-        let target_para_i = para as i32 + delta;
+        let render_para_count = self.render_paragraph_count_in_section(sec);
+        if render_para_count == 0 {
+            return Ok((sec, 0, 0, None));
+        }
+
+        let current_para = para.min(render_para_count - 1);
+        let target_para_i = current_para as i32 + delta;
 
         // 구역 경계 처리
         if target_para_i < 0 {
             if sec == 0 {
-                return Ok((sec, para, 0, None)); // 문서 시작 — 이동 안 함
+                return Ok((sec, current_para, 0, None)); // 문서 시작 — 이동 안 함
             }
             let prev_sec = sec - 1;
-            let prev_para_count = self.document.sections[prev_sec].paragraphs.len();
+            let prev_para_count = self.render_paragraph_count_in_section(prev_sec);
             if prev_para_count == 0 {
-                return Ok((sec, para, 0, None));
+                return Ok((sec, current_para, 0, None));
             }
-            return self.enter_paragraph(prev_sec, prev_para_count - 1, delta, preferred_x);
+            return self.enter_render_paragraph(prev_sec, prev_para_count - 1, delta, preferred_x);
         }
 
         let target_para = target_para_i as usize;
-        if target_para >= section.paragraphs.len() {
+        if target_para >= render_para_count {
             if sec + 1 >= self.document.sections.len() {
                 // 문서 끝 — 이동 안 함
-                let para_len = navigable_text_len(&self.document.sections[sec].paragraphs[para]);
-                return Ok((sec, para, para_len, None));
+                let para_len = self
+                    .get_render_paragraph_ref(sec, current_para)
+                    .map(navigable_text_len)
+                    .unwrap_or(0);
+                return Ok((sec, current_para, para_len, None));
             }
-            return self.enter_paragraph(sec + 1, 0, delta, preferred_x);
+            return self.enter_render_paragraph(sec + 1, 0, delta, preferred_x);
         }
 
         // 칼럼 경계를 넘는 경우 preferredX를 대상 칼럼 좌표계로 변환
-        let adjusted_px =
-            self.transform_preferred_x_across_columns(sec, para, target_para, preferred_x);
-        self.enter_paragraph(sec, target_para, delta, adjusted_px)
+        let adjusted_px = if current_para < section.paragraphs.len()
+            && target_para < section.paragraphs.len()
+        {
+            self.transform_preferred_x_across_columns(sec, current_para, target_para, preferred_x)
+        } else {
+            preferred_x
+        };
+        self.enter_render_paragraph(sec, target_para, delta, adjusted_px)
+    }
+
+    pub(crate) fn enter_render_paragraph(
+        &self,
+        sec: usize,
+        target_para: usize,
+        delta: i32,
+        preferred_x: f64,
+    ) -> Result<(usize, usize, usize, Option<(usize, usize, usize, usize)>), HwpError> {
+        let body_count = self
+            .document
+            .sections
+            .get(sec)
+            .ok_or_else(|| HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", sec)))?
+            .paragraphs
+            .len();
+
+        if target_para < body_count {
+            return self.enter_paragraph(sec, target_para, delta, preferred_x);
+        }
+
+        let para_ref = self.get_render_paragraph_ref(sec, target_para)?;
+        let target_line = if delta > 0 {
+            0
+        } else if para_ref.line_segs.is_empty() {
+            0
+        } else {
+            para_ref.line_segs.len() - 1
+        };
+        let range = Self::get_line_char_range(para_ref, target_line);
+        let offset = self
+            .find_char_at_x_on_line(sec, target_para, None, range, preferred_x)
+            .unwrap_or(if delta > 0 {
+                0
+            } else {
+                navigable_text_len(para_ref)
+            });
+        Ok((sec, target_para, offset, None))
     }
 
     /// 목표 문단으로 진입한다 (표면 표 문단이면 셀 내부로).
@@ -1431,6 +1533,41 @@ impl DocumentCore {
             best.map(|(_, hit)| hit)
         }
 
+        fn find_body_line_end_cursor(
+            node: &RenderNode,
+            sec: usize,
+            para: usize,
+            line_idx: usize,
+            page: u32,
+        ) -> Option<CursorHit> {
+            fn visit(
+                node: &RenderNode,
+                sec: usize,
+                para: usize,
+                line_idx: usize,
+                page: u32,
+            ) -> Option<CursorHit> {
+                if let RenderNodeType::TextLine(ref line) = node.node_type {
+                    if line.section_index == Some(sec)
+                        && line.para_index == Some(para)
+                        && line.line_index.map(|idx| idx as usize) == Some(line_idx)
+                    {
+                        return Some(CursorHit {
+                            page,
+                            x: node.bbox.x + node.bbox.width,
+                            y: node.bbox.y,
+                            h: node.bbox.height,
+                        });
+                    }
+                }
+                node.children
+                    .iter()
+                    .find_map(|child| visit(child, sec, para, line_idx, page))
+            }
+
+            visit(node, sec, para, line_idx, page)
+        }
+
         // ── 페이지별 렌더 트리 캐시 (최대 2페이지) ──
         let mut tree_cache: Vec<(u32, crate::renderer::render_tree::PageRenderTree)> = Vec::new();
 
@@ -1521,17 +1658,7 @@ impl DocumentCore {
                         ))
                     })?
             } else {
-                self.document
-                    .sections
-                    .get(section_idx)
-                    .ok_or_else(|| {
-                        HwpError::RenderError(format!("구역 인덱스 {} 범위 초과", section_idx))
-                    })?
-                    .paragraphs
-                    .get(para_idx)
-                    .ok_or_else(|| {
-                        HwpError::RenderError(format!("문단 인덱스 {} 범위 초과", para_idx))
-                    })?
+                self.get_render_paragraph_ref(section_idx, para_idx)?
             };
 
             let char_count = navigable_text_len(para);
@@ -1572,10 +1699,25 @@ impl DocumentCore {
 
                 let left_hit = find_cursor!(para_idx, range_start, CursorBias::Leading);
                 // range_end가 줄바꿈 등 비렌더링 문자 위치이면 한 칸 앞으로 재시도
-                let right_hit =
-                    find_cursor!(para_idx, range_end, CursorBias::Trailing).or_else(|| {
+                let right_hit = find_cursor!(para_idx, range_end, CursorBias::Trailing)
+                    .or_else(|| {
                         if range_end > range_start {
                             find_cursor!(para_idx, range_end - 1, CursorBias::Trailing)
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
+                        if cell_ctx.is_none() {
+                            tree_cache.iter().find_map(|(pn, tree)| {
+                                find_body_line_end_cursor(
+                                    &tree.root,
+                                    section_idx,
+                                    para_idx,
+                                    line_idx,
+                                    *pn,
+                                )
+                            })
                         } else {
                             None
                         }

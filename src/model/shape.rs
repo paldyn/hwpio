@@ -63,6 +63,10 @@ pub struct CommonObjAttr {
     ///
     /// Table adapter의 `0x08000000` 보강과 다른 `0x04000000` bit 26이다.
     pub hwp5_gen_shape_attr_bit26: bool,
+    /// VertRelTo가 para일 때 크기 보호 여부 (HWP5 GenShape CTRL_HEADER attr bit 20).
+    pub size_protect: bool,
+    /// HWPX 출처 GenShape 번호 범주 high bit 후보 (HWP5 GenShape CTRL_HEADER attr bit 28).
+    pub hwp5_gen_shape_attr_bit28: bool,
     /// 세로 위치 기준
     pub vert_rel_to: VertRelTo,
     /// 세로 정렬 방식
@@ -71,16 +75,33 @@ pub struct CommonObjAttr {
     pub horz_rel_to: HorzRelTo,
     /// 가로 정렬 방식
     pub horz_align: HorzAlign,
-    /// 텍스트 흐름 방식
+    /// 텍스트 흐름 방식 (개체 배치 방식 — attr bit 21-23)
     pub text_wrap: TextWrap,
+    /// 텍스트가 흐르는 방향 (attr bit 24-25)
+    pub text_flow: TextFlow,
     /// 너비 기준 (bit 15-17): 0=Paper, 1=Page, 2=Column, 3=Para, 4=Absolute
     pub width_criterion: SizeCriterion,
     /// 높이 기준 (bit 18-19): 0=Paper, 1=Page, 2=Absolute
     pub height_criterion: SizeCriterion,
     /// 개체 설명문
     pub description: String,
+    /// HWPX `numberingType` (캡션 번호 범주) 보존 (#1379).
+    ///
+    /// HWP5 파서는 설정하지 않는다 (기본 None). HWPX 그리기 개체의
+    /// `numberingType="PICTURE"` 등을 라운드트립 보존하기 위한 필드.
+    pub numbering_type: ObjectNumberingType,
     /// 파싱된 필드 이후 추가 바이트 (라운드트립 보존용)
     pub raw_extra: Vec<u8>,
+}
+
+/// HWPX 개체 `numberingType` (캡션 번호 범주)
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum ObjectNumberingType {
+    #[default]
+    None,
+    Picture,
+    Table,
+    Equation,
 }
 
 /// 세로 위치 기준
@@ -140,7 +161,7 @@ pub enum SizeCriterion {
     Absolute,
 }
 
-/// 텍스트 흐름 방식
+/// 텍스트 흐름 방식 (개체 배치 — attr bit 21-23)
 #[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize)]
 pub enum TextWrap {
     #[default]
@@ -150,6 +171,18 @@ pub enum TextWrap {
     TopAndBottom,
     BehindText,
     InFrontOfText,
+}
+
+/// 텍스트가 흐르는 방향 (attr bit 24-25)
+///
+/// HWPX `textFlow` 속성값과 대응한다.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum TextFlow {
+    #[default]
+    BothSides,
+    LeftOnly,
+    RightOnly,
+    LargestOnly,
 }
 
 /// 개체 요소 속성 (그리기 개체 공통)
@@ -266,6 +299,11 @@ pub struct DrawingObjAttr {
 pub struct TextBox {
     /// LIST_HEADER list_attr (라운드트립 보존용)
     pub list_attr: u32,
+    /// HWPX `textDirection="VERTICALALL"` 구분 보존 (#1379).
+    ///
+    /// `list_attr` bit 0~2 는 VERTICAL/VERTICALALL 을 모두 code 1 로 합치므로
+    /// (renderer 세로쓰기 분기 호환), HWPX 라운드트립용 구분은 본 필드로 보존한다.
+    pub vertical_all: bool,
     /// 세로 정렬 (list_attr bit 5~6: 0=top, 1=center, 2=bottom)
     pub vertical_align: crate::model::table::VerticalAlign,
     /// 왼쪽 여백
@@ -789,10 +827,7 @@ mod tests {
     #[test]
     fn test_shape_object_line() {
         let line = ShapeObject::Line(LineShape::default());
-        match line {
-            ShapeObject::Line(_) => assert!(true),
-            _ => panic!("Expected Line variant"),
-        }
+        assert!(matches!(line, ShapeObject::Line(_)));
     }
 
     #[test]

@@ -15,19 +15,22 @@ interface FontEntry {
   unicodeRange?: string;
 }
 
+// 함초롬체 CDN (눈누 jsdelivr — 비상업적 사용 허용, 한컴 라이선스)
+const CDN_HAMCHOB_R = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2104@1.0/HANBatang.woff';
+const CDN_HAMCHOB_B = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_2104@1.0/HANBatangB.woff';
+const CDN_HAMCHOD_R = 'https://cdn.jsdelivr.net/gh/projectnoonnu/noonfonts_four@1.0/HCRDotum.woff';
+
 // 한컴 webhwp CSS(@font-face) 매핑 기준 + HWP 문서에서 사용하는 별칭
 const FONT_LIST: FontEntry[] = [
-  // === 함초롬/함초롱/한컴 폰트 → OFL 폴백 ===
-  // 비상업 한정 한컴 함초롬체 CDN(눈누) 로드를 제거하고, 돋움(고딕)은 Noto Sans KR,
-  // 바탕(명조)은 Noto Serif KR 로 대체한다 (재배포 라이선스 안전).
-  { name: '함초롬돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
-  { name: '함초롬바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
-  { name: '함초롱돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
-  { name: '함초롱바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
-  { name: '한컴돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
-  { name: '한컴바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
-  { name: '새돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
-  { name: '새바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
+  // === 함초롬/함초롱/한컴 폰트 (CDN 참조) ===
+  { name: '함초롬돋움', file: CDN_HAMCHOD_R, format: 'woff' },
+  { name: '함초롬바탕', file: CDN_HAMCHOB_R, format: 'woff' },
+  { name: '함초롱돋움', file: CDN_HAMCHOD_R, format: 'woff' },
+  { name: '함초롱바탕', file: CDN_HAMCHOB_R, format: 'woff' },
+  { name: '한컴돋움', file: CDN_HAMCHOD_R, format: 'woff' },
+  { name: '한컴바탕', file: CDN_HAMCHOB_R, format: 'woff' },
+  { name: '새돋움', file: CDN_HAMCHOD_R, format: 'woff' },
+  { name: '새바탕', file: CDN_HAMCHOB_R, format: 'woff' },
   // === 한컴 HY 폰트 → 오픈소스 대체 ===
   { name: 'HY헤드라인M', file: 'fonts/NotoSansKR-Bold.woff2' },
   { name: 'HYHeadLine M', file: 'fonts/NotoSansKR-Bold.woff2' },
@@ -45,11 +48,17 @@ const FONT_LIST: FontEntry[] = [
   // === 한글 시스템 폰트 → 오픈소스 대체 (OS 폰트 없을 때 폴백) ===
   { name: 'Malgun Gothic', file: 'fonts/Pretendard-Regular.woff2' },
   { name: '맑은 고딕', file: 'fonts/Pretendard-Regular.woff2' },
-  { name: '돋움', file: 'fonts/NotoSansKR-Regular.woff2' },
-  { name: '돋움체', file: 'fonts/NotoSansKR-Regular.woff2' },
-  { name: '굴림', file: 'fonts/NotoSansKR-Regular.woff2' },
+  // Task #1224: 한컴 돋움/MS 돋움·굴림 계열은 한컴 돋움(획 두께 페이지밀도 0.265)에
+  // 근접한 Noto Sans KR ExtraLight 로 대체. 기존 NotoSansKR-Regular(밀도 0.378)는
+  // 획이 +43% 두꺼워 PDF 대비 과도하게 굵게 보였다(네이티브 generic_fallback 와 정합).
+  { name: '돋움', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
+  { name: '돋움체', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
+  { name: '굴림', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
   { name: '굴림체', file: 'fonts/D2Coding-Regular.woff2' },
-  { name: '새굴림', file: 'fonts/NotoSansKR-Regular.woff2' },
+  { name: '새굴림', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
+  // Haansoft Dotum: HWP 문서가 직접 지정하는 한컴 돋움 영문명(예: 수능 모의고사 본문).
+  // 기존 미등록 → 체인의 'Malgun Gothic'(Pretendard) 가 먼저 매칭되어 굵게 렌더됐다.
+  { name: 'Haansoft Dotum', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
   { name: '바탕', file: 'fonts/NotoSerifKR-Regular.woff2' },
   { name: '바탕체', file: 'fonts/D2Coding-Regular.woff2' },
   { name: '궁서', file: 'fonts/GowunBatang-Regular.woff2' },
@@ -63,6 +72,9 @@ const FONT_LIST: FontEntry[] = [
   { name: 'Palatino Linotype', file: 'fonts/NotoSerifKR-Regular.woff2' },
   // === Noto (OFL, 로컬) ===
   { name: 'Noto Sans KR', file: 'fonts/NotoSansKR-Regular.woff2' },
+  // Task #1224: generic_fallback sans 체인 말단의 'Noto Sans KR ExtraLight' 해석용.
+  // 미등록 고딕 문서폰트가 체인을 따라 내려올 때 무거운 Noto 직전에 ExtraLight 매칭.
+  { name: 'Noto Sans KR ExtraLight', file: 'fonts/NotoSansKR-ExtraLight.woff2' },
   { name: 'Noto Serif KR', file: 'fonts/NotoSerifKR-Regular.woff2' },
   // === Pretendard ===
   { name: 'Pretendard', file: 'fonts/Pretendard-Regular.woff2' },

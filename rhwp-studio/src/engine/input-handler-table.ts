@@ -264,8 +264,18 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
   if (!hit) { this.cancelImagePlacement(); return; }
 
   const sec = hit.sectionIndex;
-  const paraIdx = hit.paragraphIndex;
+  // 표 셀/글상자 안 클릭: cellPath 와 parentParaIndex (= 소유 본문 paragraph) 를 사용한다.
+  // 표 셀은 기존 #1151 경로처럼 parent paragraph sibling floating 으로 삽입되고,
+  // 글상자는 #1322 보강 경로에서 text_box 내부 paragraph control 로 삽입된다.
+  const isTextBoxHit = hit.isTextBox === true;
+  const inCell = (hit.cellPath?.length ?? 0) > 0 && hit.parentParaIndex !== undefined && !isTextBoxHit;
+  const inTextBox = isTextBoxHit && (hit.cellPath?.length ?? 0) > 0 && hit.parentParaIndex !== undefined;
+  const textBoxControlIdx = hit.controlIndex ?? hit.cellPath?.[0]?.controlIdx ?? hit.cellPath?.[0]?.controlIndex;
+  // 표 셀: 외곽 표 소유 본문 para, 글상자: 글상자 소유 본문 para, 본문: 클릭 문단.
+  const useParentPara = (inCell || inTextBox) && hit.parentParaIndex !== undefined;
+  const paraIdx = useParentPara ? hit.parentParaIndex! : hit.paragraphIndex;
   const charOffset = hit.charOffset;
+  const cellPathJson = (inCell || inTextBox) ? JSON.stringify(hit.cellPath) : '';
 
   // 크기 결정
   const zoom = this.viewportManager.getZoom();
@@ -286,6 +296,53 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
   let wHwp = Math.round(wPx * 75);
   let hHwp = Math.round(hPx * 75);
 
+  // [Task #1151 v8 결함 C / v9 결함 E] 셀 안 + 본문 floating picture 의 paper-relative
+  // offset 계산. 사용자가 드래그/클릭한 위치 (drag.startClientX/Y) 를 page (= paper)
+  // 좌표로 변환. v9 결함 E 후 본문 path 도 floating sibling 으로 통합되었으므로
+  // inCell 제한 제거 — 본문에서도 사용자 클릭 위치 전달 필요.
+  let paperOffsetXHu: number | undefined;
+  let paperOffsetYHu: number | undefined;
+  {
+    const scrollContent = this.container.querySelector('#scroll-content');
+    if (scrollContent) {
+      const contentRect = scrollContent.getBoundingClientRect();
+      const dragContentX = drag.startClientX - contentRect.left;
+      const dragContentY = drag.startClientY - contentRect.top;
+      const pageIdx = this.virtualScroll.getPageAtPoint(dragContentX, dragContentY);
+      const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
+      const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
+      const dragPageX = (dragContentX - pageLeft) / zoom;
+      const dragPageY = (dragContentY - pageOffset) / zoom;
+      if (inTextBox) {
+        paperOffsetXHu = 0;
+        paperOffsetYHu = 0;
+        try {
+          const layout = this.wasm.getPageControlLayout(pageIdx);
+          const shape = layout.controls.find((ctrl: any) =>
+            ctrl.type === 'shape' &&
+            ctrl.secIdx === sec &&
+            ctrl.paraIdx === paraIdx &&
+            ctrl.controlIdx === textBoxControlIdx
+          );
+          if (shape) {
+            const props = this.wasm.getShapeProperties(sec, paraIdx, textBoxControlIdx);
+            const marginLeftPx = ((props as any).tbMarginLeft ?? 0) / 75;
+            const marginTopPx = ((props as any).tbMarginTop ?? 0) / 75;
+            paperOffsetXHu = Math.max(0, Math.round((dragPageX - shape.x - marginLeftPx) * 75));
+            paperOffsetYHu = Math.max(0, Math.round((dragPageY - shape.y - marginTopPx) * 75));
+          }
+        } catch {
+          // 글상자 bbox 조회 실패 시 글상자 내부 좌상단 삽입으로 fallback.
+          paperOffsetXHu = 0;
+          paperOffsetYHu = 0;
+        }
+      } else {
+        paperOffsetXHu = Math.round(dragPageX * 75);
+        paperOffsetYHu = Math.round(dragPageY * 75);
+      }
+    }
+  }
+
   // 열 폭 초과 시 비례 축소
   try {
     const pageDef = this.wasm.getPageDef(sec);
@@ -302,7 +359,12 @@ export function finishImagePlacement(this: any, e: MouseEvent): void {
 
   // WASM 호출
   try {
-    const result = this.wasm.insertPicture(sec, paraIdx, charOffset, imgData.data, wHwp, hHwp, imgData.naturalWidth, imgData.naturalHeight, imgData.ext, desc);
+    const result = this.wasm.insertPicture(
+      sec, paraIdx, charOffset, cellPathJson, imgData.data,
+      wHwp, hHwp, imgData.naturalWidth, imgData.naturalHeight,
+      imgData.ext, desc,
+      paperOffsetXHu, paperOffsetYHu,
+    );
     if (result.ok) {
       this.eventBus.emit('document-changed');
     }
@@ -550,4 +612,3 @@ export function resizeTableProportional(this: any, key: 'ArrowUp' | 'ArrowDown' 
     console.warn('[InputHandler] resizeTableProportional 실패:', err);
   }
 }
-

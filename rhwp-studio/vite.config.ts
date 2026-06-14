@@ -75,6 +75,15 @@ export default defineConfig({
         display: 'standalone',
         start_url: '/',
         scope: '/',
+        file_handlers: [
+          {
+            action: '/',
+            accept: {
+              'application/x-hwp': ['.hwp'],
+              'application/hwp+zip': ['.hwpx'],
+            },
+          },
+        ],
         icons: [
           { src: 'icons/icon-128.png', sizes: '128x128', type: 'image/png' },
           { src: 'icons/icon-192.png', sizes: '192x192', type: 'image/png' },

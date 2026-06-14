@@ -5,8 +5,11 @@
 /* editor-area: 눈금자 + 스크롤 영역을 2×2 Grid로 배치 */
 #editor-area {
   display: grid;
-  grid-template-columns: 20px 1fr;
-  grid-template-rows: 20px 1fr;
+  /* minmax(0, 1fr): 1fr(=minmax(auto,1fr))은 콘텐츠 기반 최소 크기가 한 방향
+     래칫으로 작동해 창을 넓혔다 줄이면 트랙이 줄지 않는다(#1191). 최소를 0으로
+     고정해 창 축소 시에도 트랙이 정상 축소되어 가운데 정렬이 유지된다. */
+  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-rows: 20px minmax(0, 1fr);
   flex: 1;
   overflow: hidden;
 }
@@ -39,33 +42,6 @@
   overflow-y: auto;
   overflow-x: auto;
   background: var(--color-hover-bg);
-  /* [Task #12] Firefox: 오버레이가 아닌 가시 스크롤바 강제 (thumb / track 색) */
-  scrollbar-width: auto;
-  scrollbar-color: var(--color-border-dark) var(--color-hover-bg);
-}
-
-/* [Task #12] 편집 영역 스크롤바 상시 노출 — WebKit/Chromium 계열(WKWebView·WebView2·웹).
-   macOS WKWebView·Windows WebView2·macOS 브라우저의 오버레이(자동 숨김) 스크롤바는
-   가로 오버플로가 있어도 바가 보이지 않아, 좁은 창에서 가려진 페이지 영역에 접근
-   불가로 인지된다. ::-webkit-scrollbar 로 가시 스크롤바를 강제한다. overflow:auto 는
-   유지하므로 콘텐츠가 뷰포트에 들어맞으면 바는 나타나지 않는다(빈 트랙 없음). */
-#scroll-container::-webkit-scrollbar {
-  width: 14px;
-  height: 14px;
-}
-#scroll-container::-webkit-scrollbar-track {
-  background: var(--color-hover-bg);
-}
-#scroll-container::-webkit-scrollbar-thumb {
-  background: var(--color-border-dark);
-  border: 3px solid var(--color-hover-bg);
-  border-radius: 7px;
-}
-#scroll-container::-webkit-scrollbar-thumb:hover {
-  background: var(--color-text-hint);
-}
-#scroll-container::-webkit-scrollbar-corner {
-  background: var(--color-hover-bg);
 }
 
 #scroll-content {
@@ -77,8 +53,14 @@
   position: absolute;
   left: 50%;
   transform: translateX(-50%);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  z-index: 0;
+  box-shadow: none;
   background: var(--color-surface);
+}
+
+#scroll-content .page-grid-overlay {
+  position: absolute;
+  mix-blend-mode: multiply;
 }
 
 #scroll-content.grid-mode canvas {

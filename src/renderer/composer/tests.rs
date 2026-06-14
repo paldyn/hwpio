@@ -97,6 +97,63 @@ fn test_compose_multi_line() {
     assert_eq!(composed.lines[1].runs[0].text, "두번째줄");
 }
 
+/// 단일 LINE_SEG 안의 Shift+Enter 강제 줄바꿈도 실제 visual line 으로 분리한다.
+#[test]
+fn test_compose_internal_forced_line_break_splits_visual_lines() {
+    let para = Paragraph {
+        text: "가나\n다라".to_string(),
+        char_offsets: vec![0, 1, 2, 3, 4],
+        char_count: 6,
+        char_shapes: vec![CharShapeRef {
+            start_pos: 0,
+            char_shape_id: 7,
+        }],
+        line_segs: vec![LineSeg {
+            text_start: 0,
+            line_height: 400,
+            baseline_distance: 320,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let composed = compose_paragraph(&para);
+    assert_eq!(composed.lines.len(), 2);
+    assert_eq!(composed.lines[0].runs[0].text, "가나");
+    assert!(composed.lines[0].has_line_break);
+    assert_eq!(composed.lines[0].char_start, 0);
+    assert_eq!(composed.lines[1].runs[0].text, "다라");
+    assert!(!composed.lines[1].has_line_break);
+    assert_eq!(composed.lines[1].char_start, 3);
+}
+
+/// 끝의 Shift+Enter는 줄바꿈 표시 줄만 만들고 빈 후속 줄을 중복 생성하지 않는다.
+#[test]
+fn test_compose_trailing_forced_line_break_keeps_single_marked_line() {
+    let para = Paragraph {
+        text: "가나\n".to_string(),
+        char_offsets: vec![0, 1, 2],
+        char_count: 4,
+        char_shapes: vec![CharShapeRef {
+            start_pos: 0,
+            char_shape_id: 7,
+        }],
+        line_segs: vec![LineSeg {
+            text_start: 0,
+            line_height: 400,
+            baseline_distance: 320,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let composed = compose_paragraph(&para);
+    assert_eq!(composed.lines.len(), 1);
+    assert_eq!(composed.lines[0].runs[0].text, "가나");
+    assert!(composed.lines[0].has_line_break);
+    assert_eq!(composed.lines[0].char_start, 0);
+}
+
 /// 다중 줄 + 다중 스타일 (줄 경계에서 스타일 변경)
 #[test]
 fn test_compose_multi_line_multi_style() {
@@ -160,6 +217,15 @@ fn test_compose_empty_paragraph() {
     assert!(composed.inline_controls.is_empty());
 }
 
+/// table-vpos-01 page 5의 10/11/12 마커는 CharOverlap 하나에 두 개의
+/// HWP PUA 구성 글자가 들어온다. 텍스트 흐름과 캐럿 이동은 한 글자 폭이어야 한다.
+#[test]
+fn test_char_overlap_multi_component_is_single_advance() {
+    let chars = vec!['\u{F02BA}', '\u{F02C3}'];
+    assert_eq!(decode_pua_overlap_number(&chars), None);
+    assert_eq!(char_overlap_advance_units(&chars), 1);
+}
+
 /// LineSeg 없는 텍스트 문단
 #[test]
 fn test_compose_no_line_segs() {
@@ -215,7 +281,7 @@ fn test_identify_inline_controls_table() {
 
     let para = Paragraph {
         text: "표 앞 텍스트".to_string(),
-        controls: vec![Control::Table(Box::new(Table::default()))],
+        controls: vec![Control::Table(Box::default())],
         ..Default::default()
     };
 

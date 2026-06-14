@@ -3,11 +3,54 @@ use crate::model::document::{Document, Section};
 use crate::model::paragraph::{LineSeg, Paragraph};
 use crate::paint::LAYER_TREE_SCHEMA;
 use crate::parser::control::parse_common_obj_attr;
+use serde_json::Value;
 
 #[test]
 fn test_create_empty_document() {
     let doc = HwpDocument::create_empty();
     assert_eq!(doc.page_count(), 1);
+}
+
+/// [#1386] createEmpty는 구역 1개 + 빈 문단 1개를 포함해 생성 직후
+/// 편집/조회/내보내기가 가능해야 한다 (구역 0개 → 모든 API 실패 회귀 방지).
+#[test]
+fn test_create_empty_document_is_editable() {
+    let mut doc = HwpDocument::create_empty();
+    assert_eq!(doc.get_section_count(), 1, "기본 구역 1개");
+
+    // 편집: 구역 0 / 문단 0에 텍스트 삽입이 성공해야 한다
+    doc.insert_text_native(0, 0, 0, "새 문서 첫 문단")
+        .expect("createEmpty 문서에 insertText가 동작해야 한다 (#1386)");
+
+    // 조회: 삽입한 텍스트가 읽혀야 한다
+    let text = doc
+        .get_text_range_native(0, 0, 0, 8)
+        .expect("getTextRange가 동작해야 한다");
+    assert!(
+        text.contains("새 문서"),
+        "삽입 텍스트가 조회되어야 한다: {text}"
+    );
+
+    // 내보내기: HWP/HWPX 직렬화가 모두 성공해야 한다
+    let hwp = doc
+        .export_hwp_with_adapter()
+        .expect("createEmpty 문서 exportHwp");
+    assert!(!hwp.is_empty());
+    let hwpx = doc
+        .export_hwpx_native()
+        .expect("createEmpty 문서 exportHwpx");
+    assert!(!hwpx.is_empty());
+
+    // 재파싱: 내보낸 HWP가 다시 열리고 텍스트가 보존되어야 한다
+    let reparsed =
+        crate::document_core::DocumentCore::from_bytes(&hwp).expect("exportHwp 결과 재파싱");
+    assert!(
+        reparsed.document().sections[0]
+            .paragraphs
+            .iter()
+            .any(|p| p.text.contains("새 문서")),
+        "재파싱 문서에 삽입 텍스트가 보존되어야 한다"
+    );
 }
 
 #[test]
@@ -54,22 +97,25 @@ fn test_page_layer_tree_export_uses_schema_contract() {
     let json = doc
         .get_page_layer_tree_native(0)
         .expect("empty document layer tree should export");
+    let parsed: Value = serde_json::from_str(&json).expect("PageLayerTree JSON");
 
-    assert!(json.contains(&format!(
-        "\"schemaVersion\":{}",
-        LAYER_TREE_SCHEMA.schema_version
-    )));
-    assert!(json.contains(&format!(
-        "\"resourceTableVersion\":{}",
-        LAYER_TREE_SCHEMA.resource_table_version
-    )));
-    assert!(json.contains(&format!("\"unit\":\"{}\"", LAYER_TREE_SCHEMA.unit)));
-    assert!(json.contains(&format!(
-        "\"coordinateSystem\":\"{}\"",
-        LAYER_TREE_SCHEMA.coordinate_system
-    )));
-    assert!(json.contains("\"profile\":\"screen\""));
-    assert!(json.contains("\"outputOptions\":{"));
+    assert_eq!(
+        parsed["schemaVersion"].as_u64(),
+        Some(LAYER_TREE_SCHEMA.schema_version as u64)
+    );
+    assert_eq!(
+        parsed["resourceTableVersion"].as_u64(),
+        Some(LAYER_TREE_SCHEMA.resource_table_version as u64)
+    );
+    assert_eq!(parsed["unit"].as_str(), Some(LAYER_TREE_SCHEMA.unit));
+    assert_eq!(
+        parsed["coordinateSystem"].as_str(),
+        Some(LAYER_TREE_SCHEMA.coordinate_system)
+    );
+    assert_eq!(parsed["profile"].as_str(), Some("screen"));
+    assert!(parsed["buildOptions"].is_object());
+    assert!(parsed["debugOptions"].is_object());
+    assert!(parsed["outputOptions"].is_object());
 }
 
 #[test]
@@ -84,12 +130,34 @@ fn test_page_layer_tree_export_preserves_output_options() {
     let json = doc
         .get_page_layer_tree_native(0)
         .expect("layer tree should export output options");
+    let parsed: Value = serde_json::from_str(&json).expect("PageLayerTree JSON");
 
-    assert!(json.contains("\"showParagraphMarks\":true"));
-    assert!(json.contains("\"showControlCodes\":true"));
-    assert!(json.contains("\"showTransparentBorders\":true"));
-    assert!(json.contains("\"clipEnabled\":false"));
-    assert!(json.contains("\"debugOverlay\":true"));
+    assert_eq!(
+        parsed["buildOptions"]["showTransparentBorders"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(parsed["buildOptions"]["clipEnabled"].as_bool(), Some(false));
+    assert_eq!(parsed["debugOptions"]["debugOverlay"].as_bool(), Some(true));
+    assert_eq!(
+        parsed["outputOptions"]["showParagraphMarks"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        parsed["outputOptions"]["showControlCodes"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        parsed["outputOptions"]["showTransparentBorders"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        parsed["outputOptions"]["clipEnabled"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        parsed["outputOptions"]["debugOverlay"].as_bool(),
+        Some(true)
+    );
 }
 
 #[test]
@@ -418,7 +486,7 @@ fn test_insert_text_in_cell() {
     assert!(json.contains("\"ok\":true"));
     assert!(json.contains("\"charOffset\":3"));
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells[0].paragraphs[0].text, "셀추가A");
     } else {
         panic!("표 컨트롤을 찾을 수 없음");
@@ -433,7 +501,7 @@ fn test_delete_text_in_cell() {
     let json = result.unwrap();
     assert!(json.contains("\"ok\":true"));
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells[1].paragraphs[0].text, "B");
     } else {
         panic!("표 컨트롤을 찾을 수 없음");
@@ -474,14 +542,14 @@ fn test_insert_and_delete_roundtrip_in_cell() {
     let result = doc.insert_text_in_cell_native(0, 0, 0, 2, 0, 2, "테스트");
     assert!(result.is_ok());
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells[2].paragraphs[0].text, "셀C테스트");
     }
 
     let result = doc.delete_text_in_cell_native(0, 0, 0, 2, 0, 2, 3);
     assert!(result.is_ok());
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells[2].paragraphs[0].text, "셀C");
     }
 }
@@ -493,7 +561,7 @@ fn test_svg_render_with_table_after_cell_edit() {
     doc.insert_text_in_cell_native(0, 0, 0, 3, 0, 2, "수정됨")
         .unwrap();
     // 삽입 후 셀 텍스트 확인
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells[3].paragraphs[0].text, "셀D수정됨");
     }
     let svg = doc.render_page_svg_native(0);
@@ -556,7 +624,7 @@ fn test_insert_table_row_below() {
     assert!(json.contains("\"rowCount\":3"));
     assert!(json.contains("\"colCount\":2"));
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.row_count, 3);
         assert_eq!(table.cells.len(), 6);
         // 원래 첫 행의 셀A는 여전히 행 0
@@ -579,7 +647,7 @@ fn test_insert_table_column_right() {
     assert!(json.contains("\"rowCount\":2"));
     assert!(json.contains("\"colCount\":3"));
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.col_count, 3);
         assert_eq!(table.cells.len(), 6);
     } else {
@@ -596,7 +664,7 @@ fn test_merge_table_cells() {
     let json = result.unwrap();
     assert!(json.contains("\"cellCount\":3")); // 비주 셀 1개 제거
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells.len(), 3); // 비주 셀 제거됨
         let merged = &table.cells[0];
         assert_eq!(merged.col_span, 2);
@@ -611,7 +679,7 @@ fn test_split_table_cell() {
     let mut doc = create_doc_with_table();
     // 먼저 병합
     doc.merge_table_cells_native(0, 0, 0, 0, 0, 0, 1).unwrap();
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells.len(), 3);
     }
 
@@ -621,7 +689,7 @@ fn test_split_table_cell() {
     let json = result.unwrap();
     assert!(json.contains("\"cellCount\":4"));
 
-    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.get(0) {
+    if let Some(Control::Table(table)) = doc.document.sections[0].paragraphs[0].controls.first() {
         assert_eq!(table.cells.len(), 4);
         let cell = &table.cells[0];
         assert_eq!(cell.col_span, 1);
@@ -632,7 +700,7 @@ fn test_split_table_cell() {
 }
 
 #[test]
-fn test_merge_then_control_layout_has_colSpan() {
+fn test_merge_then_control_layout_has_col_span() {
     let mut doc = create_doc_with_table();
     // 병합 전: colSpan=1
     let layout_before = doc.get_page_control_layout_native(0).unwrap();
@@ -1931,7 +1999,7 @@ fn test_clipboard_copy_control() {
     let mut doc = create_doc_with_table();
 
     // 표 컨트롤 복사
-    let result = doc.copy_control_native(0, 0, 0);
+    let result = doc.copy_control_native(0, 0, &[], 0);
     assert!(result.is_ok());
     let json = result.unwrap();
     assert!(json.contains("[표]"));
@@ -1942,6 +2010,470 @@ fn test_clipboard_copy_control() {
     assert_eq!(clip.paragraphs.len(), 1);
     assert_eq!(clip.paragraphs[0].controls.len(), 1);
     assert!(matches!(&clip.paragraphs[0].controls[0], Control::Table(_)));
+}
+
+#[test]
+fn test_clipboard_copy_control_cell_path_json_arg() {
+    // [Task #1161] copyControl 래퍼의 cell_path_json 인자: 빈 문자열/"[]" 는 본문.
+    // (에러 경로는 JsValue 를 구성하므로 native 테스트에서 호출 불가 → OK 경로만 검증.
+    //  cell 경로 자체는 tests/issue_1161_copy_picture_in_cell.rs 의 native 테스트로 가드.)
+    let mut doc = create_doc_with_table();
+
+    // 빈 문자열 = 본문 → 표 복사
+    let r_empty = doc.copy_control(0, 0, "", 0);
+    assert!(r_empty.is_ok(), "빈 cell_path_json 본문 복사 실패");
+    assert!(r_empty.unwrap().contains("[표]"));
+
+    // "[]" 도 본문
+    let r_arr = doc.copy_control(0, 0, "[]", 0);
+    assert!(r_arr.is_ok(), "[] cell_path_json 본문 복사 실패");
+    assert!(r_arr.unwrap().contains("[표]"));
+}
+
+/// [Task #1161] 떠 있는 그림(tac=false)을 반복 붙여넣으면 cascade 오프셋이 누적된다.
+fn create_doc_with_floating_picture(tac: bool, voff: u32, hoff: u32) -> HwpDocument {
+    use crate::model::control::Control;
+    use crate::model::document::{Section, SectionDef};
+    use crate::model::image::Picture;
+    use crate::model::page::PageDef;
+    use crate::model::shape::CommonObjAttr;
+
+    let mut doc = HwpDocument::create_empty();
+    let mut document = Document::default();
+    let page_def = PageDef {
+        width: 59528,
+        height: 84188,
+        margin_left: 8504,
+        margin_right: 8504,
+        margin_top: 5669,
+        margin_bottom: 4252,
+        margin_header: 4252,
+        margin_footer: 4252,
+        ..Default::default()
+    };
+    let pic = Control::Picture(Box::new(Picture {
+        common: CommonObjAttr {
+            treat_as_char: tac,
+            vertical_offset: voff,
+            horizontal_offset: hoff,
+            width: 5000,
+            height: 5000,
+            ..Default::default()
+        },
+        ..Default::default()
+    }));
+    let pic_para = Paragraph {
+        controls: vec![pic],
+        line_segs: vec![LineSeg {
+            line_height: 400,
+            baseline_distance: 320,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    document.sections.push(Section {
+        section_def: SectionDef {
+            page_def,
+            ..Default::default()
+        },
+        paragraphs: vec![pic_para, Paragraph::default()],
+        raw_stream: None,
+    });
+    doc.set_document(document);
+    doc
+}
+
+fn collect_picture_voffsets(doc: &HwpDocument) -> Vec<u32> {
+    use crate::model::control::Control;
+    let mut offs = Vec::new();
+    for sec in &doc.document.sections {
+        for p in &sec.paragraphs {
+            for c in &p.controls {
+                if let Control::Picture(pic) = c {
+                    offs.push(pic.common.vertical_offset);
+                }
+            }
+        }
+    }
+    offs.sort_unstable();
+    offs
+}
+
+#[test]
+fn test_paste_cascade_floating_picture() {
+    let mut doc = create_doc_with_floating_picture(false, 1000, 1000);
+    doc.copy_control_native(0, 0, &[], 0).expect("copy");
+    doc.paste_control_native(0, 1, 0).expect("paste1");
+    doc.paste_control_native(0, 1, 0).expect("paste2");
+
+    // 원본 1000, 붙여넣기 1000+567, 1000+2*567 (PASTE_CASCADE_STEP_HU=567)
+    let offs = collect_picture_voffsets(&doc);
+    assert_eq!(
+        offs,
+        vec![1000, 1567, 2134],
+        "cascade 오프셋 누적 불일치: {offs:?}"
+    );
+}
+
+#[test]
+fn test_paste_inline_picture_no_cascade() {
+    // tac=true(글자처럼 취급)는 텍스트 흐름이 위치를 정하므로 cascade 미적용(오프셋 불변).
+    let mut doc = create_doc_with_floating_picture(true, 1000, 1000);
+    doc.copy_control_native(0, 0, &[], 0).expect("copy");
+    doc.paste_control_native(0, 1, 0).expect("paste1");
+    doc.paste_control_native(0, 1, 0).expect("paste2");
+
+    let offs = collect_picture_voffsets(&doc);
+    assert_eq!(
+        offs,
+        vec![1000, 1000, 1000],
+        "inline 그림에 cascade 적용됨: {offs:?}"
+    );
+}
+
+/// 섹션 0에서 첫 번째 표 컨트롤의 (para_idx, ctrl_idx)를 찾는다.
+fn find_table_pos(doc: &HwpDocument) -> (usize, usize) {
+    use crate::model::control::Control;
+    for (pi, p) in doc.document.sections[0].paragraphs.iter().enumerate() {
+        for (ci, c) in p.controls.iter().enumerate() {
+            if matches!(c, Control::Table(_)) {
+                return (pi, ci);
+            }
+        }
+    }
+    panic!("표 컨트롤 없음");
+}
+
+/// #1323: 표 셀 안 이미지 붙여넣기 — merge_from 컨트롤 병합으로 그림·CTRL_DATA가
+/// 보존되어야 한다. 수정 전에는 에러 없이 조용히 누락되었다.
+#[test]
+fn test_paste_picture_into_table_cell() {
+    use crate::model::control::Control;
+
+    let mut doc = create_doc_with_floating_picture(true, 0, 0);
+    // CTRL_DATA 인덱스 정렬 검증용 레코드 부여
+    doc.document.sections[0].paragraphs[0].ctrl_data_records = vec![Some(vec![7, 7, 7])];
+    doc.copy_control_native(0, 0, &[], 0).expect("그림 복사");
+
+    doc.create_table_ex_native(0, 1, 0, 2, 2, true, None)
+        .expect("표 생성");
+    let (t_para, t_ctrl) = find_table_pos(&doc);
+
+    doc.paste_internal_in_cell_native(0, t_para, t_ctrl, 0, 0, 0)
+        .expect("셀에 그림 붙여넣기");
+
+    let table = match &doc.document.sections[0].paragraphs[t_para].controls[t_ctrl] {
+        Control::Table(t) => t,
+        other => panic!("표가 아님: {other:?}"),
+    };
+    let mut found = None;
+    for p in &table.cells[0].paragraphs {
+        for (i, c) in p.controls.iter().enumerate() {
+            if matches!(c, Control::Picture(_)) {
+                found = Some((p, i));
+            }
+        }
+    }
+    let (cell_para, pic_idx) = found.expect("셀 안에 그림 컨트롤이 보존되어야 한다 (#1323)");
+    assert_eq!(
+        cell_para.ctrl_data_records.get(pic_idx).cloned().flatten(),
+        Some(vec![7, 7, 7]),
+        "CTRL_DATA가 controls 인덱스 정렬을 유지한 채 보존되어야 한다"
+    );
+}
+
+/// #1323: path 기반 셀 붙여넣기(paste_internal_in_cell_by_path)도 동일하게 그림을 보존한다.
+#[test]
+fn test_paste_picture_into_cell_by_path() {
+    use crate::model::control::Control;
+
+    let mut doc = create_doc_with_floating_picture(true, 0, 0);
+    doc.copy_control_native(0, 0, &[], 0).expect("그림 복사");
+
+    doc.create_table_ex_native(0, 1, 0, 2, 2, true, None)
+        .expect("표 생성");
+    let (t_para, t_ctrl) = find_table_pos(&doc);
+
+    // path = [(ctrl_idx, cell_idx, cell_para_idx)] — 셀 1의 문단 0에 붙여넣기
+    doc.paste_internal_in_cell_by_path_native(0, t_para, &[(t_ctrl, 1, 0)], 0)
+        .expect("path 기반 셀 붙여넣기");
+
+    let table = match &doc.document.sections[0].paragraphs[t_para].controls[t_ctrl] {
+        Control::Table(t) => t,
+        other => panic!("표가 아님: {other:?}"),
+    };
+    let pic_count: usize = table.cells[1]
+        .paragraphs
+        .iter()
+        .map(|p| {
+            p.controls
+                .iter()
+                .filter(|c| matches!(c, Control::Picture(_)))
+                .count()
+        })
+        .sum();
+    assert_eq!(
+        pic_count, 1,
+        "path 기반 붙여넣기에서도 그림 컨트롤이 보존되어야 한다 (#1323)"
+    );
+}
+
+/// #1323: 그림 캡션 안 붙여넣기(Control::Picture 분기)도 컨트롤을 보존한다.
+#[test]
+fn test_paste_picture_into_picture_caption() {
+    use crate::model::control::Control;
+    use crate::model::shape::Caption;
+
+    let mut doc = create_doc_with_floating_picture(true, 0, 0);
+    doc.copy_control_native(0, 0, &[], 0).expect("그림 복사");
+
+    // 본문 그림에 캡션 부여
+    match &mut doc.document.sections[0].paragraphs[0].controls[0] {
+        Control::Picture(p) => {
+            p.caption = Some(Caption {
+                paragraphs: vec![Paragraph::default()],
+                ..Default::default()
+            });
+        }
+        other => panic!("그림이 아님: {other:?}"),
+    }
+
+    doc.paste_internal_in_cell_native(0, 0, 0, 0, 0, 0)
+        .expect("캡션에 그림 붙여넣기");
+
+    let caption = match &doc.document.sections[0].paragraphs[0].controls[0] {
+        Control::Picture(p) => p.caption.as_ref().expect("캡션 존재"),
+        other => panic!("그림이 아님: {other:?}"),
+    };
+    let pic_count: usize = caption
+        .paragraphs
+        .iter()
+        .map(|p| {
+            p.controls
+                .iter()
+                .filter(|c| matches!(c, Control::Picture(_)))
+                .count()
+        })
+        .sum();
+    assert_eq!(
+        pic_count, 1,
+        "캡션 안에 붙여넣은 그림 컨트롤이 보존되어야 한다 (#1323)"
+    );
+}
+
+/// #1323 부수 해소: 본문 문단 시작 Backspace 병합 시 병합 대상 문단의 컨트롤이
+/// 보존되어야 한다 (수정 전에는 merge_from이 controls를 드롭).
+#[test]
+fn test_merge_paragraph_preserves_controls() {
+    use crate::model::control::Control;
+
+    let mut doc = create_doc_with_floating_picture(true, 0, 0);
+    // 문단 1에 텍스트 입력 후 문단 0(그림 문단)으로 병합
+    doc.insert_text_native(0, 1, 0, "가나")
+        .expect("텍스트 입력");
+    doc.merge_paragraph_native(0, 1).expect("문단 병합");
+
+    let para = &doc.document.sections[0].paragraphs[0];
+    assert_eq!(para.text, "가나");
+    assert_eq!(
+        para.controls
+            .iter()
+            .filter(|c| matches!(c, Control::Picture(_)))
+            .count(),
+        1,
+        "백스페이스 병합 시 그림 컨트롤이 보존되어야 한다 (#1323)"
+    );
+    assert_eq!(
+        para.control_text_positions(),
+        vec![0],
+        "그림은 병합된 텍스트 앞 위치를 유지해야 한다"
+    );
+}
+
+/// #1323 부수 해소: 셀 문단 시작 Backspace 병합(merge_paragraph_in_cell) 시
+/// 병합 대상 셀 문단의 컨트롤이 보존되어야 한다.
+#[test]
+fn test_merge_paragraph_in_cell_preserves_controls() {
+    use crate::model::control::Control;
+
+    let mut doc = create_doc_with_floating_picture(true, 0, 0);
+    doc.create_table_ex_native(0, 1, 0, 2, 2, true, None)
+        .expect("표 생성");
+    let (t_para, t_ctrl) = find_table_pos(&doc);
+
+    // 셀 0에 그림 문단을 두 번째 문단으로 구성
+    let pic_para = doc.document.sections[0].paragraphs[0].clone();
+    match &mut doc.document.sections[0].paragraphs[t_para].controls[t_ctrl] {
+        Control::Table(t) => t.cells[0].paragraphs.push(pic_para),
+        other => panic!("표가 아님: {other:?}"),
+    }
+
+    doc.merge_paragraph_in_cell_native(0, t_para, t_ctrl, 0, 1)
+        .expect("셀 문단 병합");
+
+    let table = match &doc.document.sections[0].paragraphs[t_para].controls[t_ctrl] {
+        Control::Table(t) => t,
+        other => panic!("표가 아님: {other:?}"),
+    };
+    assert_eq!(
+        table.cells[0].paragraphs.len(),
+        1,
+        "셀 문단이 병합되어야 한다"
+    );
+    assert_eq!(
+        table.cells[0].paragraphs[0]
+            .controls
+            .iter()
+            .filter(|c| matches!(c, Control::Picture(_)))
+            .count(),
+        1,
+        "셀 백스페이스 병합 시 그림 컨트롤이 보존되어야 한다 (#1323)"
+    );
+}
+
+/// #1323: 셀에 그림을 붙여넣은 문서가 HWP5 직렬화 → 재파싱 후에도 그림을 보존한다.
+/// (char_count 역산·char_offsets 갭 인코딩이 직렬화 계약과 정합함을 검증)
+#[test]
+fn test_paste_picture_into_table_cell_hwp5_roundtrip() {
+    use crate::model::control::Control;
+
+    let mut doc = create_doc_with_floating_picture(true, 0, 0);
+    doc.copy_control_native(0, 0, &[], 0).expect("그림 복사");
+    doc.create_table_ex_native(0, 1, 0, 2, 2, true, None)
+        .expect("표 생성");
+    let (t_para, t_ctrl) = find_table_pos(&doc);
+    doc.paste_internal_in_cell_native(0, t_para, t_ctrl, 0, 0, 0)
+        .expect("셀에 그림 붙여넣기");
+
+    let bytes = doc.export_hwp_native().expect("HWP5 직렬화");
+    let doc2 = HwpDocument::from_bytes(&bytes).expect("재파싱");
+
+    let mut found = false;
+    for p in &doc2.document.sections[0].paragraphs {
+        for c in &p.controls {
+            if let Control::Table(t) = c {
+                for cell_para in t.cells.iter().flat_map(|cl| cl.paragraphs.iter()) {
+                    if cell_para
+                        .controls
+                        .iter()
+                        .any(|cc| matches!(cc, Control::Picture(_)))
+                    {
+                        found = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        found,
+        "HWP5 round-trip 후에도 셀 안 그림 컨트롤이 보존되어야 한다 (#1323)"
+    );
+}
+
+/// #1323 시각 검증 보조: 표 셀/글상자에 붙여넣은 그림이 SVG 렌더링에 실제
+/// `<image>` 요소로 나타나는지 검증한다. BinData를 실제 등록(insert_picture)하여
+/// 렌더러가 data URI 이미지를 방출하는 경로를 그대로 사용한다.
+#[test]
+fn test_paste_picture_into_cell_and_textbox_renders_in_svg() {
+    fn minimal_png() -> Vec<u8> {
+        vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x00, 0x00, 0x00,
+            0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ]
+    }
+    fn parse_idx(res: &str, key: &str) -> usize {
+        res.split(&format!("\"{}\":", key))
+            .nth(1)
+            .and_then(|s| s.split(|c: char| !c.is_ascii_digit()).next())
+            .and_then(|s| s.parse().ok())
+            .unwrap_or_else(|| panic!("missing {key} in {res}"))
+    }
+    fn count_images(svg: &str) -> usize {
+        svg.matches("<image").count()
+    }
+
+    let mut doc = create_doc_with_floating_picture(true, 0, 0);
+    // 헬퍼의 기본 그림은 BinData가 없으므로 실제 그림을 별도 삽입해 사용한다
+    let res = doc
+        .insert_picture_native(
+            0,
+            1,
+            0,
+            &[],
+            &minimal_png(),
+            5000,
+            5000,
+            1,
+            1,
+            "png",
+            "",
+            None,
+            None,
+        )
+        .expect("본문 그림 삽입");
+    let pic_para = parse_idx(&res, "paraIdx");
+    let pic_ctrl = parse_idx(&res, "controlIdx");
+
+    let svg_before = doc.render_page_svg_native(0).expect("기준 SVG 렌더");
+    let base = count_images(&svg_before);
+    assert!(base >= 1, "본문 그림이 SVG에 렌더되어야 한다: {base}");
+
+    doc.copy_control_native(0, pic_para, &[], pic_ctrl)
+        .expect("그림 복사");
+
+    // 표 셀에 붙여넣기 → <image> 1개 증가
+    // (기존 문단은 모두 그림 컨트롤을 보유하므로 표 전용 빈 문단을 추가)
+    doc.document.sections[0]
+        .paragraphs
+        .push(Paragraph::default());
+    let empty_para = doc.document.sections[0].paragraphs.len() - 1;
+    doc.create_table_ex_native(0, empty_para, 0, 2, 2, true, None)
+        .expect("표 생성");
+    let (t_para, t_ctrl) = find_table_pos(&doc);
+    doc.paste_internal_in_cell_native(0, t_para, t_ctrl, 0, 0, 0)
+        .expect("셀에 그림 붙여넣기");
+
+    let svg_cell = doc.render_page_svg_native(0).expect("셀 paste 후 SVG 렌더");
+    assert_eq!(
+        count_images(&svg_cell),
+        base + 1,
+        "셀에 붙여넣은 그림이 SVG에 렌더되어야 한다 (#1323)"
+    );
+
+    // 글상자에 붙여넣기 → <image> 1개 더 증가
+    let tb_res = doc
+        .create_shape_control_native(
+            0,
+            t_para,
+            0,
+            21600,
+            7200,
+            0,
+            0,
+            true,
+            "TopAndBottom",
+            "textbox",
+            false,
+            false,
+            &[],
+        )
+        .expect("글상자 생성");
+    let tb_para = parse_idx(&tb_res, "paraIdx");
+    let tb_ctrl = parse_idx(&tb_res, "controlIdx");
+    doc.paste_internal_in_cell_native(0, tb_para, tb_ctrl, 0, 0, 0)
+        .expect("글상자에 그림 붙여넣기");
+
+    let svg_tb = doc
+        .render_page_svg_native(0)
+        .expect("글상자 paste 후 SVG 렌더");
+    assert_eq!(
+        count_images(&svg_tb),
+        base + 2,
+        "글상자에 붙여넣은 그림이 SVG에 렌더되어야 한다 (#1323)"
+    );
 }
 
 #[test]
@@ -2096,7 +2628,7 @@ fn test_export_selection_html_partial() {
 fn test_export_control_html_table() {
     let mut doc = create_doc_with_table();
 
-    let result = doc.export_control_html_native(0, 0, 0);
+    let result = doc.export_control_html_native(0, 0, &[], 0);
     assert!(result.is_ok());
     let html = result.unwrap();
 
@@ -3543,7 +4075,7 @@ fn test_docinfo_roundtrip_charshape_preservation() {
             if let Ok(cdoc) = HwpDocument::from_bytes(&d) {
                 eprintln!(
                     "  {} → char_shapes={} para_shapes={} border_fills={} styles={}",
-                    cf.split('/').last().unwrap_or(cf),
+                    cf.split('/').next_back().unwrap_or(cf),
                     cdoc.document.doc_info.char_shapes.len(),
                     cdoc.document.doc_info.para_shapes.len(),
                     cdoc.document.doc_info.border_fills.len(),
@@ -4590,7 +5122,7 @@ fn test_pasted_table_structure_analysis() {
         if t.ctrl_header.data.len() >= 8 {
             let obj_attr = u32::from_le_bytes(t.ctrl_header.data[4..8].try_into().unwrap());
             eprintln!("    obj_attr = 0x{:08X}", obj_attr);
-            let vert_offset = (obj_attr >> 0) & 0x3;
+            let vert_offset = obj_attr & 0x3;
             let horiz_offset = (obj_attr >> 2) & 0x3;
             let vert_rel = (obj_attr >> 4) & 0x3;
             let horiz_rel = (obj_attr >> 7) & 0x3;
@@ -6808,7 +7340,7 @@ fn test_rp006_dangling_references() {
         // LIST_HEADER의 border_fill_id (셀) 및 TABLE의 border_fill_id
         if rec.tag_id == tags::HWPTAG_LIST_HEADER && rec.data.len() >= 34 {
             let bf_id = u16::from_le_bytes([rec.data[32], rec.data[33]]) as usize;
-            if bf_id > 0 && bf_id - 1 >= bf_count {
+            if bf_id > 0 && bf_id > bf_count {
                 dangling_bf.push((ri, "LIST_HEADER", bf_id));
             }
         }
@@ -6943,7 +7475,7 @@ fn test_template_comparison() {
         }
 
         let bytes = std::fs::read(path).unwrap();
-        let mut cfb = CfbReader::open(&bytes).expect(&format!("{} CFB 열기 실패", label));
+        let mut cfb = CfbReader::open(&bytes).unwrap_or_else(|_| panic!("{} CFB 열기 실패", label));
 
         // DocInfo 분석
         let doc_info_data = cfb.read_doc_info(true).expect("DocInfo 읽기 실패");
@@ -7323,8 +7855,8 @@ fn test_complex_comparison() {
 
     eprintln!("\n  --- Record-by-record comparison ---");
     eprintln!(
-        "  {:<6} {:<25} {:<6} {:<8} | {:<25} {:<6} {:<8} | {}",
-        "Idx", "Damaged Tag", "Lvl", "Size", "Fixed Tag", "Lvl", "Size", "Differences"
+        "  {:<6} {:<25} {:<6} {:<8} | {:<25} {:<6} {:<8} | Differences",
+        "Idx", "Damaged Tag", "Lvl", "Size", "Fixed Tag", "Lvl", "Size"
     );
     eprintln!("  {}", "-".repeat(120));
 
@@ -9358,8 +9890,8 @@ fn test_step2_comparison() {
         eprintln!("  Total record data bytes: {}", total_data_bytes);
 
         eprintln!(
-            "\n{:<5} {:<5} {:<25} {:>8}  {}",
-            "Idx", "Lvl", "Tag", "Size", "Details"
+            "\n{:<5} {:<5} {:<25} {:>8}  Details",
+            "Idx", "Lvl", "Tag", "Size"
         );
         eprintln!("{:-<120}", "");
 
@@ -9562,8 +10094,8 @@ fn test_step2_comparison() {
     let mut total_diffs = 0;
 
     eprintln!(
-        "\n{:<5} | {:<30} {:>4} {:>6} | {:<30} {:>4} {:>6} | {}",
-        "#", "VALID Tag", "Lvl", "Size", "DAMAGED Tag", "Lvl", "Size", "Status"
+        "\n{:<5} | {:<30} {:>4} {:>6} | {:<30} {:>4} {:>6} | Status",
+        "#", "VALID Tag", "Lvl", "Size", "DAMAGED Tag", "Lvl", "Size"
     );
     eprintln!("{:-<130}", "");
 
@@ -10739,8 +11271,7 @@ fn test_empty_save_analysis() {
             let ch = u16::from_le_bytes([data[i], data[i + 1]]);
             match ch {
                 // Extended controls take 8 WCHARs (16 bytes)
-                0x0001 | 0x0002 | 0x0003 | 0x000B | 0x000C | 0x000D | 0x000E | 0x000F | 0x0004
-                | 0x0005 | 0x0006 | 0x0007 | 0x0008 | 0x0009 | 0x000A => {
+                0x0001..=0x000F => {
                     let name = match ch {
                         0x0002 => "SEC/COL",
                         0x0003 => "FIELD_BEGIN",
@@ -10801,9 +11332,9 @@ fn test_empty_save_analysis() {
         // textStartPos(4) + lineVPos(4) + lineHPos(4) + lineHeight(4)
         // + textPartHeight(4) + distBaseline(4) + lineSpacing(4) + colStartPos(4) + segWidth(4)
         // Some versions use 32 bytes per segment
-        let seg_size = if data.len() % 36 == 0 {
+        let seg_size = if data.len().is_multiple_of(36) {
             36
-        } else if data.len() % 32 == 0 {
+        } else if data.len().is_multiple_of(32) {
             32
         } else {
             36
@@ -11301,7 +11832,7 @@ fn test_text_insert_detailed_diff() {
     let mut doc = HwpDocument::from_bytes(&orig_data).unwrap();
 
     // 텍스트 삽입
-    doc.insert_text_native(0, 0, 0, "가나다라마바사아");
+    doc.insert_text_native(0, 0, 0, "가나다라마바사아").unwrap();
     let saved = doc.export_hwp_native().unwrap();
 
     // 레코드 파싱
@@ -12340,7 +12871,7 @@ fn test_save_table_1x1() {
             line_spacing: 600,
             column_start: 0,
             segment_width: cell_seg_width,
-            tag: 0x00060000,
+            tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
         }],
         has_para_text: false, // 빈 문단: PARA_TEXT 없음
         raw_header_extra: vec![0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -12477,7 +13008,7 @@ fn test_save_table_1x1() {
             line_spacing: 600,
             column_start: 0,
             segment_width: 42520, // 참조: 편집 영역 전체 너비
-            tag: 0x00060000,
+            tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
         }],
         has_para_text: false,
         raw_header_extra: vec![0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00],
@@ -13185,6 +13716,7 @@ fn test_save_picture() {
         border_opacity: ref_pic.border_opacity,
         instance_id: ref_pic.instance_id,
         raw_picture_extra: ref_pic.raw_picture_extra.clone(),
+        effects: ref_pic.effects.clone(),
         caption: None,
     };
 
@@ -13224,7 +13756,7 @@ fn test_save_picture() {
             line_spacing: ref_para.line_segs[0].line_spacing,
             column_start: 0,
             segment_width: ref_para.line_segs[0].segment_width, // 참조: 42520
-            tag: ref_para.line_segs[0].tag,                     // 참조: 0x00060000
+            tag: ref_para.line_segs[0].tag, // 참조: LineSeg::TAG_SINGLE_SEGMENT_LINE
         }],
         has_para_text: true,
         controls: new_controls,
@@ -14371,6 +14903,7 @@ fn test_save_pic_in_table() {
         border_opacity: ref_pic.border_opacity,
         instance_id: ref_pic.instance_id,
         raw_picture_extra: ref_pic.raw_picture_extra.clone(),
+        effects: ref_pic.effects.clone(),
         caption: None,
     };
 
@@ -15316,7 +15849,8 @@ fn test_parse_table_html_save() {
             // DIFF-6: line_segs의 tag
             if !p.line_segs.is_empty() {
                 assert_eq!(
-                    p.line_segs[0].tag, 0x00060000,
+                    p.line_segs[0].tag,
+                    LineSeg::TAG_SINGLE_SEGMENT_LINE,
                     "DIFF-6: 셀[{}] line_seg tag",
                     i
                 );
@@ -15364,8 +15898,9 @@ fn test_parse_table_html_save() {
         "DIFF-8: seg_width > 0"
     );
     assert_eq!(
-        table_para.line_segs[0].tag, 0x00060000,
-        "DIFF-8: tag=0x00060000"
+        table_para.line_segs[0].tag,
+        LineSeg::TAG_SINGLE_SEGMENT_LINE,
+        "DIFF-8: tag=LineSeg::TAG_SINGLE_SEGMENT_LINE"
     );
 
     // 삽입 및 저장
@@ -15432,8 +15967,8 @@ fn test_diag_msb_pattern_kwater() {
         let para_count = section.paragraphs.len();
         eprintln!("\n  Section {} ({} paragraphs)", si, para_count);
         eprintln!(
-            "  {:>4} | {:>5} | {:>3} | {:>5} | {:>3} | {:>8} | {}",
-            "idx", "cc", "msb", "psid", "sid", "ctrl", "text_preview"
+            "  {:>4} | {:>5} | {:>3} | {:>5} | {:>3} | {:>8} | text_preview",
+            "idx", "cc", "msb", "psid", "sid", "ctrl"
         );
         eprintln!("  {}", "-".repeat(65));
 
@@ -15780,7 +16315,7 @@ fn test_textbox_render_tree_debug() {
 
     let data = std::fs::read(path).unwrap();
     let mut doc = HwpDocument::from_bytes(&data).unwrap();
-    doc.convert_to_editable_native();
+    doc.convert_to_editable_native().unwrap();
 
     // 문서 구조 확인: Shape 컨트롤 찾기
     let mut shape_found = false;
@@ -16720,7 +17255,7 @@ fn test_task81_vertical_cell_text() {
         .collect();
     let sec_mt = doc
         .measured_tables
-        .get(0)
+        .first()
         .map(|v| v.as_slice())
         .unwrap_or(&[]);
     let tree = engine.build_render_tree(
@@ -16842,6 +17377,11 @@ fn test_delete_table_control() {
 
     // 삭제 전 char_count
     let before_char_count = doc.document.sections[0].paragraphs[3].char_count;
+    let before_next_vpos = doc.document.sections[0]
+        .paragraphs
+        .get(4)
+        .and_then(|p| p.line_segs.first())
+        .map(|ls| ls.vertical_pos);
 
     // 표 bbox 조회 성공 확인
     let bbox_result = doc.get_table_bbox_native(0, 3, 0);
@@ -16862,6 +17402,22 @@ fn test_delete_table_control() {
         before_char_count - 8,
         "char_count 8 감소 확인"
     );
+
+    if let (Some(before), Some(after)) = (
+        before_next_vpos,
+        doc.document.sections[0]
+            .paragraphs
+            .get(4)
+            .and_then(|p| p.line_segs.first())
+            .map(|ls| ls.vertical_pos),
+    ) {
+        assert!(
+            after < before,
+            "표 삭제 후 다음 문단 vpos가 위로 당겨져야 함: before={}, after={}",
+            before,
+            after
+        );
+    }
 
     eprintln!(
         "표 삭제: 컨트롤 {}→{}, char_count {}→{}",
@@ -17625,7 +18181,7 @@ fn test_task110_treatise_diag() {
     eprintln!("\n=== 2단 영역 편집: insert_text_native(0, 14, 0, \"Y\") ===");
     let col_idx_14_before = doc
         .para_column_map
-        .get(0)
+        .first()
         .and_then(|m| m.get(14))
         .copied()
         .unwrap_or(0);
@@ -17941,7 +18497,7 @@ fn test_blank2020_enter_corruption_diagnosis() {
         }
 
         let bytes = std::fs::read(path).unwrap();
-        let mut cfb = CfbReader::open(&bytes).expect(&format!("{} CFB 열기 실패", label));
+        let mut cfb = CfbReader::open(&bytes).unwrap_or_else(|_| panic!("{} CFB 열기 실패", label));
 
         eprintln!("\n{}", "=".repeat(80));
         eprintln!("  {} ({} bytes)", label, bytes.len());
@@ -20950,26 +21506,8 @@ fn test_page13_enter_propagation() {
     let mut before_pages: Vec<(usize, usize, usize)> = Vec::new(); // (first_pi, last_pi, item_count)
     for page in &doc.pagination[0].pages {
         let items = &page.column_contents[0].items;
-        let first = items
-            .first()
-            .map(|it| match it {
-                PageItem::FullParagraph { para_index }
-                | PageItem::Table { para_index, .. }
-                | PageItem::PartialParagraph { para_index, .. }
-                | PageItem::PartialTable { para_index, .. }
-                | PageItem::Shape { para_index, .. } => *para_index,
-            })
-            .unwrap_or(0);
-        let last = items
-            .last()
-            .map(|it| match it {
-                PageItem::FullParagraph { para_index }
-                | PageItem::Table { para_index, .. }
-                | PageItem::PartialParagraph { para_index, .. }
-                | PageItem::PartialTable { para_index, .. }
-                | PageItem::Shape { para_index, .. } => *para_index,
-            })
-            .unwrap_or(0);
+        let first = items.first().map(PageItem::para_index).unwrap_or(0);
+        let last = items.last().map(PageItem::para_index).unwrap_or(0);
         before_pages.push((first, last, items.len()));
     }
 
@@ -20985,26 +21523,8 @@ fn test_page13_enter_propagation() {
     let mut last_diff_page = 0;
     for (pidx, page) in doc.pagination[0].pages.iter().enumerate() {
         let items = &page.column_contents[0].items;
-        let first = items
-            .first()
-            .map(|it| match it {
-                PageItem::FullParagraph { para_index }
-                | PageItem::Table { para_index, .. }
-                | PageItem::PartialParagraph { para_index, .. }
-                | PageItem::PartialTable { para_index, .. }
-                | PageItem::Shape { para_index, .. } => *para_index,
-            })
-            .unwrap_or(0);
-        let last = items
-            .last()
-            .map(|it| match it {
-                PageItem::FullParagraph { para_index }
-                | PageItem::Table { para_index, .. }
-                | PageItem::PartialParagraph { para_index, .. }
-                | PageItem::PartialTable { para_index, .. }
-                | PageItem::Shape { para_index, .. } => *para_index,
-            })
-            .unwrap_or(0);
+        let first = items.first().map(PageItem::para_index).unwrap_or(0);
+        let last = items.last().map(PageItem::para_index).unwrap_or(0);
 
         let before = before_pages.get(pidx);
         let changed = before
@@ -21057,20 +21577,8 @@ fn test_page13_enter_propagation() {
             .get(pidx)
             .map(|p| &p.column_contents[0].items);
 
-        let pi1_first = items1.and_then(|i| i.first()).map(|it| match it {
-            PageItem::FullParagraph { para_index }
-            | PageItem::Table { para_index, .. }
-            | PageItem::PartialParagraph { para_index, .. }
-            | PageItem::PartialTable { para_index, .. }
-            | PageItem::Shape { para_index, .. } => *para_index,
-        });
-        let pi2_first = items2.and_then(|i| i.first()).map(|it| match it {
-            PageItem::FullParagraph { para_index }
-            | PageItem::Table { para_index, .. }
-            | PageItem::PartialParagraph { para_index, .. }
-            | PageItem::PartialTable { para_index, .. }
-            | PageItem::Shape { para_index, .. } => *para_index,
-        });
+        let pi1_first = items1.and_then(|i| i.first()).map(PageItem::para_index);
+        let pi2_first = items2.and_then(|i| i.first()).map(PageItem::para_index);
         let count1 = items1.map(|i| i.len()).unwrap_or(0);
         let count2 = items2.map(|i| i.len()).unwrap_or(0);
 

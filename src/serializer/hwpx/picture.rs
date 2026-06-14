@@ -27,18 +27,27 @@ use std::io::Write;
 
 use quick_xml::Writer;
 
-use crate::model::image::{ImageEffect, Picture};
-use crate::model::shape::{CommonObjAttr, HorzAlign, HorzRelTo, TextWrap, VertAlign, VertRelTo};
+use crate::model::image::{
+    EffectColor, EffectPoint, EffectRgb, ImageEffect, Picture, PictureShadow,
+};
+use crate::model::shape::{
+    CommonObjAttr, HorzAlign, HorzRelTo, ShapeComponentAttr, TextFlow, TextWrap, VertAlign,
+    VertRelTo,
+};
 
 use super::context::SerializeContext;
+use super::table::write_caption;
 use super::utils::{empty_tag, end_tag, start_tag, start_tag_attrs};
 use super::SerializeError;
 
 /// `<hp:pic>` 직렬화 진입점.
+///
+/// ctx 가 `&mut` 인 이유: 캡션 subList 문단 직렬화(#1403)가 para id 발급과
+/// para_shape/style 참조 수집을 수행한다 (표 캡션 #1387 과 동일 경로).
 pub fn write_picture<W: Write>(
     w: &mut Writer<W>,
     pic: &Picture,
-    ctx: &SerializeContext,
+    ctx: &mut SerializeContext,
 ) -> Result<(), SerializeError> {
     // --- <hp:pic> 속성 ---
     // 속성 순서 (PictureType + 부모 AbstractShapeObjectType):
@@ -47,7 +56,7 @@ pub fn write_picture<W: Write>(
     let id_str = pic.common.instance_id.to_string();
     let z_order = pic.common.z_order.to_string();
     let tw = text_wrap_str(pic.common.text_wrap);
-    let tf = text_flow_str(pic.common.text_wrap);
+    let tf = text_flow_str(pic.common.text_flow);
     let instid = pic.instance_id.to_string();
     let href = pic.href.as_deref().unwrap_or("");
 
@@ -73,20 +82,26 @@ pub fn write_picture<W: Write>(
     // offset, orgSz, curSz, flip, rotationInfo, renderingInfo, imgRect, imgClip,
     // inMargin, imgDim, img, effects, sz, pos, outMargin
     write_offset(w, &pic.common)?;
-    write_org_sz(w)?; // ShapeComponentAttr 매핑 (IR 접근 제한으로 간이)
+    write_org_sz(w, &pic.shape_attr)?;
     write_cur_sz(w, &pic.common)?;
-    write_flip(w)?;
-    write_rotation_info(w)?;
+    write_flip(w, &pic.shape_attr)?;
+    write_rotation_info(w, &pic.shape_attr)?;
     write_rendering_info(w)?;
     write_img_rect(w, &pic.common)?;
     write_img_clip(w, pic)?;
     write_in_margin(w, pic)?;
     write_img_dim(w, pic)?;
     write_img(w, pic, ctx)?; // 3-way 단언 지점
-    write_effects(w)?;
+    write_effects(w, pic)?;
     write_sz(w, &pic.common)?;
     write_pos(w, &pic.common)?;
     write_out_margin(w, &pic.common)?;
+    // 캡션 (#1403) — 한컴 실물(aift.hwpx) 자식 순서: outMargin 뒤
+    if let Some(cap) = &pic.caption {
+        write_caption(w, cap, ctx)?;
+    }
+    // 설명 (#1392) — caption 직후 (aift 실물 공존 9건 전수 caption→shapeComment 순서)
+    super::shape::write_shape_comment(w, &pic.common)?;
 
     end_tag(w, "hp:pic")?;
     Ok(())
@@ -100,11 +115,13 @@ fn write_offset<W: Write>(w: &mut Writer<W>, c: &CommonObjAttr) -> Result<(), Se
     empty_tag(w, "hp:offset", &[("x", &x), ("y", &y)])
 }
 
-fn write_org_sz<W: Write>(w: &mut Writer<W>) -> Result<(), SerializeError> {
-    // IR에서 원본 크기는 shape_attr.original_width/height 이나 접근이 제한적.
-    // Stage 4 에선 common.width/height 를 그대로 원본 크기로 출력 (간이).
-    // Picture 라운드트립 실제 정확도는 shape_attr 직접 매핑 후 향상됨.
-    empty_tag(w, "hp:orgSz", &[("width", "0"), ("height", "0")])
+fn write_org_sz<W: Write>(
+    w: &mut Writer<W>,
+    sa: &ShapeComponentAttr,
+) -> Result<(), SerializeError> {
+    let ow = sa.original_width.to_string();
+    let oh = sa.original_height.to_string();
+    empty_tag(w, "hp:orgSz", &[("width", &ow), ("height", &oh)])
 }
 
 fn write_cur_sz<W: Write>(w: &mut Writer<W>, c: &CommonObjAttr) -> Result<(), SerializeError> {
@@ -113,19 +130,28 @@ fn write_cur_sz<W: Write>(w: &mut Writer<W>, c: &CommonObjAttr) -> Result<(), Se
     empty_tag(w, "hp:curSz", &[("width", &width), ("height", &height)])
 }
 
-fn write_flip<W: Write>(w: &mut Writer<W>) -> Result<(), SerializeError> {
-    empty_tag(w, "hp:flip", &[("horizontal", "0"), ("vertical", "0")])
+fn write_flip<W: Write>(w: &mut Writer<W>, sa: &ShapeComponentAttr) -> Result<(), SerializeError> {
+    let h = bool01(sa.horz_flip);
+    let v = bool01(sa.vert_flip);
+    empty_tag(w, "hp:flip", &[("horizontal", h), ("vertical", v)])
 }
 
-fn write_rotation_info<W: Write>(w: &mut Writer<W>) -> Result<(), SerializeError> {
+fn write_rotation_info<W: Write>(
+    w: &mut Writer<W>,
+    sa: &ShapeComponentAttr,
+) -> Result<(), SerializeError> {
+    let angle = sa.rotation_angle.to_string();
+    let cx = sa.rotation_center.x.to_string();
+    let cy = sa.rotation_center.y.to_string();
+    let ri = bool01(sa.rotate_image);
     empty_tag(
         w,
         "hp:rotationInfo",
         &[
-            ("angle", "0"),
-            ("centerX", "0"),
-            ("centerY", "0"),
-            ("rotateimage", "0"),
+            ("angle", &angle),
+            ("centerX", &cx),
+            ("centerY", &cy),
+            ("rotateimage", ri),
         ],
     )
 }
@@ -233,11 +259,90 @@ fn write_img<W: Write>(
     )
 }
 
-fn write_effects<W: Write>(w: &mut Writer<W>) -> Result<(), SerializeError> {
-    // Stage 4 에선 빈 effects 출력 (필요시 확장).
+fn write_effects<W: Write>(w: &mut Writer<W>, pic: &Picture) -> Result<(), SerializeError> {
     start_tag(w, "hp:effects")?;
+    if let Some(shadow) = &pic.effects.shadow {
+        write_shadow(w, shadow)?;
+    }
     end_tag(w, "hp:effects")?;
     Ok(())
+}
+
+fn write_shadow<W: Write>(w: &mut Writer<W>, shadow: &PictureShadow) -> Result<(), SerializeError> {
+    let mut attrs = Vec::new();
+    push_opt_attr(&mut attrs, "style", shadow.style.as_deref());
+    push_opt_attr(&mut attrs, "alpha", shadow.alpha.as_deref());
+    push_opt_attr(&mut attrs, "radius", shadow.radius.as_deref());
+    push_opt_attr(&mut attrs, "direction", shadow.direction.as_deref());
+    push_opt_attr(&mut attrs, "distance", shadow.distance.as_deref());
+    push_opt_attr(&mut attrs, "alignStyle", shadow.align_style.as_deref());
+    push_opt_attr(
+        &mut attrs,
+        "rotationStyle",
+        shadow.rotation_style.as_deref(),
+    );
+
+    start_tag_attrs(w, "hp:shadow", &attrs)?;
+    if let Some(skew) = &shadow.skew {
+        write_effect_point(w, "hp:skew", skew)?;
+    }
+    if let Some(scale) = &shadow.scale {
+        write_effect_point(w, "hp:scale", scale)?;
+    }
+    if let Some(color) = &shadow.color {
+        write_effect_color(w, color)?;
+    }
+    end_tag(w, "hp:shadow")?;
+    Ok(())
+}
+
+fn write_effect_point<W: Write>(
+    w: &mut Writer<W>,
+    name: &str,
+    point: &EffectPoint,
+) -> Result<(), SerializeError> {
+    let mut attrs = Vec::new();
+    push_opt_attr(&mut attrs, "x", point.x.as_deref());
+    push_opt_attr(&mut attrs, "y", point.y.as_deref());
+    empty_tag(w, name, &attrs)
+}
+
+fn write_effect_color<W: Write>(
+    w: &mut Writer<W>,
+    color: &EffectColor,
+) -> Result<(), SerializeError> {
+    let mut attrs = Vec::new();
+    push_opt_attr(&mut attrs, "type", color.color_type.as_deref());
+    push_opt_attr(&mut attrs, "schemeIdx", color.scheme_idx.as_deref());
+    push_opt_attr(&mut attrs, "systemIdx", color.system_idx.as_deref());
+    push_opt_attr(&mut attrs, "presetIdx", color.preset_idx.as_deref());
+
+    if let Some(rgb) = &color.rgb {
+        start_tag_attrs(w, "hp:effectsColor", &attrs)?;
+        write_effect_rgb(w, rgb)?;
+        end_tag(w, "hp:effectsColor")?;
+    } else {
+        empty_tag(w, "hp:effectsColor", &attrs)?;
+    }
+    Ok(())
+}
+
+fn write_effect_rgb<W: Write>(w: &mut Writer<W>, rgb: &EffectRgb) -> Result<(), SerializeError> {
+    let mut attrs = Vec::new();
+    push_opt_attr(&mut attrs, "r", rgb.r.as_deref());
+    push_opt_attr(&mut attrs, "g", rgb.g.as_deref());
+    push_opt_attr(&mut attrs, "b", rgb.b.as_deref());
+    empty_tag(w, "hp:rgb", &attrs)
+}
+
+fn push_opt_attr<'a>(
+    attrs: &mut Vec<(&'static str, &'a str)>,
+    key: &'static str,
+    value: Option<&'a str>,
+) {
+    if let Some(value) = value {
+        attrs.push((key, value));
+    }
 }
 
 fn write_sz<W: Write>(w: &mut Writer<W>, c: &CommonObjAttr) -> Result<(), SerializeError> {
@@ -313,8 +418,13 @@ fn text_wrap_str(w: TextWrap) -> &'static str {
     }
 }
 
-fn text_flow_str(_: TextWrap) -> &'static str {
-    "BOTH_SIDES"
+fn text_flow_str(f: TextFlow) -> &'static str {
+    match f {
+        TextFlow::BothSides => "BOTH_SIDES",
+        TextFlow::LeftOnly => "LEFT_ONLY",
+        TextFlow::RightOnly => "RIGHT_ONLY",
+        TextFlow::LargestOnly => "LARGEST_ONLY",
+    }
 }
 
 fn vert_rel_to_str(v: VertRelTo) -> &'static str {
@@ -373,7 +483,9 @@ mod tests {
     use super::*;
     use crate::model::bin_data::BinDataContent;
     use crate::model::document::Document;
-    use crate::model::image::{ImageAttr, Picture};
+    use crate::model::image::{
+        EffectColor, EffectPoint, EffectRgb, ImageAttr, Picture, PictureEffects, PictureShadow,
+    };
     use crate::serializer::hwpx::context::SerializeContext;
 
     fn make_picture(bin_data_id: u16) -> Picture {
@@ -400,18 +512,49 @@ mod tests {
         doc
     }
 
-    fn serialize(pic: &Picture, ctx: &SerializeContext) -> String {
+    fn serialize(pic: &Picture, ctx: &mut SerializeContext) -> String {
         let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
         write_picture(&mut w, pic, ctx).expect("write_picture");
         String::from_utf8(w.into_inner()).unwrap()
     }
 
     #[test]
+    fn task1392_pic_shape_comment_emitted_after_caption() {
+        let doc = make_doc_with_bin(1, "png");
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let mut pic = make_picture(1);
+        pic.common.description = "그림입니다.".to_string();
+        let mut para = crate::model::paragraph::Paragraph::default();
+        para.text = "캡션".to_string();
+        let mut cap = crate::model::shape::Caption::default();
+        cap.paragraphs.push(para);
+        pic.caption = Some(cap);
+        let xml = serialize(&pic, &mut ctx);
+        assert!(
+            xml.contains("<hp:shapeComment>그림입니다.</hp:shapeComment>"),
+            "shapeComment 방출: {xml}"
+        );
+        // 순서: caption → shapeComment (aift 실물)
+        let cp = xml.find("<hp:caption").unwrap();
+        let sc = xml.find("<hp:shapeComment").unwrap();
+        assert!(cp < sc, "caption 이 shapeComment 보다 먼저");
+    }
+
+    #[test]
+    fn task1392_pic_no_description_omits_comment() {
+        let doc = make_doc_with_bin(1, "png");
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let pic = make_picture(1); // description 빈 문자열
+        let xml = serialize(&pic, &mut ctx);
+        assert!(!xml.contains("<hp:shapeComment"), "빈 설명은 미방출: {xml}");
+    }
+
+    #[test]
     fn pic_root_attrs_in_canonical_order() {
         let doc = make_doc_with_bin(1, "png");
-        let ctx = SerializeContext::collect_from_document(&doc);
+        let mut ctx = SerializeContext::collect_from_document(&doc);
         let pic = make_picture(1);
-        let xml = serialize(&pic, &ctx);
+        let xml = serialize(&pic, &mut ctx);
         assert!(xml.contains("<hp:pic "));
         let ip = xml.find("id=").unwrap();
         let zp = xml.find("zOrder=").unwrap();
@@ -425,9 +568,9 @@ mod tests {
     #[test]
     fn img_uses_manifest_id() {
         let doc = make_doc_with_bin(5, "jpg");
-        let ctx = SerializeContext::collect_from_document(&doc);
+        let mut ctx = SerializeContext::collect_from_document(&doc);
         let pic = make_picture(5);
-        let xml = serialize(&pic, &ctx);
+        let xml = serialize(&pic, &mut ctx);
         assert!(
             xml.contains(r#"binaryItemIDRef="image1""#),
             "binaryItemIDRef must resolve to manifest id image1: {}",
@@ -436,12 +579,46 @@ mod tests {
     }
 
     #[test]
+    fn shape_component_attrs_are_serialized() {
+        let doc = make_doc_with_bin(1, "png");
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let mut pic = make_picture(1);
+        pic.shape_attr.original_width = 23456;
+        pic.shape_attr.original_height = 12345;
+        pic.shape_attr.horz_flip = true;
+        pic.shape_attr.vert_flip = true;
+        pic.shape_attr.rotation_angle = 34;
+        pic.shape_attr.rotation_center.x = 11700;
+        pic.shape_attr.rotation_center.y = 14794;
+        pic.shape_attr.rotate_image = true;
+
+        let xml = serialize(&pic, &mut ctx);
+        assert!(
+            xml.contains(r#"<hp:orgSz width="23456" height="12345"/>"#),
+            "orgSz must use ShapeComponentAttr values: {}",
+            xml
+        );
+        assert!(
+            xml.contains(r#"<hp:flip horizontal="1" vertical="1"/>"#),
+            "flip must use ShapeComponentAttr values: {}",
+            xml
+        );
+        assert!(
+            xml.contains(
+                r#"<hp:rotationInfo angle="34" centerX="11700" centerY="14794" rotateimage="1"/>"#
+            ),
+            "rotationInfo must use ShapeComponentAttr values: {}",
+            xml
+        );
+    }
+
+    #[test]
     fn unresolved_bin_data_id_errors() {
         let doc = Document::default(); // bin_data 없음
-        let ctx = SerializeContext::collect_from_document(&doc);
+        let mut ctx = SerializeContext::collect_from_document(&doc);
         let pic = make_picture(99); // 미등록 id
         let mut w: Writer<Vec<u8>> = Writer::new(Vec::new());
-        let err = write_picture(&mut w, &pic, &ctx).unwrap_err();
+        let err = write_picture(&mut w, &pic, &mut ctx).unwrap_err();
         let msg = format!("{}", err);
         assert!(msg.contains("binaryItemIDRef"), "error msg: {}", msg);
         assert!(
@@ -454,9 +631,9 @@ mod tests {
     #[test]
     fn rendering_info_has_three_matrices() {
         let doc = make_doc_with_bin(1, "png");
-        let ctx = SerializeContext::collect_from_document(&doc);
+        let mut ctx = SerializeContext::collect_from_document(&doc);
         let pic = make_picture(1);
-        let xml = serialize(&pic, &ctx);
+        let xml = serialize(&pic, &mut ctx);
         assert!(xml.contains("<hc:transMatrix "));
         assert!(xml.contains("<hc:scaMatrix "));
         assert!(xml.contains("<hc:rotMatrix "));
@@ -465,9 +642,9 @@ mod tests {
     #[test]
     fn img_rect_has_four_points() {
         let doc = make_doc_with_bin(1, "png");
-        let ctx = SerializeContext::collect_from_document(&doc);
+        let mut ctx = SerializeContext::collect_from_document(&doc);
         let pic = make_picture(1);
-        let xml = serialize(&pic, &ctx);
+        let xml = serialize(&pic, &mut ctx);
         assert!(xml.contains("<hc:pt0 "));
         assert!(xml.contains("<hc:pt1 "));
         assert!(xml.contains("<hc:pt2 "));
@@ -479,5 +656,91 @@ mod tests {
         assert_eq!(image_effect_str(ImageEffect::RealPic), "REAL_PIC");
         assert_eq!(image_effect_str(ImageEffect::GrayScale), "GRAY_SCALE");
         assert_eq!(image_effect_str(ImageEffect::BlackWhite), "BLACK_WHITE");
+    }
+
+    #[test]
+    fn picture_effects_shadow_are_serialized() {
+        let doc = make_doc_with_bin(1, "png");
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let mut pic = make_picture(1);
+        pic.effects = PictureEffects {
+            shadow: Some(PictureShadow {
+                style: Some("OUTSIDE".to_string()),
+                alpha: Some("0.8".to_string()),
+                radius: Some("400".to_string()),
+                direction: Some("45".to_string()),
+                distance: Some("1000".to_string()),
+                align_style: Some("TOP_LEFT".to_string()),
+                rotation_style: Some("0".to_string()),
+                skew: None,
+                scale: Some(EffectPoint {
+                    x: Some("1".to_string()),
+                    y: Some("1".to_string()),
+                }),
+                color: Some(EffectColor {
+                    color_type: Some("RGB".to_string()),
+                    scheme_idx: Some("-1".to_string()),
+                    system_idx: Some("-1".to_string()),
+                    preset_idx: Some("-1".to_string()),
+                    rgb: Some(EffectRgb {
+                        r: Some("0".to_string()),
+                        g: Some("0".to_string()),
+                        b: Some("0".to_string()),
+                    }),
+                }),
+            }),
+        };
+
+        let xml = serialize(&pic, &mut ctx);
+        assert!(xml.contains(r#"<hp:shadow style="OUTSIDE" alpha="0.8" radius="400" direction="45" distance="1000" alignStyle="TOP_LEFT" rotationStyle="0">"#));
+        assert!(xml.contains(r#"<hp:scale x="1" y="1"/>"#));
+        assert!(xml.contains(
+            r#"<hp:effectsColor type="RGB" schemeIdx="-1" systemIdx="-1" presetIdx="-1">"#
+        ));
+        assert!(xml.contains(r#"<hp:rgb r="0" g="0" b="0"/>"#));
+    }
+
+    // ---------- #1403: 그림 캡션 직렬화 ----------
+
+    #[test]
+    fn task1403_pic_caption_is_serialized() {
+        // 캡션 유실(#1403) 회귀 고정 — 한컴 실물(aift.hwpx) 순서: outMargin 뒤 마지막 자식.
+        let doc = make_doc_with_bin(1, "png");
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let mut pic = make_picture(1);
+        let mut para = crate::model::paragraph::Paragraph::default();
+        para.text = "그림 캡션".to_string();
+        let mut cap = crate::model::shape::Caption::default();
+        cap.width = 8504;
+        cap.spacing = 850;
+        cap.max_width = 48081;
+        cap.paragraphs.push(para);
+        pic.caption = Some(cap);
+
+        let xml = serialize(&pic, &mut ctx);
+        assert!(
+            xml.contains(
+                r#"<hp:caption side="BOTTOM" fullSz="0" width="8504" gap="850" lastWidth="48081">"#
+            ),
+            "caption 속성이 IR 값으로 방출되어야 함: {}",
+            xml
+        );
+        assert!(
+            xml.contains("<hp:t>그림 캡션</hp:t>"),
+            "캡션 subList 문단 텍스트가 방출되어야 함: {}",
+            xml
+        );
+        let om = xml.find("<hp:outMargin").unwrap();
+        let cp = xml.find("<hp:caption").unwrap();
+        assert!(om < cp, "caption 은 outMargin 뒤 (한컴 실물 순서)");
+    }
+
+    #[test]
+    fn task1403_pic_without_caption_emits_none() {
+        let doc = make_doc_with_bin(1, "png");
+        let mut ctx = SerializeContext::collect_from_document(&doc);
+        let pic = make_picture(1);
+        let xml = serialize(&pic, &mut ctx);
+        assert!(!xml.contains("<hp:caption"), "캡션 부재 시 미방출: {}", xml);
     }
 }

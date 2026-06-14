@@ -32,7 +32,9 @@ jobs:
         include:
           - platform: macOS (aarch64)
             runner: macos-14
-            args: '--bundles dmg'
+            # [Task #26 후속] app 번들 추가 → updater 아티팩트(.app.tar.gz + .sig) 생성.
+            # dmg 만으론 macOS 자동업데이트 아티팩트가 안 만들어져 latest.json darwin 이 누락된다.
+            args: '--bundles app,dmg'
           - platform: Windows (x64)
             runner: windows-latest
             args: '--bundles nsis'
@@ -98,6 +100,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # [Task #26] updater 서명용 개인키·비번(시크릿). createUpdaterArtifacts=true 와
+          # 함께 tauri-action 이 서명·latest.json 생성·릴리스 첨부를 자동 처리한다.
+          # 시크릿 미설정(fork 등) 시 updater 아티팩트만 생략, 일반 dmg/nsis 는 정상 생성.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: HanPage-Desktop
           # 태그 push 시에만 릴리스 생성. dispatch 는 빈 tagName → 빌드만 수행.

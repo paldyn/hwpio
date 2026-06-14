@@ -5,6 +5,7 @@ import { NumberingDialog } from '@/ui/numbering-dialog';
 import { StyleDialog } from '@/ui/style-dialog';
 import { StyleEditDialog } from '@/ui/style-edit-dialog';
 import { PicturePropsDialog } from '@/ui/picture-props-dialog';
+import { EquationPropertiesDialog } from '@/ui/equation-props-dialog';
 import { TableCellPropsDialog } from '@/ui/table-cell-props-dialog';
 
 export const formatCommands: CommandDef[] = [
@@ -139,6 +140,46 @@ export const formatCommands: CommandDef[] = [
     canExecute: (ctx) => ctx.hasDocument,
     execute(services) {
       services.getInputHandler()?.adjustFontSize(-100); // -1pt
+    },
+  },
+  // 장평 줄이기 (Shift+Alt+J)
+  {
+    id: 'format:char-ratio-decrease',
+    label: '장평 줄이기',
+    shortcutLabel: 'Shift+Alt+J',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharRatio(-1);
+    },
+  },
+  // 장평 늘리기 (Shift+Alt+K)
+  {
+    id: 'format:char-ratio-increase',
+    label: '장평 늘리기',
+    shortcutLabel: 'Shift+Alt+K',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharRatio(1);
+    },
+  },
+  // 자간 줄이기 (Shift+Alt+N)
+  {
+    id: 'format:char-spacing-decrease',
+    label: '자간 줄이기',
+    shortcutLabel: 'Shift+Alt+N',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharSpacing(-1);
+    },
+  },
+  // 자간 늘리기 (Shift+Alt+W)
+  {
+    id: 'format:char-spacing-increase',
+    label: '자간 늘리기',
+    shortcutLabel: 'Shift+Alt+W',
+    canExecute: (ctx) => ctx.hasDocument,
+    execute(services) {
+      services.getInputHandler()?.adjustCharSpacing(1);
     },
   },
   // 문단 정렬
@@ -302,11 +343,9 @@ export const formatCommands: CommandDef[] = [
         } catch { /* ignore */ }
       }
       dialog.onApply = (nid, restartMode, startNum) => {
-        const pos = ih.getPosition();
         if (nid === 0) {
           // "(없음)": 번호 해제
-          services.wasm.applyParaFormat(pos.sectionIndex, pos.paragraphIndex,
-            JSON.stringify({ headType: 'None', numberingId: 0 }));
+          ih.applyParaPropsAtCursor({ headType: 'None', numberingId: 0 });
         } else if (restartMode === 0) {
           // "앞 번호 이어": 이전 번호 문단의 numbering_id를 찾아서 적용
           const prevNid = (props as any).numberingId ?? nid;
@@ -318,11 +357,9 @@ export const formatCommands: CommandDef[] = [
           // "이전 번호 이어": 현재 numbering_id 유지
           ih.applyNumbering(nid);
         }
-        services.eventBus.emit('document-changed');
       };
       dialog.onApplyBullet = (bulletChar) => {
         ih.applyBullet(bulletChar);
-        services.eventBus.emit('document-changed');
       };
       dialog.onClose = () => ih.focus();
       dialog.show();
@@ -411,7 +448,12 @@ export const formatCommands: CommandDef[] = [
       // 그림/도형 선택 시
       if (ih.isInPictureObjectSelection()) {
         const ref = ih.getSelectedPictureRef();
-        if (!ref || ref.type === 'equation' || ref.type === 'group') return;
+        if (!ref) return;
+        if (ref.type === 'equation') {
+          const dialog = new EquationPropertiesDialog(services.wasm, services.eventBus);
+          dialog.open(ref.sec, ref.ppi, ref.ci, ref.cellIdx, ref.cellParaIdx, ref.noteRef);
+          return;
+        }
         const dialog = new PicturePropsDialog(services.wasm, services.eventBus);
         dialog.open(ref.sec, ref.ppi, ref.ci, ref.type);
         return;

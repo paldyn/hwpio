@@ -138,6 +138,28 @@ fn synthesize_marker_paragraph(para: &Paragraph) -> Option<Paragraph> {
         return None;
     }
 
+    // HWP3 정답지의 미주 수식 문단은 본문 텍스트 없이 줄바꿈/탭과
+    // TAC 수식만으로 LINE_SEG를 구성한다. 이 경우 char_offsets와 line_seg
+    // text_start가 이미 컨트롤 줄 위치를 표현하므로 HWP5 누락 마커 보정을 적용하면
+    // 수식이 뒤 줄로 밀린다.
+    let text_has_only_layout_space = para
+        .text
+        .chars()
+        .all(|ch| matches!(ch, '\n' | '\r' | '\t' | ' ' | '\u{2007}'));
+    let controls_are_tac_objects = para.controls.iter().all(|ctrl| {
+        matches!(
+            ctrl,
+            Control::Equation(_)
+                | Control::Picture(_)
+                | Control::Shape(_)
+                | Control::Table(_)
+                | Control::Form(_)
+        )
+    });
+    if text_has_only_layout_space && controls_are_tac_objects {
+        return None;
+    }
+
     let existing_markers = para.text.chars().filter(|c| *c == '\u{FFFC}').count();
     if existing_markers >= inline_ctrl_count {
         // HWP3 path — 이미 마커 충분
@@ -158,6 +180,32 @@ fn synthesize_marker_paragraph(para: &Paragraph) -> Option<Paragraph> {
     let first_off = offsets.first().copied().unwrap_or(0) as usize;
     let n_leading = first_off / 8;
     if n_leading < 2 || inline_ctrl_count < 3 {
+        return None;
+    }
+
+    // 원본 char_offsets 갭 분석이 이미 컨트롤을 텍스트 중간/뒤 위치로
+    // 분산해 주는 문단은 합성 마커를 만들지 않는다. 예: 수식 TAC 여러 개와
+    // 쉼표/고정탭/일반 글자가 한 줄에 섞인 문단은 [0,0,2,2,4] 같은 raw
+    // position 자체가 편집자가 입력한 순서다. 여기에 \u{FFFC}를 재합성하면
+    // TAC가 쉼표/탭 뒤로 밀려 순서가 깨진다.
+    let raw_positions = find_control_text_positions(para);
+    let raw_inline_positions: Vec<usize> = para
+        .controls
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| {
+            !matches!(
+                c,
+                Control::Header(_)
+                    | Control::Footer(_)
+                    | Control::Footnote(_)
+                    | Control::Endnote(_)
+                    | Control::HiddenComment(_)
+            )
+        })
+        .filter_map(|(i, _)| raw_positions.get(i).copied())
+        .collect();
+    if raw_inline_positions.iter().any(|pos| *pos > 0) {
         return None;
     }
     // 좁힘 조건 (n_leading >= 2) 통과 ⇒ offsets 비어있지 않음.
@@ -617,23 +665,12 @@ fn compose_lines(para: &Paragraph) -> Vec<ComposedLine> {
                 char_start: post_start,
             });
         } else {
-            // 일반 처리: 강제 줄넘김 없거나 끝에만 있는 경우
-            let has_line_break = line_text.ends_with('\n');
-            let line_text = if has_line_break {
-                line_text.trim_end_matches('\n').to_string()
-            } else {
-                line_text
-            };
+            // 일반 처리: LINE_SEG 범위 안에 강제 줄바꿈(\n)이 있으면 실제 줄로 분할한다.
+            // Shift+Enter는 문단을 새로 만들지 않지만 렌더러/커서/들여쓰기 계산에서는
+            // 다음 visual line 이 별도 ComposedLine 이어야 한다.
+            let line_chars: Vec<char> = line_text.chars().collect();
+            let mut segment_start = 0usize;
 
-            let runs = split_by_char_shapes(
-                &line_text,
-                text_start,
-                text_end,
-                &para.char_offsets,
-                &para.char_shapes,
-            );
-
-            // TAC 표 문단: lh에 표 높이가 포함된 텍스트 줄은 th로 보정 (Task #19)
             let corrected_lh = if has_tac
                 && line_seg.text_height > 0
                 && line_seg.text_height < line_seg.line_height / 3
@@ -643,16 +680,39 @@ fn compose_lines(para: &Paragraph) -> Vec<ComposedLine> {
                 line_seg.line_height
             };
 
-            lines.push(ComposedLine {
-                runs,
-                line_height: corrected_lh,
-                baseline_distance: line_seg.baseline_distance,
-                segment_width: line_seg.segment_width,
-                column_start: line_seg.column_start,
-                line_spacing: line_seg.line_spacing,
-                has_line_break,
-                char_start: text_start,
-            });
+            let mut push_segment = |segment_start: usize, segment_end: usize, has_break: bool| {
+                let segment_text: String = line_chars[segment_start..segment_end].iter().collect();
+                let segment_abs_start = text_start + segment_start;
+                let segment_abs_end = text_start + segment_end;
+                let runs = split_by_char_shapes(
+                    &segment_text,
+                    segment_abs_start,
+                    segment_abs_end,
+                    &para.char_offsets,
+                    &para.char_shapes,
+                );
+                lines.push(ComposedLine {
+                    runs,
+                    line_height: corrected_lh,
+                    baseline_distance: line_seg.baseline_distance,
+                    segment_width: line_seg.segment_width,
+                    column_start: line_seg.column_start,
+                    line_spacing: line_seg.line_spacing,
+                    has_line_break: has_break,
+                    char_start: segment_abs_start,
+                });
+            };
+
+            for (rel_idx, ch) in line_chars.iter().enumerate() {
+                if *ch == '\n' {
+                    push_segment(segment_start, rel_idx, true);
+                    segment_start = rel_idx + 1;
+                }
+            }
+
+            if segment_start < line_chars.len() || !line_text.ends_with('\n') {
+                push_segment(segment_start, line_chars.len(), false);
+            }
         }
     }
 
@@ -1566,6 +1626,16 @@ pub fn decode_pua_overlap_number(chars: &[char]) -> Option<String> {
     groups.sort_by_key(|(g, _)| *g);
     let s: String = groups.iter().map(|(_, d)| char::from(b'0' + d)).collect();
     Some(s)
+}
+
+/// CharOverlap controls occupy one text-flow position even when their payload
+/// contains multiple glyph components.
+///
+/// Hancom uses this for overlapped two-digit markers such as the boxed 10/11/12
+/// in `table-vpos-01.hwp`: the control stores two PUA glyph components, but
+/// caret movement and line measurement advance by one character box.
+pub fn char_overlap_advance_units(chars: &[char]) -> usize {
+    usize::from(!chars.is_empty())
 }
 
 fn pua_enclosed_border_type(ch: char) -> Option<u8> {

@@ -2,6 +2,88 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { MovePictureCommand, MoveShapeCommand, ResizeObjectCommand } from './command';
+import type { ObjectResizeTarget } from './command';
+import { computeArrowResize, MIN_SIZE_HWP, type ArrowKey } from './picture-resize';
+import type { CellPathLike } from '@/core/types';
+
+type PictureObjectRef = {
+  sec: number;
+  ppi: number;
+  ci: number;
+  type: 'image' | 'shape' | 'equation' | 'group' | 'line';
+  cellIdx?: number;
+  cellParaIdx?: number;
+  outerTableControlIdx?: number;
+  cellPath?: CellPathLike;
+  noteRef?: any;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number };
+};
+
+function hasCellPath(ref: { cellPath?: CellPathLike } | null | undefined): ref is { cellPath: CellPathLike } {
+  return Array.isArray(ref?.cellPath) && ref.cellPath.length > 0;
+}
+
+function cellPathEntryKey(entry: any): string {
+  const control = entry?.controlIndex ?? entry?.controlIdx ?? 0;
+  const cell = entry?.cellIndex ?? entry?.cellIdx ?? 0;
+  const para = entry?.cellParaIndex ?? entry?.cellParaIdx ?? 0;
+  return `${control}:${cell}:${para}`;
+}
+
+function sameCellPath(a: unknown, b: unknown): boolean {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  return a.every((entry, idx) => cellPathEntryKey(entry) === cellPathEntryKey((b as any[])[idx]));
+}
+
+function matchesControlRef(ctrl: any, ref: PictureObjectRef, layoutType: string): boolean {
+  if (ctrl.type !== layoutType ||
+      ctrl.secIdx !== ref.sec ||
+      ctrl.paraIdx !== ref.ppi ||
+      ctrl.controlIdx !== ref.ci) {
+    return false;
+  }
+  if (hasCellPath(ref)) {
+    return sameCellPath(ctrl.cellPath, ref.cellPath);
+  }
+  if (Array.isArray(ctrl.cellPath) && ctrl.cellPath.length > 0 &&
+      ref.cellIdx === undefined && ref.cellParaIdx === undefined) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * [Task #1280 v2] 렌더 정렬키 (plane, zOrder, stableIndex). Rust `paper_node_sort_key`
+ * (layout.rs)와 단일 진실 원천. 사전식으로 클수록 위(최상단). layer 필드 부재 시
+ * 렌더 폴백 (plane=2, z=0, stable=0)과 동일하게 처리한다.
+ */
+function controlTopKey(ctrl: any): [number, number, number] {
+  return [ctrl.plane ?? 2, ctrl.zOrder ?? 0, ctrl.stableIndex ?? 0];
+}
+
+/** a가 b보다 위(최상단)인가? 정렬키 사전식 비교. 동률이면 false(기존 emit 순서 유지). */
+function isAboveControl(a: any, b: any): boolean {
+  const ka = controlTopKey(a);
+  const kb = controlTopKey(b);
+  if (ka[0] !== kb[0]) return ka[0] > kb[0];
+  if (ka[1] !== kb[1]) return ka[1] > kb[1];
+  return ka[2] > kb[2];
+}
+
+/** 적중한 layout 컨트롤에서 PictureObjectRef 를 구성한다(line 은 끝점 포함). */
+function controlToRef(ctrl: any): PictureObjectRef {
+  if (ctrl.type === 'line') {
+    return { sec: ctrl.secIdx, ppi: ctrl.paraIdx, ci: ctrl.controlIdx, type: 'line',
+      x1: ctrl.x1, y1: ctrl.y1, x2: ctrl.x2, y2: ctrl.y2 };
+  }
+  return { sec: ctrl.secIdx, ppi: ctrl.paraIdx, ci: ctrl.controlIdx, type: ctrl.type,
+    cellIdx: ctrl.cellIdx, cellParaIdx: ctrl.cellParaIdx, outerTableControlIdx: ctrl.outerTableControlIdx,
+    cellPath: ctrl.cellPath, noteRef: ctrl.noteRef, headerFooter: ctrl.headerFooter };
+}
 
 /** 클릭 좌표에서 그림, 글상자, 수식 개체를 찾는다. */
 /** 점과 선분 사이 최소 거리 (px) */
@@ -16,13 +98,40 @@ function pointToSegmentDist(px: number, py: number, x1: number, y1: number, x2: 
 
 export function findPictureAtClick(this: any,
   pageIdx: number, pageX: number, pageY: number,
-): { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line'; cellIdx?: number; cellParaIdx?: number; x1?: number; y1?: number; x2?: number; y2?: number; headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } } | null {
+): PictureObjectRef | null {
   try {
     const layout = this.wasm.getPageControlLayout(pageIdx);
+    // [Task #1171] picture 우선: 클릭이 컨테이너 Shape(글상자) 와 그 안의 nested picture
+    // (cellPath 동반 image/equation) 둘 다에 들어가면 picture 를 우선 선택한다.
+    // collect_controls 가 Shape 를 자식 picture 보다 먼저 방출하므로, 이 우선 패스가 없으면
+    // 아래 1차 패스가 Shape 를 먼저 hit 한다(이슈의 핵심 결함). Shape 와 picture 가 함께
+    // hit 될 때만 동작하므로, 겹치는 Shape 가 없는 표 셀 picture 는 영향 없음.
+    // BehindText 는 기존 2차 패스 정책 유지로 제외.
+    {
+      let shapeHit = false;
+      let nestedPic: any = null;
+      for (const ctrl of layout.controls) {
+        if (ctrl.secIdx === undefined || ctrl.wrap === 'behindText') continue;
+        const inBox = pageX >= ctrl.x && pageX <= ctrl.x + ctrl.w &&
+          pageY >= ctrl.y && pageY <= ctrl.y + ctrl.h;
+        if (!inBox) continue;
+        if (ctrl.type === 'shape') shapeHit = true;
+        else if ((ctrl.type === 'image' || ctrl.type === 'equation') && ctrl.cellPath && !nestedPic) {
+          nestedPic = ctrl;
+        }
+      }
+      if (shapeHit && nestedPic) {
+        return { sec: nestedPic.secIdx, ppi: nestedPic.paraIdx, ci: nestedPic.controlIdx, type: nestedPic.type, cellIdx: nestedPic.cellIdx, cellParaIdx: nestedPic.cellParaIdx, outerTableControlIdx: nestedPic.outerTableControlIdx, cellPath: nestedPic.cellPath, noteRef: nestedPic.noteRef, headerFooter: nestedPic.headerFooter };
+      }
+    }
     // Task #516 결함 3 (옵션 3-C): BehindText 그림은 텍스트 영역 위에서는 후순위.
     // 1차 패스: BehindText 가 아닌 그림 우선 hit-test.
     // 2차 패스: BehindText 그림은 텍스트 hit-test 결과가 비어 있을 때만 hit.
+    // [Task #1280 v2] 겹침 클릭 = "최상단 개체" 선택. 첫-적중-반환 대신 적중 후보 전부를
+    // 돌며 (plane, zOrder, stableIndex) 최댓값(렌더 정렬키, Stage1 노출)을 고른다.
+    // 이로써 "보이는 것 = 클릭되는 것"(WYSIWYG) 정합. 단일 적중 시 결과 불변(회귀 0).
     const behindCtrls: any[] = [];
+    let topHit: any = null;
     for (const ctrl of layout.controls) {
       if (ctrl.type !== 'image' && ctrl.type !== 'shape' && ctrl.type !== 'equation' && ctrl.type !== 'group' && ctrl.type !== 'line') continue;
       if (ctrl.secIdx === undefined || ctrl.paraIdx === undefined || ctrl.controlIdx === undefined) continue;
@@ -35,11 +144,12 @@ export function findPictureAtClick(this: any,
         continue;
       }
 
+      let hit = false;
       if (ctrl.type === 'line') {
         // 직선: 점-선분 거리, 연결선: 곡선 경로 샘플링으로 히트 판정
         const threshold = 6;
         const dist1 = pointToSegmentDist(pageX, pageY, ctrl.x1, ctrl.y1, ctrl.x2, ctrl.y2);
-        let hit = dist1 <= threshold;
+        hit = dist1 <= threshold;
         if (!hit && ctrl.w > 2 && ctrl.h > 2) {
           const sx = ctrl.x1, sy = ctrl.y1, ex = ctrl.x2, ey = ctrl.y2;
           const mx = ctrl.x + ctrl.w / 2, my = ctrl.y + ctrl.h / 2;
@@ -75,17 +185,18 @@ export function findPictureAtClick(this: any,
             }
           }
         }
-        if (hit) {
-          return { sec: ctrl.secIdx, ppi: ctrl.paraIdx, ci: ctrl.controlIdx, type: 'line',
-            x1: ctrl.x1, y1: ctrl.y1, x2: ctrl.x2, y2: ctrl.y2 };
-        }
       } else {
         // bbox 히트 판정
-        if (pageX >= ctrl.x && pageX <= ctrl.x + ctrl.w &&
-            pageY >= ctrl.y && pageY <= ctrl.y + ctrl.h) {
-          return { sec: ctrl.secIdx, ppi: ctrl.paraIdx, ci: ctrl.controlIdx, type: ctrl.type, cellIdx: ctrl.cellIdx, cellParaIdx: ctrl.cellParaIdx, headerFooter: ctrl.headerFooter };
-        }
+        hit = pageX >= ctrl.x && pageX <= ctrl.x + ctrl.w &&
+          pageY >= ctrl.y && pageY <= ctrl.y + ctrl.h;
       }
+
+      if (hit && (topHit === null || isAboveControl(ctrl, topHit))) {
+        topHit = ctrl;
+      }
+    }
+    if (topHit) {
+      return controlToRef(topHit);
     }
     // 2차 패스: BehindText 그림 hit-test (옵션 3-C, Task #516).
     // 텍스트 hit-test 결과를 확인하여 텍스트가 있는 위치면 그림 hit 무시.
@@ -106,7 +217,7 @@ export function findPictureAtClick(this: any,
         for (const ctrl of behindCtrls) {
           if (pageX >= ctrl.x && pageX <= ctrl.x + ctrl.w &&
               pageY >= ctrl.y && pageY <= ctrl.y + ctrl.h) {
-            return { sec: ctrl.secIdx, ppi: ctrl.paraIdx, ci: ctrl.controlIdx, type: ctrl.type, cellIdx: ctrl.cellIdx, cellParaIdx: ctrl.cellParaIdx, headerFooter: ctrl.headerFooter };
+            return { sec: ctrl.secIdx, ppi: ctrl.paraIdx, ci: ctrl.controlIdx, type: ctrl.type, cellIdx: ctrl.cellIdx, cellParaIdx: ctrl.cellParaIdx, outerTableControlIdx: ctrl.outerTableControlIdx, cellPath: ctrl.cellPath, noteRef: ctrl.noteRef, headerFooter: ctrl.headerFooter };
           }
         }
       }
@@ -117,7 +228,7 @@ export function findPictureAtClick(this: any,
 
 /** 선택된 개체의 bbox를 페이지 레이아웃에서 찾는다. */
 export function findPictureBbox(this: any,
-  ref: { sec: number; ppi: number; ci: number; type?: 'image' | 'shape' | 'equation' | 'group' | 'line'; cellIdx?: number; cellParaIdx?: number },
+  ref: { sec: number; ppi: number; ci: number; type?: 'image' | 'shape' | 'equation' | 'group' | 'line'; cellIdx?: number; cellParaIdx?: number; cellPath?: CellPathLike; noteRef?: any },
 ): { pageIndex: number; x: number; y: number; w: number; h: number; x1?: number; y1?: number; x2?: number; y2?: number } | null {
   const matchType = ref.type ?? 'image';
   // line은 shape의 하위 타입 → layout에서 'line'으로 반환됨
@@ -127,11 +238,20 @@ export function findPictureBbox(this: any,
     for (let p = 0; p < pageCount; p++) {
       const layout = this.wasm.getPageControlLayout(p);
       for (const ctrl of layout.controls) {
-        if (ctrl.type === layoutType &&
-            ctrl.secIdx === ref.sec && ctrl.paraIdx === ref.ppi && ctrl.controlIdx === ref.ci) {
+        if (matchesControlRef(ctrl, { ...ref, type: matchType } as PictureObjectRef, layoutType)) {
           // 표 셀 내 수식: cellIdx/cellParaIdx도 매칭
           if (matchType === 'equation' && ref.cellIdx !== undefined) {
             if (ctrl.cellIdx !== ref.cellIdx || ctrl.cellParaIdx !== ref.cellParaIdx) continue;
+          }
+          if (matchType === 'equation' && ref.noteRef) {
+            const nr = ctrl.noteRef;
+            if (!nr ||
+                nr.kind !== ref.noteRef.kind ||
+                nr.sectionIdx !== ref.noteRef.sectionIdx ||
+                nr.paraIdx !== ref.noteRef.paraIdx ||
+                nr.controlIdx !== ref.noteRef.controlIdx ||
+                nr.noteParaIdx !== ref.noteRef.noteParaIdx ||
+                nr.innerControlIdx !== ref.noteRef.innerControlIdx) continue;
           }
           return { pageIndex: p, x: ctrl.x, y: ctrl.y, w: ctrl.w, h: ctrl.h,
             x1: ctrl.x1, y1: ctrl.y1, x2: ctrl.x2, y2: ctrl.y2 };
@@ -190,11 +310,20 @@ export function renderPictureObjectSelection(this: any): void {
     for (let p = 0; p < pageCount; p++) {
       const layout = this.wasm.getPageControlLayout(p);
       for (const ctrl of layout.controls) {
-        if (ctrl.type === layoutType &&
-            ctrl.secIdx === ref.sec && ctrl.paraIdx === ref.ppi && ctrl.controlIdx === ref.ci) {
+        if (matchesControlRef(ctrl, ref as PictureObjectRef, layoutType)) {
           // 표 셀 내 수식: cellIdx/cellParaIdx도 매칭
           if (matchType === 'equation' && ref.cellIdx !== undefined) {
             if (ctrl.cellIdx !== ref.cellIdx || ctrl.cellParaIdx !== ref.cellParaIdx) continue;
+          }
+          if (matchType === 'equation' && ref.noteRef) {
+            const nr = ctrl.noteRef;
+            if (!nr ||
+                nr.kind !== ref.noteRef.kind ||
+                nr.sectionIdx !== ref.noteRef.sectionIdx ||
+                nr.paraIdx !== ref.noteRef.paraIdx ||
+                nr.controlIdx !== ref.noteRef.controlIdx ||
+                nr.noteParaIdx !== ref.noteRef.noteParaIdx ||
+                nr.innerControlIdx !== ref.noteRef.innerControlIdx) continue;
           }
 
           if (matchType === 'line') {
@@ -236,7 +365,7 @@ export function renderPictureObjectSelection(this: any): void {
             } catch { /* ignore */ }
           } else if (ref.type === 'image') {
             try {
-              const props = this.wasm.getPictureProperties(ref.sec, ref.ppi, ref.ci);
+              const props = getObjectProperties.call(this, ref);
               rotAngle = (props.rotationAngle as number) ?? 0;
             } catch { /* ignore */ }
           }
@@ -281,30 +410,120 @@ export function isShapeBorderClick(this: any,
 // ─── 개체 속성 조회 헬퍼 (그림/글상자 분기) ──────────────
 
 /** 개체 속성을 타입에 따라 조회한다. */
-export function getObjectProperties(this: any, ref: { sec: number; ppi: number; ci: number; type: string }): any {
+export function getObjectProperties(this: any, ref: PictureObjectRef): any {
   if (ref.type === 'shape' || ref.type === 'line' || ref.type === 'group') {
+    if (hasCellPath(ref)) {
+      return this.wasm.getCellShapePropertiesByPath(ref.sec, ref.ppi, ref.cellPath, ref.ci);
+    }
     return this.wasm.getShapeProperties(ref.sec, ref.ppi, ref.ci);
+  }
+  if (ref.type === 'image' && ref.headerFooter) {
+    return this.wasm.getHeaderFooterPictureProperties(
+      ref.sec,
+      ref.headerFooter.outerParaIdx,
+      ref.headerFooter.outerControlIdx,
+      ref.ppi,
+      ref.ci,
+    );
+  }
+  if (ref.type === 'image' && hasCellPath(ref)) {
+    return this.wasm.getCellPicturePropertiesByPath(ref.sec, ref.ppi, ref.cellPath, ref.ci);
   }
   return this.wasm.getPictureProperties(ref.sec, ref.ppi, ref.ci);
 }
 
 /** 개체 속성을 타입에 따라 변경한다. */
-export function setObjectProperties(this: any, ref: { sec: number; ppi: number; ci: number; type: string }, props: Record<string, unknown>): void {
+export function setObjectProperties(this: any, ref: PictureObjectRef, props: Record<string, unknown>): void {
   if (ref.type === 'shape' || ref.type === 'line' || ref.type === 'group') {
+    if (hasCellPath(ref)) {
+      this.wasm.setCellShapePropertiesByPath(ref.sec, ref.ppi, ref.cellPath, ref.ci, props);
+      return;
+    }
     this.wasm.setShapeProperties(ref.sec, ref.ppi, ref.ci, props);
   } else {
+    if (ref.type === 'image' && ref.headerFooter) {
+      this.wasm.setHeaderFooterPictureProperties(
+        ref.sec,
+        ref.headerFooter.outerParaIdx,
+        ref.headerFooter.outerControlIdx,
+        ref.ppi,
+        ref.ci,
+        props,
+      );
+      return;
+    }
+    if (ref.type === 'image' && hasCellPath(ref)) {
+      this.wasm.setCellPicturePropertiesByPath(ref.sec, ref.ppi, ref.cellPath, ref.ci, props);
+      return;
+    }
     this.wasm.setPictureProperties(ref.sec, ref.ppi, ref.ci, props);
   }
 }
 
 /** 개체를 타입에 따라 삭제한다. */
-export function deleteObjectControl(this: any, ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line' }): void {
+export function deleteObjectControl(this: any, ref: PictureObjectRef): void {
   if (ref.type === 'shape' || ref.type === 'group' || ref.type === 'line') {
     this.wasm.deleteShapeControl(ref.sec, ref.ppi, ref.ci);
   } else if (ref.type === 'equation') {
     this.wasm.deleteEquationControl(ref.sec, ref.ppi, ref.ci);
   } else {
+    if (hasCellPath(ref)) {
+      this.wasm.deleteCellPictureControlByPath(ref.sec, ref.ppi, ref.cellPath, ref.ci);
+      return;
+    }
     this.wasm.deletePictureControl(ref.sec, ref.ppi, ref.ci);
+  }
+}
+
+// ─── Shift+방향키 크기 조절 (#1231) ─────────────────────
+
+/**
+ * 그림 객체 선택 모드에서 Shift+방향키로 개체 크기를 단계 조절한다 (한컴 정합).
+ * 이동(moveSelectedPicture)과 동일한 격자 단계를 쓰고, 드래그 리사이즈와 동일하게
+ * ResizeObjectCommand 로 Undo/Redo 를 기록한다. 셀/글상자/머리말 내 개체는
+ * get/setObjectProperties 의 경로 분기를 그대로 탄다.
+ */
+export function resizeSelectedPicture(this: any, key: ArrowKey): void {
+  const refs = this.cursor.getSelectedPictureRefs();
+  const ref = this.cursor.getSelectedPictureRef();
+  if (!ref) return;
+
+  const step = Math.round(this.gridStepMm * 7200 / 25.4); // mm → HWPUNIT
+  const targets = refs.length > 1 ? refs : [ref];
+  try {
+    // 1단계: 조회/계산만 먼저 전부 수행 — 일부 개체 조회가 실패해도 문서는 무변경
+    const pending: { r: PictureObjectRef; target: ObjectResizeTarget }[] = [];
+    for (const r of targets) {
+      const props = getObjectProperties.call(this, r);
+      const resized = computeArrowResize(key, props.width, props.height, step);
+      if (!resized) continue;
+      pending.push({
+        r,
+        target: {
+          sec: r.sec,
+          ppi: r.ppi,
+          ci: r.ci,
+          type: r.type,
+          cellPath: r.cellPath,
+          before: resized.before,
+          after: resized.after,
+        },
+      });
+    }
+    if (pending.length === 0) return;
+    // 2단계: 적용 후 Undo 기록 (드래그 리사이즈와 동일 순서; 원본 ref 로 적용해
+    // headerFooter 등 dispatch 필드를 보존한다)
+    for (const { r, target } of pending) {
+      setObjectProperties.call(this, r, target.after);
+    }
+    this.executeOperation({
+      kind: 'record',
+      command: new ResizeObjectCommand(pending.map((p) => p.target)),
+    });
+    this.eventBus.emit('document-changed');
+    this.renderPictureObjectSelection();
+  } catch (err) {
+    console.warn('[InputHandler] 개체 크기 조절 실패:', err);
   }
 }
 
@@ -312,7 +531,7 @@ export function deleteObjectControl(this: any, ref: { sec: number; ppi: number; 
 
 /** 1 page px = 7200/96 = 75 HWPUNIT */
 const PX_TO_HWP = 7200 / 96;
-const MIN_SIZE_HWP = 283; // ≈1mm
+// MIN_SIZE_HWP 는 picture-resize.ts 에서 import (드래그/키보드 리사이즈 공용 하한)
 
 /**
  * 회전각을 반영하여 리사이즈 후 새 bbox(비회전 기준)를 계산한다.
@@ -428,14 +647,21 @@ export function updatePictureResizeDrag(this: any, e: MouseEvent): void {
   if (!state.multiRefs && state.ref.type !== 'line') {
     const newW = Math.max(Math.round(newBbox.width * PX_TO_HWP), MIN_SIZE_HWP);
     const newH = Math.max(Math.round(newBbox.height * PX_TO_HWP), MIN_SIZE_HWP);
+    // offset 은 페이지 절대값이 아니라 "저장 offset + 페이지좌표 델타"로 적용한다.
+    // (중첩 picture 의 offset 은 컨테이너 상대 — 페이지 절대값이면 라이브 드래그 중
+    //  이미지가 예비 테두리에서 벗어나 어긋난다. finishPictureResizeDrag 와 동일 방식.)
     const newHorzOffset = Math.round(newBbox.x * PX_TO_HWP);
     const newVertOffset = Math.round(newBbox.y * PX_TO_HWP);
+    const origHorzOffset = Math.round(state.bbox.x * PX_TO_HWP);
+    const origVertOffset = Math.round(state.bbox.y * PX_TO_HWP);
+    const beforeHorzOffset = state.origHorzOffset ?? origHorzOffset;
+    const beforeVertOffset = state.origVertOffset ?? origVertOffset;
     try {
       setObjectProperties.call(this, state.ref, {
         width: newW,
         height: newH,
-        horzOffset: (newHorzOffset >>> 0),
-        vertOffset: (newVertOffset >>> 0),
+        horzOffset: ((beforeHorzOffset + (newHorzOffset - origHorzOffset)) >>> 0),
+        vertOffset: ((beforeVertOffset + (newVertOffset - origVertOffset)) >>> 0),
       });
       this.eventBus.emit('document-changed');
     } catch { /* ignore */ }
@@ -486,7 +712,7 @@ export function finishPictureResizeDrag(this: any, e: MouseEvent): void {
         const changed = Object.keys(updated).some(key => updated[key] !== before[key]);
         if (!changed) continue;
         setObjectProperties.call(this, r, updated);
-        historyTargets.push({ sec: r.sec, ppi: r.ppi, ci: r.ci, type: r.type, before, after: updated });
+        historyTargets.push({ sec: r.sec, ppi: r.ppi, ci: r.ci, type: r.type, cellPath: r.cellPath, before, after: updated });
       }
       if (historyTargets.length > 0) {
         this.executeOperation({ kind: 'record', command: new ResizeObjectCommand(historyTargets) });
@@ -522,19 +748,24 @@ export function finishPictureResizeDrag(this: any, e: MouseEvent): void {
     }
     const beforeHorzOffset = state.origHorzOffset ?? origHorzOffset;
     const beforeVertOffset = state.origVertOffset ?? origVertOffset;
-    if (newHorzOffset !== origHorzOffset) {
-      updated['horzOffset'] = (newHorzOffset >>> 0);
+    // offset 은 페이지 절대값이 아니라 "저장된 offset + 페이지좌표 델타"로 적용한다.
+    // (글상자/셀 중첩 picture 는 offset 이 컨테이너 상대라, 페이지 절대값을 쓰면 밖으로 튕김.
+    //  다중 선택 리사이즈 경로와 동일한 델타 방식 — 본문 그림은 before≈orig 이므로 동작 불변.)
+    const deltaHorz = newHorzOffset - origHorzOffset;
+    const deltaVert = newVertOffset - origVertOffset;
+    if (deltaHorz !== 0) {
+      updated['horzOffset'] = ((beforeHorzOffset + deltaHorz) >>> 0);
       before['horzOffset'] = beforeHorzOffset;
     }
-    if (newVertOffset !== origVertOffset) {
-      updated['vertOffset'] = (newVertOffset >>> 0);
+    if (deltaVert !== 0) {
+      updated['vertOffset'] = ((beforeVertOffset + deltaVert) >>> 0);
       before['vertOffset'] = beforeVertOffset;
     }
     if (Object.keys(updated).length > 0) {
       setObjectProperties.call(this, state.ref, updated);
       this.executeOperation({
         kind: 'record',
-        command: new ResizeObjectCommand([{ sec: state.ref.sec, ppi: state.ref.ppi, ci: state.ref.ci, type: state.ref.type, before, after: updated }]),
+        command: new ResizeObjectCommand([{ sec: state.ref.sec, ppi: state.ref.ppi, ci: state.ref.ci, type: state.ref.type, cellPath: state.ref.cellPath, before, after: updated }]),
       });
       this.eventBus.emit('document-changed');
     }
@@ -644,13 +875,16 @@ export function finishPictureMoveDrag(this: any): void {
       const targets = multiRefs || [{ ...this.pictureMoveState.ref, origHorzOffset: this.pictureMoveState.origHorzOffset, origVertOffset: this.pictureMoveState.origVertOffset }];
       for (const r of targets) {
         const CmdClass = (r.type === 'shape' || r.type === 'line' || r.type === 'group') ? MoveShapeCommand : MovePictureCommand;
-        this.history.recordWithoutExecute(
-          new CmdClass(
+        this.executeOperation({
+          kind: 'record',
+          command: new CmdClass(
             r.sec, r.ppi, r.ci,
             totalDeltaH, totalDeltaV,
             r.origHorzOffset, r.origVertOffset,
+            r.cellPath,
           ),
-        );
+          meta: { domain: 'object', refresh: 'none', dirtyScope: 'object' },
+        });
       }
     }
   }

@@ -196,7 +196,19 @@ impl EqParser {
                 let group = self.parse_group();
                 self.try_parse_scripts(group)
             }
-            TokenType::LParen | TokenType::RParen | TokenType::LBracket | TokenType::RBracket => {
+            TokenType::LParen => {
+                // #1305: `(...)` 뒤에 첨자가 오면 Paren 그룹으로 묶어 첨자를 결합한다
+                // (그렇지 않으면 `)` 뒤 `^2` 가 base 없는 orphan Superscript 가 됨).
+                // 첨자가 없으면 기존대로 느슨한 Symbol 흐름 유지 → 일반 괄호 렌더 무변경.
+                if self.paren_then_script() {
+                    let group = self.parse_paren_group();
+                    self.try_parse_scripts(group)
+                } else {
+                    self.pos += 1;
+                    EqNode::Symbol(val)
+                }
+            }
+            TokenType::RParen | TokenType::LBracket | TokenType::RBracket => {
                 self.pos += 1;
                 EqNode::Symbol(val)
             }
@@ -215,6 +227,9 @@ impl EqParser {
     fn parse_command(&mut self, cmd: &str) -> EqNode {
         let cmd_upper = cmd.to_ascii_uppercase();
         let cu = cmd_upper.as_str();
+        // [#1204] hwpeq 명령은 대소문자 무시 — DECORATIONS/FONT_STYLES 는 소문자 키이므로
+        // 1차 lookup 실패 시 소문자 fallback (`RM`/`BAR` 등 대문자 변형이 leak 되지 않도록).
+        let cmd_lower = cmd.to_ascii_lowercase();
 
         // OVER/ATOP은 parse_expression에서 처리됨 (단독 발생 시)
         if cu == "OVER" {
@@ -367,7 +382,10 @@ impl EqParser {
 
         // LEFT-RIGHT 괄호
         if cu == "LEFT" {
-            return self.parse_left_right();
+            // ★ KeepGong fix: 구분기호 그룹(left|...right| 등) 뒤 첨자(^/_)를 그룹 전체에 부착.
+            //   기존엔 try_parse_scripts 를 안 거쳐 |x|^3 의 ^3 가 base 없는 고아 첨자가 됐다.
+            let node = self.parse_left_right();
+            return self.try_parse_scripts(node);
         }
 
         if cu == "RIGHT" {
@@ -491,7 +509,10 @@ impl EqParser {
         }
 
         // 글자 장식
-        if let Some(&deco) = DECORATIONS.get(cmd) {
+        if let Some(&deco) = DECORATIONS
+            .get(cmd)
+            .or_else(|| DECORATIONS.get(cmd_lower.as_str()))
+        {
             let body = self.parse_single_or_group();
             return EqNode::Decoration {
                 kind: deco,
@@ -500,7 +521,10 @@ impl EqParser {
         }
 
         // 글꼴 스타일
-        if let Some(&style) = FONT_STYLES.get(cmd) {
+        if let Some(&style) = FONT_STYLES
+            .get(cmd)
+            .or_else(|| FONT_STYLES.get(cmd_lower.as_str()))
+        {
             // 다음 토큰이 구조 명령어(LEFT, RIGHT 등)이면 body 없이 반환
             // rm P it LEFT(...) 에서 it이 LEFT를 body로 먹지 않도록
             let body = if self.current_type() == TokenType::Command
@@ -582,6 +606,50 @@ impl EqParser {
         self.tokens.len()
     }
 
+    /// 현재 LParen 의 매칭 RParen 다음 토큰이 첨자(`^`/`_`)인지 (#1305).
+    /// 참이면 `(...)` 를 Paren 그룹으로 묶어 첨자를 결합해야 한다.
+    /// 현재 토큰이 LParen 이라는 전제.
+    fn paren_then_script(&self) -> bool {
+        let mut depth = 0i32;
+        let mut p = self.pos;
+        while p < self.tokens.len() {
+            match self.tokens[p].ty {
+                TokenType::LParen => depth += 1,
+                TokenType::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(
+                            self.tokens.get(p + 1).map(|t| t.ty),
+                            Some(TokenType::Subscript) | Some(TokenType::Superscript)
+                        );
+                    }
+                }
+                TokenType::Eof => return false,
+                _ => {}
+            }
+            p += 1;
+        }
+        false
+    }
+
+    /// `(...)` 를 자동크기 괄호 그룹으로 파싱 (#1305). 현재 LParen 전제.
+    fn parse_paren_group(&mut self) -> EqNode {
+        self.pos += 1; // '(' 소비
+        let mut items = Vec::new();
+        while !self.at_end() && self.current_type() != TokenType::RParen {
+            if self.try_consume_infix_over_atop(&mut items) {
+                continue;
+            }
+            items.push(self.parse_element());
+        }
+        self.expect(TokenType::RParen); // ')' 소비
+        EqNode::Paren {
+            left: "(".to_string(),
+            right: ")".to_string(),
+            body: Box::new(EqNode::Row(items).simplify()),
+        }
+    }
+
     /// 단일 토큰 또는 그룹 파싱 (첨자/인자용)
     fn parse_single_or_group(&mut self) -> EqNode {
         if self.at_end() {
@@ -609,7 +677,10 @@ impl EqParser {
                 } else if is_function(&val) {
                     EqNode::Function(lookup_function(&val).unwrap_or(&val).to_string())
                 } else {
-                    EqNode::Text(val)
+                    // [#1204-B] decoration/구조 명령(bar, sqrt 등)도 단일 인자/body 로
+                    // 올 수 있다 (`rm bar {...}`). parse_command 로 위임 — 미지 명령은
+                    // parse_command 의 fall-through 가 Text 로 처리하므로 안전.
+                    self.parse_command(&val)
                 }
             }
             TokenType::Number => EqNode::Number(val),
@@ -618,6 +689,47 @@ impl EqParser {
             TokenType::Symbol => EqNode::Symbol(val),
             _ => EqNode::Text(val),
         }
+    }
+
+    /// 현재 토큰이 "공백 없이 붙은 관계연산자"인지 (#1304).
+    /// HWP 무브레이스 하한 operand 의 연결 구분자 — `sum_k=1`, `lim_x->0`, `1<=k`.
+    /// 관계연산자 앞에 공백이 있으면(`x^2 = 4`) false 를 돌려 묶지 않는다.
+    fn is_tight_relational(&self) -> bool {
+        match self.tokens.get(self.pos) {
+            Some(t) => {
+                t.ty == TokenType::Symbol
+                    && !t.space_before
+                    && matches!(
+                        t.value.as_str(),
+                        "=" | "<" | ">" | "<=" | ">=" | "!=" | "==" | "->"
+                    )
+            }
+            None => false,
+        }
+    }
+
+    /// 무브레이스 아래첨자/하한 operand 파싱 (#1304).
+    /// `원자 (공백없는 관계연산자 원자)*` 패턴으로 하나의 operand 를 묶는다.
+    /// `sum_k=1 ^6` 의 하한이 `k=1` 전체가 되도록 한다.
+    /// 위첨자(`^`)에는 적용하지 않는다 — `x^2=4` 류 위첨자 등식 보호.
+    fn parse_script_operand(&mut self) -> EqNode {
+        let first = self.parse_single_or_group();
+        if !self.is_tight_relational() {
+            return first;
+        }
+        let mut items = vec![first];
+        while self.is_tight_relational() {
+            let sym = self.current_value().to_string();
+            self.pos += 1;
+            // `->` 는 화살표 기호로 변환 (parse_element 와 동일)
+            if sym == "->" {
+                items.push(EqNode::MathSymbol("→".to_string()));
+            } else {
+                items.push(EqNode::Symbol(sym));
+            }
+            items.push(self.parse_single_or_group());
+        }
+        EqNode::Row(items).simplify()
     }
 
     /// 첨자(subscript/superscript) 파싱 시도
@@ -647,7 +759,7 @@ impl EqParser {
             let ty = self.current_type();
             if ty == TokenType::Subscript && !has_sub {
                 self.pos += 1;
-                sub = Some(self.parse_single_or_group());
+                sub = Some(self.parse_script_operand());
                 has_sub = true;
             } else if ty == TokenType::Superscript && !has_sup {
                 self.pos += 1;
@@ -1097,7 +1209,7 @@ impl EqParser {
             }
             if self.current_type() == TokenType::Subscript && sub.is_none() {
                 self.pos += 1;
-                sub = Some(Box::new(self.parse_single_or_group()));
+                sub = Some(Box::new(self.parse_script_operand()));
             } else if self.current_type() == TokenType::Superscript && sup.is_none() {
                 self.pos += 1;
                 sup = Some(Box::new(self.parse_single_or_group()));
@@ -1115,7 +1227,7 @@ impl EqParser {
 
         if self.current_type() == TokenType::Subscript {
             self.pos += 1;
-            sub = Some(Box::new(self.parse_single_or_group()));
+            sub = Some(Box::new(self.parse_script_operand()));
         }
 
         EqNode::Limit { is_upper, sub }
@@ -1524,6 +1636,31 @@ mod tests {
     use super::symbols::{DecoKind, FontStyleKind};
     use super::*;
 
+    /// [PR #1226] LEFT-RIGHT 구분기호 그룹 뒤 첨자(^/_)가 그룹 전체에 결합돼야 한다.
+    /// 기존엔 LEFT 분기가 try_parse_scripts 를 안 거쳐 `|x|^3` 의 ^3 가 base 없는
+    /// orphan Superscript{base:Empty} 가 됐다(3 이 superscript 높이로 안 올라감).
+    #[test]
+    fn left_right_group_binds_trailing_script() {
+        // |x|^3 → Superscript{ base: Paren, sup: 3 } (orphan 아님)
+        let ast = parse("left | x right | ^3");
+        let s = format!("{:?}", ast);
+        assert!(
+            s.contains("Superscript") && s.contains("Paren") && !s.contains("base: Empty"),
+            "|x|^3 의 ^3 가 Paren 그룹에 결합돼야 함(orphan 금지): {s}"
+        );
+
+        // |x|_3 → Subscript{ base: Paren, sub: 3 }
+        let sub = format!("{:?}", parse("left | x right | _3"));
+        assert!(
+            sub.contains("Subscript") && sub.contains("Paren") && !sub.contains("base: Empty"),
+            "|x|_3 의 _3 가 Paren 그룹에 결합돼야 함: {sub}"
+        );
+
+        // 회귀 가드: x^2 는 영향 없음
+        let x2 = format!("{:?}", parse("x^2"));
+        assert!(x2.contains("Superscript"), "x^2 정상: {x2}");
+    }
+
     #[test]
     fn test_simple_fraction() {
         let ast = parse("1 over 2");
@@ -1727,6 +1864,50 @@ mod tests {
             }
             _ => panic!("Expected FontStyle, got {:?}", ast),
         }
+    }
+
+    // [#1204-B] 글꼴 명령(rm) body 로 온 decoration(bar)이 Text 로 leak 되지 않고
+    // Decoration 으로 파싱되어야 한다.
+    #[test]
+    fn test_font_style_body_decoration_not_leaked() {
+        let ast = parse("rm bar {F prime F}");
+        let s = format!("{:?}", ast);
+        assert!(
+            s.contains("Decoration"),
+            "bar 가 Decoration 으로 파싱돼야 함: {s}"
+        );
+        assert!(
+            !s.contains(r#"Text("bar")"#),
+            "bar 가 텍스트로 leak 되면 안 됨: {s}"
+        );
+    }
+
+    // [#1204] 대문자 글꼴/장식 명령(RM/BAR)도 대소문자 무시로 인식 (leak 방지).
+    #[test]
+    fn test_uppercase_font_and_deco_commands() {
+        let s = format!("{:?}", parse("RM {vec{EC}}"));
+        assert!(!s.contains(r#"Text("RM")"#), "RM 이 leak 되면 안 됨: {s}");
+        assert!(
+            s.contains("FontStyle"),
+            "RM 이 FontStyle 로 인식돼야 함: {s}"
+        );
+        let s2 = format!("{:?}", parse("BAR {AB}"));
+        assert!(
+            s2.contains("Decoration"),
+            "BAR 가 Decoration 으로 인식돼야 함: {s2}"
+        );
+    }
+
+    // [#1204-A] root3 (분리 후 root + 3) 이 Sqrt 로 파싱되어야 한다.
+    #[test]
+    fn test_root_glued_digit_parses_as_sqrt() {
+        let ast = parse("root3 y");
+        let s = format!("{:?}", ast);
+        assert!(s.contains("Sqrt"), "root3 이 Sqrt 로 파싱돼야 함: {s}");
+        assert!(
+            !s.contains(r#"Text("root3")"#),
+            "root3 이 텍스트로 leak 되면 안 됨: {s}"
+        );
     }
 
     #[test]
@@ -2376,7 +2557,6 @@ mod latex_compat_tests {
     }
 
     #[test]
-    #[test]
     fn test_hwpeq_inf_remains_symbol() {
         let ast = parse("lim _{n→inf}");
         fn has_infinity(node: &EqNode) -> bool {
@@ -2410,6 +2590,247 @@ mod latex_compat_tests {
             contains_degree(&ast),
             "hwpeq 'deg' must produce °, not function text: {:?}",
             ast
+        );
+    }
+
+    // ── #1304: 무브레이스 첨자 공백 구분 ────────────────────────────────
+
+    /// 트리에서 첫 BigOp 노드를 찾는다.
+    fn find_big_op(node: &EqNode) -> Option<&EqNode> {
+        match node {
+            EqNode::BigOp { .. } => Some(node),
+            EqNode::Row(children) => children.iter().find_map(find_big_op),
+            _ => None,
+        }
+    }
+
+    /// `sum_k=1 ^6` (브레이스 없음, 공백 구분) → ∑ 하한 `k=1` 전체, 상한 `6`.
+    /// 기존엔 하한이 `k` 하나로 잘리고 `=1` 이 본문으로, `^6` 이 `1` 의 위첨자로 깨졌다.
+    #[test]
+    fn task1304_unbraced_sum_lower_limit_full() {
+        let ast = parse("sum_k=1 ^6 (k+1)^2");
+        let big = find_big_op(&ast).expect("BigOp(∑) 가 있어야 함");
+        let (sub, sup) = match big {
+            EqNode::BigOp { symbol, sub, sup } => {
+                assert_eq!(symbol, "∑");
+                (sub.as_ref(), sup.as_ref())
+            }
+            _ => unreachable!(),
+        };
+        // 하한 = Row[k, =, 1]
+        let sub = sub.expect("하한(sub)이 있어야 함");
+        match sub.as_ref() {
+            EqNode::Row(items) => {
+                let dbg = format!("{:?}", items);
+                assert!(
+                    items.len() == 3
+                        && matches!(&items[0], EqNode::Text(t) if t == "k")
+                        && matches!(&items[1], EqNode::Symbol(s) if s == "=")
+                        && matches!(&items[2], EqNode::Number(n) if n == "1"),
+                    "하한은 k=1 전체여야 함: {dbg}"
+                );
+            }
+            other => panic!("하한이 Row[k,=,1] 여야 함, got {:?}", other),
+        }
+        // 상한 = 6
+        let sup = sup.expect("상한(sup)이 있어야 함");
+        assert!(
+            matches!(sup.as_ref(), EqNode::Number(n) if n == "6"),
+            "상한은 6 이어야 함: {:?}",
+            sup
+        );
+    }
+
+    /// `lim_x->0` (공백 없음) → 극한 하한 `x->0` 전체 (x → 0).
+    #[test]
+    fn task1304_unbraced_lim_lower_limit_full() {
+        let ast = parse("lim_x->0 f(x)");
+        fn find_limit(node: &EqNode) -> Option<&EqNode> {
+            match node {
+                EqNode::Limit { .. } => Some(node),
+                EqNode::Row(children) => children.iter().find_map(find_limit),
+                _ => None,
+            }
+        }
+        let lim = find_limit(&ast).expect("Limit 노드가 있어야 함");
+        let sub = match lim {
+            EqNode::Limit { sub, .. } => sub.as_ref().expect("하한이 있어야 함"),
+            _ => unreachable!(),
+        };
+        match sub.as_ref() {
+            EqNode::Row(items) => assert!(
+                items.len() == 3
+                    && matches!(&items[0], EqNode::Text(t) if t == "x")
+                    && matches!(&items[1], EqNode::MathSymbol(s) if s == "→")
+                    && matches!(&items[2], EqNode::Number(n) if n == "0"),
+                "극한 하한은 x→0 전체여야 함: {:?}",
+                items
+            ),
+            other => panic!("극한 하한이 Row[x,→,0] 여야 함, got {:?}", other),
+        }
+    }
+
+    /// 회귀: 브레이스 표기 `sum _{k=1} ^{6}` 는 기존대로 정상.
+    #[test]
+    fn task1304_braced_sum_unchanged() {
+        let ast = parse("sum _{k=1} ^{6}");
+        let big = find_big_op(&ast).expect("BigOp(∑)");
+        if let EqNode::BigOp { sub, sup, .. } = big {
+            let sub_dbg = format!("{:?}", sub);
+            assert!(
+                sub_dbg.contains("\"k\"") && sub_dbg.contains("\"=\"") && sub_dbg.contains("\"1\""),
+                "브레이스 하한도 k=1 전체: {sub_dbg}"
+            );
+            assert!(
+                matches!(sup.as_deref(), Some(EqNode::Number(n)) if n == "6"),
+                "상한 6: {:?}",
+                sup
+            );
+        }
+    }
+
+    /// 회귀: 공백 있는 등식 `x^2 = 4` 는 위첨자에 `=4` 가 흡수되면 안 된다 (sup=2).
+    #[test]
+    fn task1304_spaced_equation_not_merged() {
+        let ast = parse("x^2 = 4");
+        // 위첨자는 2 하나, 이후 = 4 는 본문(Row)에 남아야 한다.
+        let dbg = format!("{:?}", ast);
+        // Superscript{ base: x, sup: 2 } 형태가 존재하고, sup 안에 '=' 가 없어야 함.
+        fn sup_has_no_equals(node: &EqNode) -> bool {
+            match node {
+                EqNode::Superscript { sup, .. } => !format!("{:?}", sup).contains("\"=\""),
+                EqNode::Row(children) => children.iter().all(sup_has_no_equals),
+                _ => true,
+            }
+        }
+        assert!(
+            sup_has_no_equals(&ast),
+            "x^2 = 4 의 위첨자에 =4 가 흡수되면 안 됨: {dbg}"
+        );
+        assert!(dbg.contains("Superscript"), "x^2 위첨자 유지: {dbg}");
+    }
+
+    /// 회귀: 인접 식별자 `a_n b` 는 하한이 `n` 하나여야 한다 (b 흡수 금지).
+    #[test]
+    fn task1304_adjacent_identifier_not_merged() {
+        let ast = parse("a_n b");
+        let dbg = format!("{:?}", ast);
+        fn first_subscript_sub<'a>(node: &'a EqNode) -> Option<&'a EqNode> {
+            match node {
+                EqNode::Subscript { sub, .. } => Some(sub.as_ref()),
+                EqNode::Row(children) => children.iter().find_map(first_subscript_sub),
+                _ => None,
+            }
+        }
+        let sub = first_subscript_sub(&ast).expect("Subscript 가 있어야 함");
+        assert!(
+            matches!(sub, EqNode::Text(t) if t == "n"),
+            "a_n b 의 하한은 n 하나여야 함 (b 흡수 금지): {dbg}"
+        );
+    }
+
+    /// 회귀: 산술 `a_n+1` 의 하한은 `n` 하나 (관계연산자 아님 → 미병합).
+    #[test]
+    fn task1304_arithmetic_subscript_not_merged() {
+        let ast = parse("a_n+1");
+        fn first_subscript_sub<'a>(node: &'a EqNode) -> Option<&'a EqNode> {
+            match node {
+                EqNode::Subscript { sub, .. } => Some(sub.as_ref()),
+                EqNode::Row(children) => children.iter().find_map(first_subscript_sub),
+                _ => None,
+            }
+        }
+        let sub = first_subscript_sub(&ast).expect("Subscript");
+        assert!(
+            matches!(sub, EqNode::Text(t) if t == "n"),
+            "a_n+1 의 하한은 n 하나여야 함: {:?}",
+            sub
+        );
+    }
+
+    // ── #1305: 괄호 그룹 뒤 위첨자 ─────────────────────────────────────
+
+    fn find_superscript(node: &EqNode) -> Option<&EqNode> {
+        match node {
+            EqNode::Superscript { .. } => Some(node),
+            EqNode::Row(children) => children.iter().find_map(find_superscript),
+            _ => None,
+        }
+    }
+    fn find_subscript(node: &EqNode) -> Option<&EqNode> {
+        match node {
+            EqNode::Subscript { .. } => Some(node),
+            EqNode::Row(children) => children.iter().find_map(find_subscript),
+            _ => None,
+        }
+    }
+    fn contains_paren(node: &EqNode) -> bool {
+        match node {
+            EqNode::Paren { .. } => true,
+            EqNode::Row(children) => children.iter().any(contains_paren),
+            _ => false,
+        }
+    }
+
+    /// `(k+1)^2` → 위첨자가 Paren 그룹에 결합 (base 가 비지 않은 Superscript).
+    #[test]
+    fn task1305_paren_superscript_binds_to_group() {
+        let ast = parse("(k+1)^2");
+        let sup = find_superscript(&ast).expect("Superscript 가 있어야 함");
+        match sup {
+            EqNode::Superscript { base, sup } => {
+                assert!(
+                    matches!(base.as_ref(), EqNode::Paren { .. }),
+                    "위첨자 base 가 Paren 그룹이어야 함(orphan Empty 금지): {:?}",
+                    base
+                );
+                assert!(
+                    matches!(sup.as_ref(), EqNode::Number(n) if n == "2"),
+                    "지수는 2: {:?}",
+                    sup
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// `(k+1)_i` → 아래첨자도 Paren 그룹에 결합.
+    #[test]
+    fn task1305_paren_subscript_binds_to_group() {
+        let ast = parse("(k+1)_i");
+        let sub = find_subscript(&ast).expect("Subscript 가 있어야 함");
+        if let EqNode::Subscript { base, .. } = sub {
+            assert!(
+                matches!(base.as_ref(), EqNode::Paren { .. }),
+                "아래첨자 base 가 Paren 그룹이어야 함: {:?}",
+                base
+            );
+        }
+    }
+
+    /// 회귀: 첨자 없는 일반 괄호는 Paren 그룹으로 묶이지 않는다 (느슨한 Symbol 유지).
+    #[test]
+    fn task1305_plain_paren_not_grouped() {
+        let ast = parse("(k+1)");
+        assert!(
+            !contains_paren(&ast),
+            "첨자 없는 괄호는 Paren 노드를 만들지 않아야 함: {:?}",
+            ast
+        );
+        // a(b) 같은 함수꼴도 영향 없음
+        let ast2 = parse("a(b)");
+        assert!(!contains_paren(&ast2), "a(b) 도 Paren 미생성: {:?}", ast2);
+    }
+
+    /// 회귀: 숫자 base 위첨자 `7^2`, LEFT-RIGHT 그룹 첨자(#1226)는 정상 유지.
+    #[test]
+    fn task1305_regression_number_and_leftright_scripts() {
+        let n = format!("{:?}", parse("7^2"));
+        assert!(n.contains("Superscript"), "7^2 정상: {n}");
+        let lr = format!("{:?}", parse("left ( x right ) ^2"));
+        assert!(
+            lr.contains("Superscript") && lr.contains("Paren") && !lr.contains("base: Empty"),
+            "left(x)right^2 결합 정상: {lr}"
         );
     }
 }

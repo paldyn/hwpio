@@ -18,7 +18,9 @@ use crate::paint::{
 };
 use crate::renderer::composer::expand_pua_display_text;
 use crate::renderer::layout::compute_char_positions;
-use crate::renderer::render_tree::{BoundingBox, FieldMarkerType, ShapeTransform, TextRunNode};
+use crate::renderer::render_tree::{
+    BoundingBox, FieldMarkerType, RenderLayerInfo, ShapeTransform, TextRunNode,
+};
 use crate::renderer::{
     ArrowStyle, GradientFillInfo, LineRenderType, LineStyle, PathCommand, PatternFillInfo,
     ShadowStyle, ShapeStyle, StrokeDash, TabLeaderInfo, TextStyle,
@@ -30,7 +32,7 @@ impl PageLayerTree {
         buf.push('{');
         let _ = write!(
             buf,
-            "\"schemaVersion\":{},\"schemaMinorVersion\":{},\"schema\":{{\"major\":{},\"minor\":{}}},\"resourceTableVersion\":{},\"resourceTableMinorVersion\":{},\"resourceTable\":{{\"major\":{},\"minor\":{}}},\"unit\":{},\"coordinateSystem\":{},\"profile\":{},\"outputOptions\":{{\"showParagraphMarks\":{},\"showControlCodes\":{},\"showTransparentBorders\":{},\"clipEnabled\":{},\"debugOverlay\":{}}},\"pageWidth\":{:.3},\"pageHeight\":{:.3},\"root\":",
+            "\"schemaVersion\":{},\"schemaMinorVersion\":{},\"schema\":{{\"major\":{},\"minor\":{}}},\"resourceTableVersion\":{},\"resourceTableMinorVersion\":{},\"resourceTable\":{{\"major\":{},\"minor\":{}}},\"unit\":{},\"coordinateSystem\":{},\"profile\":{},\"buildOptions\":{{\"showTransparentBorders\":{},\"clipEnabled\":{}}},\"debugOptions\":{{\"debugOverlay\":{}}},\"outputOptions\":{{\"showParagraphMarks\":{},\"showControlCodes\":{},\"showTransparentBorders\":{},\"clipEnabled\":{},\"debugOverlay\":{}}},\"pageWidth\":{:.3},\"pageHeight\":{:.3},\"root\":",
             LAYER_TREE_SCHEMA.schema_version,
             LAYER_TREE_SCHEMA.schema_minor_version,
             LAYER_TREE_SCHEMA.schema_version,
@@ -42,6 +44,9 @@ impl PageLayerTree {
             json_escape(LAYER_TREE_SCHEMA.unit),
             json_escape(LAYER_TREE_SCHEMA.coordinate_system),
             json_escape(render_profile_str(self.profile)),
+            self.output_options.show_transparent_borders,
+            self.output_options.clip_enabled,
+            self.output_options.debug_overlay,
             self.output_options.show_paragraph_marks,
             self.output_options.show_control_codes,
             self.output_options.show_transparent_borders,
@@ -73,8 +78,10 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode) {
     let has_glyph_outline_color_layers = text_variant_features.has_glyph_outline_color_layers;
     let has_glyph_outline_bitmap = text_variant_features.has_glyph_outline_bitmap;
     let has_glyph_outline_svg = text_variant_features.has_glyph_outline_svg;
+    let has_glyph_outline_payload_resource_keys =
+        text_variant_features.has_glyph_outline_payload_resource_keys;
     let has_display_text = text_variant_features.has_display_text;
-    buf.push_str(",\"usedFeatures\":[\"text.paintStyle\",\"text.sourceTable\",\"text.sourceSpan\",\"text.v2.placement\",\"text.v2.clusters\",\"text.v2.diagnostics\",\"text.projectionKind\",\"text.legacyVisuals\"");
+    buf.push_str(",\"usedFeatures\":[\"text.paintStyle\",\"text.sourceTable\",\"text.sourceSpan\",\"text.v2.placement\",\"text.v2.clusters\",\"text.v2.diagnostics\",\"text.projectionKind\",\"text.legacyVisuals\",\"layer.optionMetadata\"");
     if has_display_text {
         buf.push_str(",\"text.displayText\"");
     }
@@ -92,6 +99,9 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode) {
     }
     if has_glyph_outline_svg {
         buf.push_str(",\"text.glyphOutline.svgGlyph\"");
+    }
+    if has_glyph_outline_payload_resource_keys {
+        buf.push_str(",\"text.glyphOutline.payloadResourceKey\"");
     }
     if has_variant_groups {
         buf.push_str(",\"text.variantGroups\"");
@@ -126,6 +136,9 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode) {
     if has_glyph_outline_svg {
         optional_features.push("text.glyphOutline.svgGlyph");
     }
+    if has_glyph_outline_payload_resource_keys {
+        optional_features.push("text.glyphOutline.payloadResourceKey");
+    }
     buf.push_str("],\"optionalFeatures\":[");
     for (idx, feature) in optional_features.iter().enumerate() {
         if idx > 0 {
@@ -133,7 +146,7 @@ fn write_text_export_metadata(buf: &mut String, root: &LayerNode) {
         }
         buf.push_str(&json_escape(feature));
     }
-    buf.push_str("],\"knownFeatures\":[\"fontResources\",\"fontResources.blobFaceSplit\",\"text.variantGroups\",\"text.shapeDiagnostics\",\"text.v2.diagnostics\",\"text.v2.slotDiagnostics\",\"text.v2.validationIssues\",\"text.lineBreakRiskTelemetry\",\"text.fallbackFreeStrictProfile\",\"text.glyphRun\",\"text.outlineGlyph\",\"text.glyphOutline\",\"text.glyphOutline.strictSidecar\",\"text.glyphOutline.monochromeFill\",\"text.glyphOutline.monochromeFillStroke\",\"text.glyphOutline.colorLayers\",\"text.glyphOutline.colorLayers.colrV0\",\"text.glyphOutline.colorLayers.colrV1\",\"text.glyphOutline.bitmapGlyph\",\"text.glyphOutline.svgGlyph\",\"text.specialVisualOps\",\"text.charOverlapOp\",\"text.controlMarkOp\",\"text.tabLeaderOp\",\"text.decorationOp\",\"text.displayText\",\"text.vertical.mixedPerGlyph\"],\"requiredFeatures\":[],\"text\":{\"defaultVariant\":\"textRun\",\"variants\":[\"textRun\"");
+    buf.push_str("],\"knownFeatures\":[\"fontResources\",\"fontResources.blobFaceSplit\",\"text.variantGroups\",\"text.shapeDiagnostics\",\"text.v2.diagnostics\",\"text.v2.slotDiagnostics\",\"text.v2.validationIssues\",\"text.lineBreakRiskTelemetry\",\"text.fallbackFreeStrictProfile\",\"text.glyphRun\",\"text.outlineGlyph\",\"text.glyphOutline\",\"text.glyphOutline.strictSidecar\",\"text.glyphOutline.monochromeFill\",\"text.glyphOutline.monochromeFillStroke\",\"text.glyphOutline.colorLayers\",\"text.glyphOutline.colorLayers.colrV0\",\"text.glyphOutline.colorLayers.colrV1\",\"text.glyphOutline.bitmapGlyph\",\"text.glyphOutline.svgGlyph\",\"text.glyphOutline.payloadResourceKey\",\"text.specialVisualOps\",\"text.charOverlapOp\",\"text.controlMarkOp\",\"text.tabLeaderOp\",\"text.decorationOp\",\"text.displayText\",\"text.vertical.mixedPerGlyph\"],\"requiredFeatures\":[],\"text\":{\"defaultVariant\":\"textRun\",\"variants\":[\"textRun\"");
     if has_glyph_runs {
         buf.push_str(",\"glyphRun\"");
     }
@@ -157,6 +170,7 @@ struct TextVariantFeatureFlags {
     has_glyph_outline_color_layers: bool,
     has_glyph_outline_bitmap: bool,
     has_glyph_outline_svg: bool,
+    has_glyph_outline_payload_resource_keys: bool,
     has_display_text: bool,
 }
 
@@ -196,6 +210,8 @@ fn collect_text_variant_features(root: &LayerNode) -> TextVariantFeatureFlags {
                             );
                             features.has_glyph_outline_svg |=
                                 matches!(outline.payload_kind, GlyphOutlinePayloadKind::SvgGlyph);
+                            features.has_glyph_outline_payload_resource_keys |=
+                                outline.has_payload_resource_key();
                         }
                         _ => {}
                     }
@@ -207,6 +223,7 @@ fn collect_text_variant_features(root: &LayerNode) -> TextVariantFeatureFlags {
             && features.has_glyph_outline_color_layers
             && features.has_glyph_outline_bitmap
             && features.has_glyph_outline_svg
+            && features.has_glyph_outline_payload_resource_keys
             && features.has_display_text
         {
             return features;
@@ -266,6 +283,10 @@ impl LayerNode {
         write_bbox(buf, self.bounds);
         if let Some(source_node_id) = self.source_node_id {
             let _ = write!(buf, ",\"sourceNodeId\":{}", source_node_id);
+        }
+        if let Some(layer) = self.layer {
+            buf.push_str(",\"layer\":");
+            write_render_layer_info(buf, layer);
         }
 
         match &self.kind {
@@ -483,6 +504,13 @@ impl PaintOp {
                     ",\"payloadKind\":{}",
                     json_escape(outline.payload_kind.as_str())
                 );
+                if let Some(payload_resource_key) = outline.payload_resource_key() {
+                    let _ = write!(
+                        buf,
+                        ",\"payloadResourceKey\":{}",
+                        json_escape(&payload_resource_key)
+                    );
+                }
                 buf.push_str(",\"paintStyle\":");
                 write_paint_text_style(buf, &outline.paint_style);
                 buf.push_str(",\"placement\":");
@@ -1202,6 +1230,7 @@ fn clip_kind_str(value: ClipKind) -> &'static str {
     match value {
         ClipKind::Body => "body",
         ClipKind::TableCell => "tableCell",
+        ClipKind::TextBox => "textBox",
         ClipKind::Generic => "generic",
     }
 }
@@ -2387,6 +2416,25 @@ fn text_wrap_str(value: crate::model::shape::TextWrap) -> &'static str {
     }
 }
 
+fn write_render_layer_info(buf: &mut String, layer: RenderLayerInfo) {
+    buf.push('{');
+    if let Some(text_wrap) = layer.text_wrap {
+        let _ = write!(
+            buf,
+            "\"textWrap\":{}",
+            json_escape(text_wrap_str(text_wrap))
+        );
+    } else {
+        buf.push_str("\"textWrap\":null");
+    }
+    let _ = write!(
+        buf,
+        ",\"zOrder\":{},\"stableIndex\":{}",
+        layer.z_order, layer.stable_index
+    );
+    buf.push('}');
+}
+
 fn render_profile_str(value: RenderProfile) -> &'static str {
     match value {
         RenderProfile::FastPreview => "fastPreview",
@@ -2406,27 +2454,35 @@ fn form_type_str(value: FormType) -> &'static str {
     }
 }
 
+fn json_escape(value: &str) -> String {
+    format!("\"{}\"", raw_json_escape(value))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::shape::TextWrap;
     use crate::paint::{
-        CacheHint, ClipKind, ColorGlyphFormat, ColorLayersPayload, ColorPaintGraphNode,
-        ColorPaintGraphNodeKind, ColorPaintGraphPayload, ColorPaintSolidPathNode,
-        FontColorGlyphRef, FontFaceKey, FontFallbackPolicyId, FontInstanceKey, GlyphCluster,
-        GlyphOutlineFillRule, GlyphOutlinePayloadKind, GlyphOutlineStrokeCap,
-        GlyphOutlineStrokeJoin, GlyphOutlineStrokeStyle, GlyphRange, GlyphRunDiagnostics,
-        GlyphRunOrientation, GlyphRunReplayEligibility, GroupKind, LayerAffineTransform,
+        BitmapGlyphFiltering, BitmapGlyphPayload, BitmapGlyphScalingPolicy, CacheHint, ClipKind,
+        ColorGlyphFormat, ColorLayersPayload, ColorPaintGraphNode, ColorPaintGraphNodeKind,
+        ColorPaintGraphPayload, ColorPaintSolidPathNode, FontColorGlyphRef, FontFaceKey,
+        FontFallbackPolicyId, FontInstanceKey, GlyphCluster, GlyphOutlineFillRule,
+        GlyphOutlinePayloadKind, GlyphOutlineStrokeCap, GlyphOutlineStrokeJoin,
+        GlyphOutlineStrokeStyle, GlyphRange, GlyphRunDiagnostics, GlyphRunOrientation,
+        GlyphRunReplayEligibility, GroupKind, ImageResourceId, LayerAffineTransform,
         LayerGlyphOutlinePaint, LayerGlyphOutlinePath, LayerGlyphRunPaint, LayerNode, LayerPoint,
         LayerVector, PageLayerTree, PaintTextStyle, PaintVariantMeta, ResolvedColor, ScriptTag,
-        ShapeKey, ShapingEngineId, TextDecorationKind, TextDirection, TextSourceId,
-        TextSourceRange, TextSourceSpan, TextVariantKind, TextVariantQuality, WritingMode,
+        ShapeKey, ShapingEngineId, SvgGlyphPayload, SvgResourceId, TextDecorationKind,
+        TextDirection, TextSourceId, TextSourceRange, TextSourceSpan, TextVariantKind,
+        TextVariantQuality, WritingMode,
     };
     use crate::renderer::composer::CharOverlapInfo;
     use crate::renderer::equation::layout::{LayoutBox, LayoutKind};
     use crate::renderer::render_tree::{
         EquationNode, FieldMarkerType, ImageNode, PathNode, PlaceholderNode, RawSvgNode,
-        TextRunNode,
+        RenderLayerInfo, TextRunNode,
     };
+    use serde_json::Value;
 
     #[test]
     fn serializes_text_and_shape_ops_for_browser_replay() {
@@ -2522,11 +2578,13 @@ mod tests {
             LAYER_TREE_SCHEMA.schema_version, LAYER_TREE_SCHEMA.schema_minor_version
         )));
         assert!(json.contains("\"resourceTableVersion\":1"));
-        assert!(json.contains("\"resourceTableMinorVersion\":3"));
-        assert!(json.contains("\"resourceTable\":{\"major\":1,\"minor\":3}"));
+        assert!(json.contains("\"resourceTableMinorVersion\":4"));
+        assert!(json.contains("\"resourceTable\":{\"major\":1,\"minor\":4}"));
         assert!(json.contains("\"unit\":\"px\""));
         assert!(json.contains("\"coordinateSystem\":\"page-top-left-y-down\""));
         assert!(json.contains("\"profile\":\"screen\""));
+        assert!(json.contains("\"buildOptions\":{"));
+        assert!(json.contains("\"debugOptions\":{"));
         assert!(json.contains("\"outputOptions\":{"));
         assert!(json.contains("\"clipEnabled\":true"));
         assert!(json.contains("\"type\":\"textRun\""));
@@ -2537,6 +2595,7 @@ mod tests {
         assert!(json.contains("\"clusterBasis\":\"legacyPosition\""));
         assert!(json.contains("\"clusters\":[{\"sourceRangeUtf8\""));
         assert!(json.contains("\"legacyVisuals\":{"));
+        assert!(json.contains("\"layer.optionMetadata\""));
         assert!(json.contains(&positions_json));
         assert!(!json.contains("\"displayText\""));
         assert!(!json.contains("\"displayPositions\""));
@@ -3152,11 +3211,179 @@ mod tests {
         let json = tree.to_json();
 
         assert!(json.contains("\"payloadKind\":\"colorLayers\""));
+        assert!(json.contains("\"payloadResourceKey\":\"glyphPayload:colorLayers"));
         assert!(json.contains("\"colorLayers\":{\"colorFormat\":\"colrV1\""));
         assert!(json.contains("\"kind\":\"solidPath\""));
         assert!(json.contains("\"colrv1Stage1GraphContract\":true"));
         assert!(json.contains("\"text.glyphOutline.colorLayers\""));
         assert!(json.contains("\"text.glyphOutline.colorLayers.colrV1\""));
+        assert!(json.contains("\"text.glyphOutline.payloadResourceKey\""));
+    }
+
+    #[test]
+    fn serializes_bitmap_and_svg_glyph_payload_resource_keys() {
+        let source = TextSourceSpan {
+            id: TextSourceId(0),
+            utf8_range: TextSourceRange::new(0, 1),
+            utf16_range: TextSourceRange::new(0, 1),
+            stable_source_key: None,
+        };
+        let diagnostics = GlyphRunDiagnostics {
+            quality: TextVariantQuality::Exact,
+            replay_eligibility: GlyphRunReplayEligibility::Portable,
+            strict_visual_eligible: true,
+            max_origin_delta_px: 0.0,
+            max_advance_delta_px: 0.0,
+            max_residual_after_adjustment_px: 0.0,
+            cluster_mismatch_count: 0,
+            missing_glyph_count: 0,
+            used_fallback_font_count: 0,
+            reason: None,
+        };
+        let placement = crate::paint::TextRunPlacement {
+            run_to_page: LayerAffineTransform {
+                a: 1.0,
+                b: 0.0,
+                c: 0.0,
+                d: 1.0,
+                e: 0.0,
+                f: 12.0,
+            },
+            baseline_y: 0.0,
+        };
+        let text_style = PaintTextStyle::from(&TextStyle {
+            font_family: "Test".to_string(),
+            font_size: 12.0,
+            shade_color: 0x00FF_FFFF,
+            ..Default::default()
+        });
+        let incomplete_bitmap_outline = LayerGlyphOutlinePaint {
+            source: source.clone(),
+            variant: PaintVariantMeta {
+                equivalence_group: "text-invalid".to_string(),
+                variant_id: "bitmapGlyphInvalid".to_string(),
+                variant_kind: TextVariantKind::GlyphOutline,
+                part_index: 0,
+                part_count: 1,
+                is_default_fallback: false,
+                requires: vec!["text.glyphOutline.bitmapGlyph".to_string()],
+                quality: Some(TextVariantQuality::Exact),
+                anchor_op_id: Some("text-invalid".to_string()),
+                local_paint_order: Some(0),
+            },
+            payload_kind: GlyphOutlinePayloadKind::BitmapGlyph,
+            color_layers: None,
+            bitmap_glyph: Some(BitmapGlyphPayload {
+                image_ref: ImageResourceId(7),
+                source_range_utf8: TextSourceRange::new(0, 1),
+                glyph_range: GlyphRange::new(0, 1),
+                placement: BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+                alpha_premultiplied: true,
+                scaling_policy: BitmapGlyphScalingPolicy::BackendDefault,
+                filtering: BitmapGlyphFiltering::Linear,
+                transform_to_run: None,
+            }),
+            svg_glyph: None,
+            paint_style: text_style.clone(),
+            placement,
+            paths: Vec::new(),
+            stroke: None,
+            diagnostics: diagnostics.clone(),
+        };
+        assert!(!incomplete_bitmap_outline.has_payload_resource_key());
+        assert!(incomplete_bitmap_outline.payload_resource_key().is_none());
+        let bitmap_outline = PaintOp::GlyphOutline {
+            bbox: BoundingBox::new(0.0, 0.0, 20.0, 20.0),
+            outline: Box::new(LayerGlyphOutlinePaint {
+                source: source.clone(),
+                variant: PaintVariantMeta {
+                    equivalence_group: "text-0".to_string(),
+                    variant_id: "bitmapGlyph".to_string(),
+                    variant_kind: TextVariantKind::GlyphOutline,
+                    part_index: 0,
+                    part_count: 1,
+                    is_default_fallback: false,
+                    requires: vec!["text.glyphOutline.bitmapGlyph".to_string()],
+                    quality: Some(TextVariantQuality::Exact),
+                    anchor_op_id: Some("text-0".to_string()),
+                    local_paint_order: Some(0),
+                },
+                payload_kind: GlyphOutlinePayloadKind::BitmapGlyph,
+                color_layers: None,
+                bitmap_glyph: Some(BitmapGlyphPayload {
+                    image_ref: ImageResourceId(7),
+                    source_range_utf8: TextSourceRange::new(0, 1),
+                    glyph_range: GlyphRange::new(0, 1),
+                    placement: BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+                    alpha_premultiplied: true,
+                    scaling_policy: BitmapGlyphScalingPolicy::SourceExact,
+                    filtering: BitmapGlyphFiltering::Linear,
+                    transform_to_run: None,
+                }),
+                svg_glyph: None,
+                paint_style: text_style.clone(),
+                placement,
+                paths: Vec::new(),
+                stroke: None,
+                diagnostics: diagnostics.clone(),
+            }),
+        };
+        let svg_outline = PaintOp::GlyphOutline {
+            bbox: BoundingBox::new(20.0, 0.0, 20.0, 20.0),
+            outline: Box::new(LayerGlyphOutlinePaint {
+                source,
+                variant: PaintVariantMeta {
+                    equivalence_group: "text-1".to_string(),
+                    variant_id: "svgGlyph".to_string(),
+                    variant_kind: TextVariantKind::GlyphOutline,
+                    part_index: 0,
+                    part_count: 1,
+                    is_default_fallback: false,
+                    requires: vec!["text.glyphOutline.svgGlyph".to_string()],
+                    quality: Some(TextVariantQuality::Exact),
+                    anchor_op_id: Some("text-1".to_string()),
+                    local_paint_order: Some(0),
+                },
+                payload_kind: GlyphOutlinePayloadKind::SvgGlyph,
+                color_layers: None,
+                bitmap_glyph: None,
+                svg_glyph: Some(SvgGlyphPayload {
+                    svg_ref: SvgResourceId(7),
+                    source_range_utf8: TextSourceRange::new(0, 1),
+                    glyph_range: GlyphRange::new(0, 1),
+                    view_box: BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+                    intrinsic_size: Some(LayerVector { dx: 10.0, dy: 10.0 }),
+                    static_sanitized: true,
+                    script_allowed: false,
+                    animation_allowed: false,
+                    external_resources_allowed: false,
+                    interactivity_allowed: false,
+                    transform_to_run: None,
+                }),
+                paint_style: text_style,
+                placement,
+                paths: Vec::new(),
+                stroke: None,
+                diagnostics,
+            }),
+        };
+        let tree = PageLayerTree::new(
+            120.0,
+            80.0,
+            LayerNode::leaf(
+                BoundingBox::new(0.0, 0.0, 120.0, 80.0),
+                None,
+                vec![bitmap_outline, svg_outline],
+            ),
+        );
+
+        let json = tree.to_json();
+
+        assert!(json.contains("\"payloadResourceKey\":\"glyphPayload:bitmapGlyph:imageRef:7"));
+        assert!(json.contains("\"payloadResourceKey\":\"glyphPayload:svgGlyph:svgRef:7"));
+        assert!(json.contains("\"strictVisualContract\":true"));
+        assert!(json.contains("\"staticSanitizedContract\":true"));
+        assert!(json.contains("\"text.glyphOutline.payloadResourceKey\""));
     }
 
     #[test]
@@ -3213,6 +3440,7 @@ mod tests {
                             control_index: None,
                             cell_index: None,
                             cell_para_index: None,
+                            note_ref: None,
                         },
                     },
                     PaintOp::Placeholder {
@@ -3263,17 +3491,40 @@ mod tests {
             vec![clip],
             CacheHint::StaticSubtree,
             GroupKind::Column(2),
-        );
+        )
+        .with_layer(Some(RenderLayerInfo::new(
+            Some(TextWrap::BehindText),
+            7,
+            42,
+        )));
 
         let json = PageLayerTree::new(10.0, 10.0, root).to_json();
 
         assert!(json.contains("\"groupKind\":{\"kind\":\"column\",\"index\":2}"));
         assert!(json.contains("\"cacheHint\":\"staticSubtree\""));
         assert!(json.contains("\"clipKind\":\"body\""));
+        assert!(json
+            .contains("\"layer\":{\"textWrap\":\"behindText\",\"zOrder\":7,\"stableIndex\":42}"));
     }
 
     #[test]
-    fn serializes_layer_output_options() {
+    fn serializes_textbox_clip_kind() {
+        let leaf = LayerNode::leaf(BoundingBox::new(0.0, 0.0, 10.0, 10.0), None, Vec::new());
+        let root = LayerNode::clip_rect(
+            BoundingBox::new(0.0, 0.0, 10.0, 10.0),
+            None,
+            BoundingBox::new(1.0, 1.0, 8.0, 8.0),
+            leaf,
+            ClipKind::TextBox,
+        );
+
+        let json = PageLayerTree::new(10.0, 10.0, root).to_json();
+
+        assert!(json.contains("\"clipKind\":\"textBox\""));
+    }
+
+    #[test]
+    fn serializes_layer_option_metadata() {
         let root = LayerNode::leaf(BoundingBox::new(0.0, 0.0, 10.0, 10.0), None, Vec::new());
         let json = PageLayerTree::new(10.0, 10.0, root)
             .with_output_options(crate::paint::LayerOutputOptions {
@@ -3285,14 +3536,33 @@ mod tests {
             })
             .to_json();
 
-        assert!(json.contains("\"showParagraphMarks\":true"));
-        assert!(json.contains("\"showControlCodes\":true"));
-        assert!(json.contains("\"showTransparentBorders\":true"));
-        assert!(json.contains("\"clipEnabled\":false"));
-        assert!(json.contains("\"debugOverlay\":true"));
-    }
-}
+        let parsed: Value = serde_json::from_str(&json).expect("PageLayerTree JSON");
 
-fn json_escape(value: &str) -> String {
-    format!("\"{}\"", raw_json_escape(value))
+        assert_eq!(
+            parsed["buildOptions"]["showTransparentBorders"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(parsed["buildOptions"]["clipEnabled"].as_bool(), Some(false));
+        assert_eq!(parsed["debugOptions"]["debugOverlay"].as_bool(), Some(true));
+        assert_eq!(
+            parsed["outputOptions"]["showParagraphMarks"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            parsed["outputOptions"]["showControlCodes"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            parsed["outputOptions"]["showTransparentBorders"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(
+            parsed["outputOptions"]["clipEnabled"].as_bool(),
+            Some(false)
+        );
+        assert_eq!(
+            parsed["outputOptions"]["debugOverlay"].as_bool(),
+            Some(true)
+        );
+    }
 }

@@ -5,8 +5,8 @@ import { CaretRenderer } from './caret-renderer';
 import { FieldMarkerRenderer } from './field-marker-renderer';
 import { SelectionRenderer } from './selection-renderer';
 import { CommandHistory } from './history';
-import { DeleteSelectionCommand, ApplyCharFormatCommand, SnapshotCommand } from './command';
-import type { OperationDescriptor } from './command';
+import { DeleteSelectionCommand, ApplyCharFormatCommand, ApplyParaFormatCommand, SnapshotCommand } from './command';
+import type { OperationDescriptor, ParaFormatTarget, RefreshPolicy } from './command';
 import { VirtualScroll } from '@/view/virtual-scroll';
 import { ViewportManager } from '@/view/viewport-manager';
 import type { DocumentPosition, CharProperties, ParaProperties, CursorRect, FormObjectHitResult } from '@/core/types';
@@ -17,17 +17,23 @@ import type { CommandPalette } from '@/ui/command-palette';
 import type { CellSelectionRenderer } from './cell-selection-renderer';
 import type { TableObjectRenderer } from './table-object-renderer';
 import type { TableResizeRenderer, BorderEdge } from './table-resize-renderer';
-import type { CellBbox } from '@/core/types';
+import type { CellBbox, CellPathLike } from '@/core/types';
 import * as _mouse from './input-handler-mouse';
 import * as _table from './input-handler-table';
 import * as _keyboard from './input-handler-keyboard';
 import * as _text from './input-handler-text';
 import * as _picture from './input-handler-picture';
+import { isPageLocalTextEditCommand } from './input-edit-invalidation';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const DRAG_SCROLL_EDGE_PX = 48;
 const DRAG_SCROLL_MIN_STEP_PX = 2;
 const DRAG_SCROLL_MAX_STEP_PX = 20;
+const PX_TO_RAW_2X = 150;
+
+function pxToRaw2x(px: number): number {
+  return Math.round(px * PX_TO_RAW_2X);
+}
 
 function createOverlaySvg(): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -146,7 +152,7 @@ export class InputHandler {
   private imagePlacementOverlay: HTMLDivElement | null = null;
 
   // 도형/글상자 삽입 배치 모드 상태
-  private shapePlacementType: string = 'rectangle'; // 'rectangle' | 'ellipse' | 'line'
+  private shapePlacementType: string = 'rectangle'; // 'rectangle' | 'ellipse' | 'line' | 'arc' | 'polygon' | 'textbox' | 'connector-*'
   private textboxPlacementMode = false;
   private textboxPlacementDrag: {
     startClientX: number; startClientY: number;
@@ -171,7 +177,7 @@ export class InputHandler {
   private isPictureResizeDragging = false;
   private pictureResizeState: {
     dir: string;
-    ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' };
+    ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group'; cellPath?: CellPathLike; headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } };
     origWidth: number;
     origHeight: number;
     origHorzOffset?: number;
@@ -187,7 +193,7 @@ export class InputHandler {
   // 그림/글상자 이동 드래그 상태
   private isPictureMoveDragging = false;
   private pictureMoveState: {
-    ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' };
+    ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group'; cellPath?: CellPathLike; headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } };
     origHorzOffset: number;
     origVertOffset: number;
     startPageX: number;
@@ -204,7 +210,7 @@ export class InputHandler {
   // 그림/글상자 회전 드래그 상태
   private isPictureRotateDragging = false;
   private pictureRotateState: {
-    ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' };
+    ref: { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group'; cellPath?: CellPathLike; headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } };
     origAngle: number;      // 드래그 시작 시 원래 회전각 (도)
     centerX: number;        // 도형 중심 (scroll-content 좌표, px)
     centerY: number;
@@ -509,7 +515,9 @@ export class InputHandler {
 
   /** 글상자 배치 모드 진입: 메뉴에서 호출. 마우스로 영역 지정 대기 */
   enterTextboxPlacementMode(): void {
-    this.shapePlacementType = 'rectangle';
+    // 글상자는 백엔드에서 text_box(내부 문단)를 가진 도형으로 생성되어야 한다.
+    // 'rectangle'을 전달하면 text_box 없는 Rectangle이 만들어져 커서 진입·타이핑·붙여넣기가 모두 실패한다(#1280).
+    this.shapePlacementType = 'textbox';
     this.textboxPlacementMode = true;
     this.textboxPlacementDrag = null;
     this.container.style.cursor = 'crosshair';
@@ -868,9 +876,11 @@ export class InputHandler {
     } catch { /* 페이지 정보 없으면 그대로 */ }
 
     // 도형 위치 계산 (종이 기준 오프셋, HWPUNIT)
+    // [Task #1280 v2] 글상자도 floating(InFrontOfText)으로 삽입하므로 종이 기준 오프셋을
+    //   계산한다(기존 사각형 등과 동일 경로). 수정 전엔 글상자만 인라인이라 offset=0 으로 스킵했다.
     let horzOffset = 0;
     let vertOffset = 0;
-    if (this.shapePlacementType !== 'textbox') {
+    {
       // 드래그 영역 중심점의 화면 좌표
       const centerX = (drag.startClientX + drag.currentClientX) / 2;
       const centerY = (drag.startClientY + drag.currentClientY) / 2;
@@ -882,7 +892,6 @@ export class InputHandler {
         const cY = centerY - contentRect.top;
         const pageIdx = this.virtualScroll.getPageAtPoint(cX, cY);
         const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
-        const pageDisplayWidth = this.virtualScroll.getPageWidth(pageIdx);
         const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
         // 종이 좌표 (px → HWPUNIT)
         const paperX = ((cX - pageLeft) / zoom) * 75;
@@ -903,6 +912,10 @@ export class InputHandler {
 
     // WASM 호출로 도형 생성
     try {
+      // [Task #1280 v2] 삽입 글상자는 한컴 정답값 floating(treat_as_char=false) + 글앞으로
+      //   (InFrontOfText)로 생성한다. 그래야 글상자 위 어울림(Square) 이미지가 글상자 뒤로 가고
+      //   (plane 3>2), 로드된 기존 글상자(이미 floating)와도 정합한다.
+      const isTextbox = this.shapePlacementType === 'textbox';
       const result = this.wasm.createShapeControl({
         sectionIdx: sec,
         paraIdx,
@@ -914,6 +927,7 @@ export class InputHandler {
         shapeType: this.shapePlacementType,
         lineFlipX,
         lineFlipY,
+        ...(isTextbox ? { treatAsChar: false, textWrap: 'InFrontOfText' } : {}),
       });
       if (result.ok) {
         this.eventBus.emit('document-changed');
@@ -943,6 +957,11 @@ export class InputHandler {
   /** 그림 객체 선택 모드에서 방향키로 그림 위치 이동 */
   private moveSelectedPicture(key: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'): void {
     _table.moveSelectedPicture.call(this, key);
+  }
+
+  /** 그림 객체 선택 모드에서 Shift+방향키로 개체 크기 조절 (#1231) */
+  private resizeSelectedPicture(key: 'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'): void {
+    _picture.resizeSelectedPicture.call(this, key);
   }
 
   /** 마우스 드래그로 표 이동 — 드래그 중 갱신 */
@@ -997,6 +1016,35 @@ export class InputHandler {
     }
   }
 
+  /** 화면 좌표에서 각주/미주 내부 hitTest 결과를 반환한다. */
+  private footnoteHitTestFromClientPoint(clientX: number, clientY: number): {
+    pageIdx: number;
+    hit: {
+      hit: boolean;
+      fnParaIndex?: number;
+      charOffset?: number;
+      footnoteIndex?: number;
+      cursorRect?: { pageIndex: number; x: number; y: number; height: number };
+    };
+  } | null {
+    const zoom = this.viewportManager.getZoom();
+    const scrollContent = this.container.querySelector('#scroll-content');
+    if (!scrollContent) return null;
+    const contentRect = scrollContent.getBoundingClientRect();
+    const contentX = clientX - contentRect.left;
+    const contentY = clientY - contentRect.top;
+    const pageIdx = this.virtualScroll.getPageAtPoint(contentX, contentY);
+    const pageOffset = this.virtualScroll.getPageOffset(pageIdx);
+    const pageLeft = this.virtualScroll.getPageLeftResolved(pageIdx, scrollContent.clientWidth);
+    const pageX = (contentX - pageLeft) / zoom;
+    const pageY = (contentY - pageOffset) / zoom;
+    try {
+      return { pageIdx, hit: this.wasm.hitTestInFootnote(pageIdx, pageX, pageY) };
+    } catch {
+      return null;
+    }
+  }
+
   /** 텍스트 선택 드래그를 시작한다 */
   private startTextSelectionDrag(e: MouseEvent): void {
     this.isDragging = true;
@@ -1015,6 +1063,20 @@ export class InputHandler {
   /** 마지막 포인터 좌표 기준으로 드래그 선택 focus를 갱신한다 */
   private updateTextSelectionDragFromPointer(): void {
     if (!this.isDragging) return;
+
+    if (this.cursor.isInFootnote()) {
+      const fnHit = this.footnoteHitTestFromClientPoint(this.dragLastClientX, this.dragLastClientY);
+      if (
+        fnHit?.hit.hit &&
+        fnHit.hit.footnoteIndex === this.cursor.fnFootnoteIndex &&
+        fnHit.hit.fnParaIndex !== undefined &&
+        fnHit.hit.charOffset !== undefined
+      ) {
+        this.cursor.setFnCursorPosition(fnHit.hit.fnParaIndex, fnHit.hit.charOffset);
+        this.updateCaretDuringDrag();
+      }
+      return;
+    }
 
     const hit = this.hitTestFromClientPoint(this.dragLastClientX, this.dragLastClientY);
     if (hit && hit.paragraphIndex < 0xFFFFFF00) {
@@ -1397,39 +1459,190 @@ export class InputHandler {
 
   /** 커서 위치 문단에 문단 서식을 적용한다 */
   private applyParaFormat(props: Record<string, unknown>): void {
-    const pos = this.cursor.getPosition();
-    const propsJson = JSON.stringify(props);
     try {
-      if (pos.parentParaIndex !== undefined) {
-        // 셀 내 선택이 있으면 선택 범위 내 모든 셀 문단에 적용
-        const sel = this.cursor.getSelectionOrdered();
-        if (sel && sel.start.cellParaIndex !== undefined && sel.end.cellParaIndex !== undefined) {
-          for (let cp = sel.start.cellParaIndex; cp <= sel.end.cellParaIndex; cp++) {
-            this.wasm.applyParaFormatInCell(
-              pos.sectionIndex, pos.parentParaIndex, pos.controlIndex!,
-              pos.cellIndex!, cp, propsJson,
-            );
-          }
-        } else {
-          this.wasm.applyParaFormatInCell(
-            pos.sectionIndex, pos.parentParaIndex, pos.controlIndex!,
-            pos.cellIndex!, pos.cellParaIndex!, propsJson,
-          );
-        }
-      } else {
-        // 선택이 있으면 선택 범위 내 모든 문단에 적용
-        const sel = this.cursor.getSelectionOrdered();
-        if (sel) {
-          for (let p = sel.start.paragraphIndex; p <= sel.end.paragraphIndex; p++) {
-            this.wasm.applyParaFormat(pos.sectionIndex, p, propsJson);
-          }
-        } else {
-          this.wasm.applyParaFormat(pos.sectionIndex, pos.paragraphIndex, propsJson);
-        }
-      }
-      this.afterEdit();
+      const targets = this.getParaFormatTargetsAtCursor();
+      this.executeParaFormatCommand(targets, props);
     } catch (err) {
       console.warn('[InputHandler] applyParaFormat 실패:', err);
+    }
+  }
+
+  private executeParaFormatCommand(targets: ParaFormatTarget[], props: Record<string, unknown>): boolean {
+    if (targets.length === 0) {
+      console.info('[InputHandler] 문단 서식 Undo/Redo: unsupported context');
+      return false;
+    }
+    const cmd = new ApplyParaFormatCommand(targets, props as Partial<ParaProperties>, this.cursor.getPosition());
+    this.executeOperation({ kind: 'command', command: cmd });
+    return true;
+  }
+
+  private getParaFormatTargetsAtCursor(): ParaFormatTarget[] {
+    const sel = this.cursor.getSelectionOrdered();
+    if (sel) return this.getParaFormatTargetsForRange(sel.start, sel.end);
+    const pos = this.cursor.getPosition();
+    return this.getParaFormatTargetsForRange(pos, pos);
+  }
+
+  private getParaFormatTargetsForRange(start: DocumentPosition, end: DocumentPosition): ParaFormatTarget[] {
+    if (this.cursor.isInHeaderFooter() || this.cursor.isInFootnote()) return [];
+    if (start.isTextBox || end.isTextBox) return [];
+    if ((start.cellPath?.length ?? 0) > 1 || (end.cellPath?.length ?? 0) > 1) return [];
+
+    const startInCell = start.parentParaIndex !== undefined;
+    const endInCell = end.parentParaIndex !== undefined;
+    if (startInCell || endInCell) {
+      if (!startInCell || !endInCell) return [];
+      if (start.sectionIndex !== end.sectionIndex) return [];
+      if (start.parentParaIndex !== end.parentParaIndex) return [];
+      const startPath = start.cellPath?.[0];
+      const endPath = end.cellPath?.[0];
+      const startControl = startPath?.controlIndex ?? start.controlIndex;
+      const endControl = endPath?.controlIndex ?? end.controlIndex;
+      const startCell = startPath?.cellIndex ?? start.cellIndex;
+      const endCell = endPath?.cellIndex ?? end.cellIndex;
+      const startCellPara = startPath?.cellParaIndex ?? start.cellParaIndex;
+      const endCellPara = endPath?.cellParaIndex ?? end.cellParaIndex;
+      if (
+        startControl === undefined ||
+        endControl === undefined ||
+        startCell === undefined ||
+        endCell === undefined ||
+        startCellPara === undefined ||
+        endCellPara === undefined ||
+        startControl !== endControl ||
+        startCell !== endCell
+      ) {
+        return [];
+      }
+      const from = Math.min(startCellPara, endCellPara);
+      const to = Math.max(startCellPara, endCellPara);
+      const targets: ParaFormatTarget[] = [];
+      for (let cp = from; cp <= to; cp++) {
+        targets.push({
+          kind: 'cell',
+          sec: start.sectionIndex,
+          parentPara: start.parentParaIndex!,
+          controlIdx: startControl,
+          cellIdx: startCell,
+          cellParaIdx: cp,
+        });
+      }
+      return targets;
+    }
+
+    if (start.sectionIndex !== end.sectionIndex) return [];
+    const from = Math.min(start.paragraphIndex, end.paragraphIndex);
+    const to = Math.max(start.paragraphIndex, end.paragraphIndex);
+    const targets: ParaFormatTarget[] = [];
+    for (let p = from; p <= to; p++) {
+      targets.push({ kind: 'body', sec: start.sectionIndex, para: p });
+    }
+    return targets;
+  }
+
+  /** 한컴식 Shift+Tab: 현재 커서 x 위치를 기준으로 문단 내어쓰기를 설정한다. */
+  applyHangingIndentAtCursor(): boolean {
+    if (this.cursor.isInHeaderFooter() || this.cursor.isInFootnote()) {
+      console.info('[InputHandler] Shift+Tab hanging indent: unsupported note/header context');
+      return false;
+    }
+
+    const pos = this.cursor.getPosition();
+    if (pos.isTextBox || (pos.cellPath?.length ?? 0) > 1) {
+      console.info('[InputHandler] Shift+Tab hanging indent: unsupported nested/textbox context');
+      return false;
+    }
+
+    try {
+      let cursorRect: CursorRect | null = this.cursor.getRect();
+      let lineStartRect: CursorRect;
+
+      if (pos.parentParaIndex !== undefined) {
+        const pathEntry = pos.cellPath?.[0];
+        const controlIndex = pathEntry?.controlIndex ?? pos.controlIndex;
+        const cellIndex = pathEntry?.cellIndex ?? pos.cellIndex;
+        const cellParaIndex = pathEntry?.cellParaIndex ?? pos.cellParaIndex;
+
+        if (controlIndex === undefined || cellIndex === undefined || cellParaIndex === undefined) {
+          console.warn('[InputHandler] Shift+Tab hanging indent: incomplete cell position', pos);
+          return false;
+        }
+
+        const lineInfo = this.wasm.getLineInfoInCell(
+          pos.sectionIndex,
+          pos.parentParaIndex,
+          controlIndex,
+          cellIndex,
+          cellParaIndex,
+          pos.charOffset,
+        );
+
+        if (pos.cellPath?.length === 1) {
+          const pathJson = JSON.stringify(pos.cellPath);
+          lineStartRect = this.wasm.getCursorRectByPath(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            pathJson,
+            lineInfo.charStart,
+          );
+          cursorRect ??= this.wasm.getCursorRectByPath(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            pathJson,
+            pos.charOffset,
+          );
+        } else {
+          lineStartRect = this.wasm.getCursorRectInCell(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            controlIndex,
+            cellIndex,
+            cellParaIndex,
+            lineInfo.charStart,
+          );
+          cursorRect ??= this.wasm.getCursorRectInCell(
+            pos.sectionIndex,
+            pos.parentParaIndex,
+            controlIndex,
+            cellIndex,
+            cellParaIndex,
+            pos.charOffset,
+          );
+        }
+
+        const hangingPx = Math.max(0, cursorRect.x - lineStartRect.x);
+        this.executeParaFormatCommand(
+          [{
+            kind: 'cell',
+            sec: pos.sectionIndex,
+            parentPara: pos.parentParaIndex,
+            controlIdx: controlIndex,
+            cellIdx: cellIndex,
+            cellParaIdx: cellParaIndex,
+          }],
+          { indent: -pxToRaw2x(hangingPx) },
+        );
+        return true;
+      }
+
+      const lineInfo = this.wasm.getLineInfo(pos.sectionIndex, pos.paragraphIndex, pos.charOffset);
+      lineStartRect = this.wasm.getCursorRect(
+        pos.sectionIndex,
+        pos.paragraphIndex,
+        lineInfo.charStart,
+      );
+      cursorRect ??= this.wasm.getCursorRect(pos.sectionIndex, pos.paragraphIndex, pos.charOffset);
+
+      const hangingPx = Math.max(0, cursorRect.x - lineStartRect.x);
+      this.executeParaFormatCommand(
+        [{ kind: 'body', sec: pos.sectionIndex, para: pos.paragraphIndex }],
+        { indent: -pxToRaw2x(hangingPx) },
+      );
+      return true;
+    } catch (err) {
+      console.warn('[InputHandler] Shift+Tab hanging indent 실패:', err);
+      return false;
     }
   }
 
@@ -1445,8 +1658,16 @@ export class InputHandler {
     // 문단 속성 (눈금자 마커용) + 스타일
     try {
       const pos = this.cursor.getPosition();
-      const inCell = pos.parentParaIndex !== undefined;
-      const paraProps = inCell
+      const inFootnote = this.cursor.isInFootnote();
+      const inCell = !inFootnote && pos.parentParaIndex !== undefined;
+      const paraProps = inFootnote
+        ? this.wasm.getParaPropertiesInFootnote(
+            this.cursor.fnSectionIdx,
+            this.cursor.fnParaIdx,
+            this.cursor.fnControlIdx,
+            this.cursor.fnInnerParaIdx,
+          )
+        : inCell
         ? this.wasm.getCellParaPropertiesAt(
             pos.sectionIndex, pos.parentParaIndex!, pos.controlIndex!,
             pos.cellIndex!, pos.cellParaIndex!,
@@ -1534,13 +1755,14 @@ export class InputHandler {
   executeOperation(desc: OperationDescriptor): void {
     switch (desc.kind) {
       case 'command': {
+        const beforePos = this.cursor.getPosition();
         const newPos = this.history.execute(desc.command, this.wasm);
-        // 글자 서식 변경은 문서 구조 불변 → 선택 영역 유지
-        if (desc.command.type !== 'applyCharFormat') {
+        // 글자/문단 서식 변경은 문서 구조 불변 → 선택 영역 유지
+        if (desc.command.type !== 'applyCharFormat' && desc.command.type !== 'applyParaFormat') {
           this.cursor.moveTo(newPos);
           this.cursor.resetPreferredX();
         }
-        this.afterEdit();
+        this.refreshAfterOperation(desc.meta?.refresh, 'auto', desc.command.type, beforePos, newPos);
         break;
       }
       case 'snapshot': {
@@ -1549,11 +1771,13 @@ export class InputHandler {
         const newPos = this.history.execute(cmd, this.wasm);
         this.cursor.moveTo(newPos);
         this.cursor.resetPreferredX();
-        this.afterEdit();
+        this.refreshAfterOperation(desc.meta?.refresh, 'full', desc.operationType, cursorBefore, newPos);
         break;
       }
       case 'record': {
-        this.history.recordWithoutExecute(desc.command);
+        const pos = this.cursor.getPosition();
+        this.history.recordWithoutExecute(desc.command, this.wasm);
+        this.refreshAfterOperation(desc.meta?.refresh, 'none', desc.command.type, pos, pos);
         break;
       }
     }
@@ -1610,6 +1834,63 @@ export class InputHandler {
     this.eventBus.emit('document-mutated', 'input-handler-edit');
     this.eventBus.emit('document-changed');
     this.updateCaret();
+  }
+
+  /** 셀 내부 단일 텍스트 편집 후 처리: 현재 페이지 canvas만 갱신한다. */
+  private afterPageLocalEdit(): void {
+    this.lastCellKey = null;
+    this.eventBus.emit('document-mutated', 'input-handler-edit');
+    const pageIndex = this.cursor.getRect()?.pageIndex;
+    if (typeof pageIndex === 'number' && Number.isInteger(pageIndex) && pageIndex >= 0) {
+      this.eventBus.emit('document-page-invalidated', { pageIndex, reason: 'text-edit' });
+    } else {
+      this.eventBus.emit('document-changed');
+    }
+    this.updateCaret();
+  }
+
+  /** raw IME/iOS 텍스트 입력처럼 command를 거치지 않는 경로의 갱신 라우터. */
+  private afterTextInputEdit(beforePos: DocumentPosition, afterPos: DocumentPosition): void {
+    if (this.shouldUsePageLocalRefresh('insertText', beforePos, afterPos)) {
+      this.afterPageLocalEdit();
+    } else {
+      this.afterEdit();
+    }
+  }
+
+  private refreshAfterOperation(
+    requested: RefreshPolicy | undefined,
+    fallback: RefreshPolicy,
+    commandType: string,
+    beforePos: DocumentPosition,
+    afterPos: DocumentPosition,
+  ): void {
+    const policy = requested ?? fallback;
+    switch (policy) {
+      case 'none':
+        return;
+      case 'selectionOnly':
+        this.updateCaret();
+        return;
+      case 'pageLocal':
+        this.afterPageLocalEdit();
+        return;
+      case 'full':
+        this.afterEdit();
+        return;
+      case 'auto':
+      default:
+        if (this.shouldUsePageLocalRefresh(commandType, beforePos, afterPos)) {
+          this.afterPageLocalEdit();
+        } else {
+          this.afterEdit();
+        }
+    }
+  }
+
+  private shouldUsePageLocalRefresh(commandType: string, beforePos: DocumentPosition, afterPos: DocumentPosition): boolean {
+    if (this.cursor.isInHeaderFooter() || this.cursor.isInFootnote()) return false;
+    return isPageLocalTextEditCommand(commandType, beforePos, afterPos);
   }
 
   /**
@@ -1790,6 +2071,27 @@ export class InputHandler {
 
   /** 선택 영역 하이라이트를 갱신한다 */
   private updateSelection(): void {
+    const fnSel = this.cursor.getFootnoteSelectionOrdered();
+    if (fnSel) {
+      const { start, end, pageNum, footnoteIndex } = fnSel;
+      const zoom = this.viewportManager.getZoom();
+      try {
+        const rects = this.wasm.getSelectionRectsInFootnote(
+          pageNum,
+          footnoteIndex,
+          start.fnParaIdx,
+          start.charOffset,
+          end.fnParaIdx,
+          end.charOffset,
+        );
+        this.selectionRenderer.render(rects, zoom);
+      } catch (e) {
+        console.warn('[InputHandler] getSelectionRectsInFootnote 실패:', e);
+        this.selectionRenderer.clear();
+      }
+      return;
+    }
+
     const sel = this.cursor.getSelectionOrdered();
     if (!sel) {
       this.selectionRenderer.clear();
@@ -1886,7 +2188,7 @@ export class InputHandler {
   /** 그림/글상자 클릭 감지 — getPageControlLayout으로 개체 bbox 겹침 확인 */
   private findPictureAtClick(
     pageIdx: number, pageX: number, pageY: number,
-  ): { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line'; x1?: number; y1?: number; x2?: number; y2?: number } | null {
+  ): { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line'; cellIdx?: number; cellParaIdx?: number; noteRef?: any; x1?: number; y1?: number; x2?: number; y2?: number } | null {
     return _picture.findPictureAtClick.call(this, pageIdx, pageX, pageY);
   }
 
@@ -2136,7 +2438,7 @@ export class InputHandler {
   isInPictureObjectSelection(): boolean { return this.cursor.isInPictureObjectSelection(); }
 
   /** 선택된 그림/글상자 참조 반환 ([Task #825] headerFooter 동반 시 머리말/꼬리말 picture marker) */
-  getSelectedPictureRef(): { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line'; cellIdx?: number; cellParaIdx?: number; headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } } | null { return this.cursor.getSelectedPictureRef(); }
+  getSelectedPictureRef(): { sec: number; ppi: number; ci: number; type: 'image' | 'shape' | 'equation' | 'group' | 'line'; cellIdx?: number; cellParaIdx?: number; outerTableControlIdx?: number; cellPath?: Array<{ controlIndex: number; cellIndex: number; cellParaIndex: number }>; noteRef?: any; headerFooter?: { kind: 'header' | 'footer'; outerParaIdx: number; outerControlIdx: number } } | null { return this.cursor.getSelectedPictureRef(); }
 
   /** 다중 선택된 개체 목록 */
   getSelectedPictureRefs(): { sec: number; ppi: number; ci: number; type: string }[] { return this.cursor.getSelectedPictureRefs(); }
@@ -2382,13 +2684,14 @@ export class InputHandler {
       const ref = this.cursor.getSelectedPictureRef();
       if (ref) {
         try {
-          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci);
+          const cellPathJson = _keyboard.pictureCellPathJson(ref);
+          this.wasm.copyControl(ref.sec, ref.ppi, ref.ci, cellPathJson);
           const text = this.wasm.getClipboardText() || '[그림]';
           let html = '';
-          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci) || ''; } catch { /* 무시 */ }
+          try { html = this.wasm.exportControlHtml(ref.sec, ref.ppi, ref.ci, cellPathJson) || ''; } catch { /* 무시 */ }
           const markedHtml = _keyboard.prepareRhwpInternalClipboardHtml(this, html, text);
           if (ref.type === 'image') {
-            _keyboard.writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml)
+            _keyboard.writeImageToClipboard(this.wasm, ref.sec, ref.ppi, ref.ci, text, markedHtml, cellPathJson)
               .catch(() => navigator.clipboard.writeText(text).catch(() => {}));
           } else {
             _keyboard.writeTextHtmlToClipboard(text, markedHtml)
@@ -2441,7 +2744,9 @@ export class InputHandler {
         this.pictureObjectRenderer?.clear();
         this.eventBus.emit('picture-object-selection-changed', false);
         this.executeOperation({ kind: 'snapshot', operationType: 'cutObject', operation: (wasm: WasmBridge) => {
-          if (ref.type === 'image') {
+          if (ref.type === 'image' && ref.cellPath && ref.cellPath.length > 0) {
+            wasm.deleteCellPictureControlByPath(ref.sec, ref.ppi, ref.cellPath, ref.ci);
+          } else if (ref.type === 'image') {
             wasm.deletePictureControl(ref.sec, ref.ppi, ref.ci);
           } else if (ref.type === 'equation') {
             wasm.deleteEquationControl(ref.sec, ref.ppi, ref.ci);
@@ -2531,6 +2836,24 @@ export class InputHandler {
     const current = this.getCharPropertiesAtCursor();
     const newSize = Math.max(100, (current.fontSize ?? 1000) + delta); // 최소 1pt
     this.applyCharFormat({ fontSize: newSize });
+  }
+
+  /** 장평 증감 (커맨드 시스템용, delta: percent point) */
+  adjustCharRatio(delta: number): void {
+    if (!this.cursor.hasSelection()) return;
+    const current = this.getCharPropertiesAtCursor();
+    const currentRatio = current.ratios?.[0] ?? 100;
+    const nextRatio = Math.max(50, Math.min(200, Math.round(currentRatio + delta)));
+    this.applyCharFormat({ ratios: Array(7).fill(nextRatio) });
+  }
+
+  /** 자간 증감 (커맨드 시스템용, delta: percent point) */
+  adjustCharSpacing(delta: number): void {
+    if (!this.cursor.hasSelection()) return;
+    const current = this.getCharPropertiesAtCursor();
+    const currentSpacing = current.spacings?.[0] ?? 0;
+    const nextSpacing = Math.max(-50, Math.min(50, Math.round(currentSpacing + delta)));
+    this.applyCharFormat({ spacings: Array(7).fill(nextSpacing) });
   }
 
   /** 스타일 적용 (커맨드 시스템용) */
@@ -2672,6 +2995,14 @@ export class InputHandler {
         this.cursor.hfSectionIdx, isHeader, this.cursor.hfApplyTo, this.cursor.hfParaIdx,
       );
     }
+    if (this.cursor.isInFootnote()) {
+      return this.wasm.getParaPropertiesInFootnote(
+        this.cursor.fnSectionIdx,
+        this.cursor.fnParaIdx,
+        this.cursor.fnControlIdx,
+        this.cursor.fnInnerParaIdx,
+      );
+    }
     const pos = this.cursor.getPosition();
     if (pos.parentParaIndex !== undefined) {
       return this.wasm.getCellParaPropertiesAt(
@@ -2719,32 +3050,17 @@ export class InputHandler {
     end: DocumentPosition,
     props: Partial<ParaProperties>,
   ): void {
-    const propsJson = JSON.stringify(props);
     try {
-      // 머리말/꼬리말 모드
-      if (this.cursor.isInHeaderFooter()) {
-        const isHeader = this.cursor.headerFooterMode === 'header';
-        this.wasm.applyParaFormatInHf(
-          this.cursor.hfSectionIdx, isHeader, this.cursor.hfApplyTo,
-          this.cursor.hfParaIdx, propsJson,
-        );
-        this.afterEdit();
-        return;
-      }
-      if (start.parentParaIndex !== undefined) {
-        this.wasm.applyParaFormatInCell(
-          start.sectionIndex, start.parentParaIndex, start.controlIndex!,
-          start.cellIndex!, start.cellParaIndex!, propsJson,
-        );
-      } else {
-        for (let p = start.paragraphIndex; p <= end.paragraphIndex; p++) {
-          this.wasm.applyParaFormat(start.sectionIndex, p, propsJson);
-        }
-      }
-      this.afterEdit();
+      const targets = this.getParaFormatTargetsForRange(start, end);
+      this.executeParaFormatCommand(targets, props as Record<string, unknown>);
     } catch (err) {
       console.warn('[InputHandler] applyParaPropsToRange 실패:', err);
     }
+  }
+
+  /** 커서 위치 문단에 문단 서식을 적용한다 (커맨드 시스템용) */
+  applyParaPropsAtCursor(props: Partial<ParaProperties>): void {
+    this.applyParaFormat(props as Record<string, unknown>);
   }
 
   /** 양식 개체 클릭 처리 */

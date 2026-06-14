@@ -2,6 +2,88 @@
 
 이 프로젝트의 주요 변경 사항을 기록합니다.
 
+## [0.7.15] — 2026-06-06
+
+> v0.7.14 후속 security patch — 브라우저 확장 service worker fetch 경로 보안 강화,
+> 수식 TAC 흐름·커서 이동 보정, HWPX 저장 계약 후속 보강. 공개 API 하위 호환 유지 — PATCH.
+
+### 보안
+- Chrome/Firefox 확장 service worker의 문서 fetch 경로를 강화했다 (#1307).
+  - message sender 검증을 추가해 extension viewer와 content script 호출 경계를 분리.
+  - localhost, loopback, link-local, private network, 내부 호스트명 URL을 차단.
+  - redirect 이후 최종 URL을 같은 정책으로 재검증.
+  - extension-side fetch에 `credentials: "omit"` 적용.
+  - 자동 thumbnail 데이터가 page DOM에 직접 노출되지 않도록 hover card 내부 처리를 보강.
+- Chrome/Edge/Firefox 확장 `0.2.4` 배포 준비: 새 권한 또는 새 외부 네트워크 endpoint 없음.
+
+### 수식·미주 흐름
+- 수식 TAC-only 라인의 자동 줄넘김과 문단 들여쓰기 적용을 보강하고, 미주 영역 커서 이동 회귀를 정정 (#1310).
+- 강제 줄넘김 뒤 TAC 수식 커서 이동과 문단 간 이동에서 중복 정지/스킵 현상을 줄임 (#1308/#1310).
+- 미주 수식 script 렌더링, continuation spacing, superscript alignment 후속 보정 (#1301/#1303/#1306).
+
+### HWPX 저장 계약
+- HWPX 그림 직렬화에서 flip/rotation 하드코딩 및 `isEmbeded` 누락을 정정 (#1309).
+- HWPX 대각선 셀 테두리 `hh:slash` / `hh:backSlash` type 보존 (#1311).
+- zero-length HWPX field ordering 보존 (#1299).
+
+### rhwp-studio·문서
+- 문단 정보 대화상자에서 왼쪽 여백과 내어쓰기 바인딩을 분리 (#1307 후속 작업 중 발견).
+- visual sweep contributor guide와 rsvg/font 준비 문서를 보강 (#1292).
+- CLI 분석·디버깅 명령 가이드 보강.
+
+### 기여자
+보안 제보와 재검증에 도움을 준 Dangel, 그리고 본 패치 사이클에 기여한 모든 외부 기여자와
+Dependabot에 감사드립니다.
+
+## [0.7.14] — 2026-06-05
+
+> v0.7.13 후속 patch 사이클 (5/26~6/5) — 미주(해설) 흐름·간격 정합 집중, 수식 렌더링/배치
+> 정밀화, 표 셀 안 그림 편집(삽입·복사·hit-test) 한컴 정합, HWPX 저장 계약 확장, 외부 기여자
+> PR 다수 흡수. 공개 API 하위 호환 유지 — PATCH.
+
+### 미주(Endnote) 흐름·간격
+- compact 미주의 문제 제목 사이 간격(between-notes 7mm), 다줄 문단 줄간격, 연속 인라인 수식
+  다행 병합, 구분선 아래 여백을 한컴 기준으로 정합 (#1240, #1241, #1247, #1255, #1259, #1262,
+  task #1245/#1248/#1256/#1257/#1258)
+- 미주 다단(EACH_COLUMN) 흐름에서 단 끝 줄 위치·오버플로우 보정
+
+### 수식(Equation) 렌더링
+- 스크립트 토큰 처리: root/sqrt·관계연산자 glued-split, rm+bar(overline) leak, prime/cdots 연접 (#1208)
+- LEFT-RIGHT 구분기호 그룹 뒤 첨자 결합(`|x|^3`) (#1226)
+- 큰 연산자(Σ/∏/∫) 피연산자 간격, 수식 포함 줄 본문 한글 압축·겹침 해소 (#1235, #1223)
+- HWPX 미주/각주 prefixChar 마커 접두문자('문') 복원 (#1202)
+
+### 표 셀 안 그림(Picture) 편집 — 한컴 정합
+- 표 + picture 삽입/토글/시각/클릭 정합 (#1177), 셀 내부 도형 '개체 속성' 다이얼로그 (#1150)
+- 중첩 표 셀 picture 복사(Ctrl+C) + 떠있는 개체 paste cascade (#1228)
+- 사각형 글상자 안 picture 클릭 hit-test/속성/삽입 (#1254), 중첩 표 셀 붙여넣기 경로 보존 (#1207)
+- HWP5 wrap=Square 호스트 본문 커서 전진(답안↔문제 겹침), 수식-only 셀 z-표 행 압축 (#1220, #1225)
+
+### 레이아웃·렌더링
+- HWPX curve 도형 `<hp:seg>` 외곽선 렌더링 (#1203), textFlow 속성 roundtrip 보존 (#1213)
+- BehindText/InFrontOfText z-order 합성, 용지 기준 BehindText 그림/표 z-order, 바탕쪽 글상자 번호 (#1163, #1252)
+- 회전 90°/270° 이미지 bbox 이중회전 정정 (#1102), RawSvg(OLE/차트) 첫 로드 백지 렌더 (#1182)
+- 폰트 충실도: 한컴 돋움 폴백을 Noto Sans KR ExtraLight로 (#1234)
+- 한컴오피스식 격자 보기·쪽 테두리, 잔상 통합 fix (#1137, #1164)
+
+### HWPX 저장 계약
+- Bookmark/Field dispatcher 연결, OLE chart, 회전 그림, 맞쪽 편집 여백 교대, masterpage idRef (#1289, #1242)
+- 본문·표 셀 문단 id 전역 유니크 (#1222), external image reference/bytes injection contract (#1142/#1143)
+
+### rhwp-studio
+- 입력 편집 재렌더 비용 축소(narrow invalidation) (#1212), 모달 대화상자 드래그 공통화
+- mac 창 리사이즈 가운데 정렬, 찾기/이동 대화상자 Enter 처리, hit-test caret snapping (#1193, #1281, #1291)
+
+### 인프라·문서
+- Dependabot 결합 의존성 그룹화, vite/puppeteer-core dev-dep bump (#1214, #1216)
+- macOS headless Skia font lookup hang 방지 (task #823), Rust 테스트 경고 정리 (#1180)
+- ClickHere 필드 값 설정 시 파일 손상 정정 (#1076)
+
+### 기여자
+@planet6897, @postmelee, @jangster77, @johndoekim, @Martinel2, @Mireutale, @chkwon, @oksure,
+@seo-rii, @xogh3198, @twoLoop-40, @lidge-jun, @humdrum00001010, @HaimLee-4869, @wonbbnote
+및 Dependabot. 감사합니다.
+
 ## [0.7.13] — 2026-05-26
 
 > v0.7.12 후속 patch 사이클 (5/18~26) — HWPX 렌더링/저장 호환성 집중 정정, 시험지·공공기관 문서군 회귀 해소, 외부 기여자 PR 다수 cherry-pick.

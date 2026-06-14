@@ -13,6 +13,15 @@ use crate::renderer::composer::reflow_line_segs;
 use crate::renderer::page_layout::PageLayoutInfo;
 use crate::renderer::style_resolver::resolve_styles;
 
+fn char_shape_mods_affect_text_flow(mods: &crate::model::style::CharShapeMods) -> bool {
+    mods.base_size.is_some()
+        || mods.font_ids.is_some()
+        || mods.ratios.is_some()
+        || mods.spacings.is_some()
+        || mods.relative_sizes.is_some()
+        || mods.char_offsets.is_some()
+}
+
 impl DocumentCore {
     pub fn get_char_properties_at_native(
         &self,
@@ -67,10 +76,20 @@ impl DocumentCore {
             .sections
             .get(sec_idx)
             .ok_or_else(|| HwpError::RenderError(format!("구역 {} 범위 초과", sec_idx)))?;
-        let para = section
-            .paragraphs
-            .get(para_idx)
-            .ok_or_else(|| HwpError::RenderError(format!("문단 {} 범위 초과", para_idx)))?;
+        let Some(para) = section.paragraphs.get(para_idx) else {
+            if let Some(src) = self.virtual_endnote_para_source(sec_idx, para_idx) {
+                return self.get_para_properties_in_footnote_native(
+                    src.section_index,
+                    src.para_index,
+                    src.control_index,
+                    src.note_para_index,
+                );
+            }
+            return Err(HwpError::RenderError(format!(
+                "문단 {} 범위 초과",
+                para_idx
+            )));
+        };
         let mut json = self.build_para_properties_json(para.para_shape_id, sec_idx);
 
         // 번호 시작 방식 판별: numbering_id 패턴 기반
@@ -122,6 +141,20 @@ impl DocumentCore {
         }
 
         Ok(json)
+    }
+
+    fn virtual_endnote_para_source(
+        &self,
+        sec_idx: usize,
+        para_idx: usize,
+    ) -> Option<crate::renderer::pagination::EndnoteParaSource> {
+        let body_len = self.document.sections.get(sec_idx)?.paragraphs.len();
+        let local_idx = para_idx.checked_sub(body_len)?;
+        self.pagination
+            .get(sec_idx)?
+            .endnote_para_sources
+            .get(local_idx)
+            .cloned()
     }
 
     /// 셀 내부 문단의 문단 속성 조회 (네이티브)
@@ -678,24 +711,29 @@ impl DocumentCore {
             )
         };
 
-        // [Task #1037] dialog 표시 한컴 정합:
+        // [Task #1037 + para-unit regression] dialog 표시 한컴 정합:
         // - margin/indent 는 raw_ps 직접 사용 (variant_div 미적용)
-        // - HWP3 native: raw margin_left 는 continuation 라인 position 으로 저장 → 한컴 dialog
-        //   "왼쪽 여백" 은 effective first-line position 으로 (margin_left + min(0, indent)) 변환
-        // - HWP5 변환본 (is_hwp3_variant=true): Task #1037 parser normalize 후 raw 는 한컴 dialog 표준
-        //   의미로 정합 (margin_left = first-line position) → 직접 사용
-        let is_variant = self.document.is_hwp3_variant;
+        // - HWP3 native 만 raw margin_left 가 continuation 라인 position 이므로
+        //   한컴 dialog "왼쪽 여백" 을 effective first-line position 으로 보정한다.
+        // - HWP5/HWPX 및 HWP3→HWP5 변환본은 raw margin_left 가 dialog 의 왼쪽 여백 의미다.
         let (raw_left_hu, raw_right_hu, raw_indent_hu) = raw_ps
             .map(|r| (r.margin_left, r.margin_right, r.indent))
             .unwrap_or((0, 0, 0));
-        let effective_left_hu = if is_variant {
-            raw_left_hu
-        } else {
+        let is_hwp3_native =
+            self.document.header.version.major == 3 && !self.document.is_hwp3_variant;
+        let effective_left_hu = if is_hwp3_native {
             raw_left_hu + raw_indent_hu.min(0)
+        } else {
+            raw_left_hu
         };
-        let dialog_margin_left_px = crate::renderer::hwpunit_to_px(effective_left_hu, self.dpi);
-        let dialog_margin_right_px = crate::renderer::hwpunit_to_px(raw_right_hu, self.dpi);
-        let dialog_indent_px = crate::renderer::hwpunit_to_px(raw_indent_hu, self.dpi);
+        // [Issue #1172] ParaShape margin/indent 의 IR 값은 2× 스케일이다
+        // (HWP5 바이너리 원본 스케일, HWPX 도 parser 의 val2x 로 통일 — header.rs).
+        // 즉 1pt = 200 HWPUNIT. 한컴 편집기 정답: para-001 margin 2000 → 10.0pt.
+        // dialog 표시(px→pt by frontend pxToPt)와 정합하려면 표준 hwpunit_to_px(7200/inch,
+        // 1× 가정) 적용 전에 2× 스케일을 1× 로 환산(÷2)해야 한다. (종전: ÷2 누락 → 2배 표시)
+        let dialog_margin_left_px = crate::renderer::hwpunit_to_px(effective_left_hu / 2, self.dpi);
+        let dialog_margin_right_px = crate::renderer::hwpunit_to_px(raw_right_hu / 2, self.dpi);
+        let dialog_indent_px = crate::renderer::hwpunit_to_px(raw_indent_hu / 2, self.dpi);
 
         match ps {
             Some(ps) => {
@@ -810,6 +848,7 @@ impl DocumentCore {
             alt_name: None,
             type_info: None,
             default_name: None,
+            subst_font: None,
         };
 
         let font_faces = &mut self.document.doc_info.font_faces;
@@ -856,6 +895,7 @@ impl DocumentCore {
             alt_name: None,
             type_info: None,
             default_name: None,
+            subst_font: None,
         };
 
         let font_faces = &mut self.document.doc_info.font_faces;
@@ -915,8 +955,9 @@ impl DocumentCore {
         }
         self.apply_char_mods_to_paragraph(sec_idx, para_idx, start_offset, end_offset, &mods);
 
-        // 글꼴 크기 변경 시 LineSeg 재계산 (line_height, baseline_distance 갱신)
-        if mods.base_size.is_some() {
+        // 텍스트 폭/높이에 영향을 주는 글자 모양 변경 시 LineSeg 재계산.
+        // 장평/자간은 글꼴 크기처럼 줄나눔과 페이지네이션을 바꾼다.
+        if char_shape_mods_affect_text_flow(&mods) {
             let styles = resolve_styles(&self.document.doc_info, self.dpi);
             let section = &self.document.sections[sec_idx];
             let page_def = &section.section_def.page_def;
@@ -942,6 +983,71 @@ impl DocumentCore {
                 &styles,
                 self.dpi,
             );
+        }
+
+        self.document.sections[sec_idx].raw_stream = None;
+        self.rebuild_section(sec_idx);
+        self.event_log.push(DocumentEvent::CharFormatChanged {
+            section: sec_idx,
+            para: para_idx,
+            start: start_offset,
+            end: end_offset,
+        });
+        Ok("{\"ok\":true}".to_string())
+    }
+
+    /// 글자 서식 ID 직접 복원 (네이티브) — 본문 문단.
+    ///
+    /// Undo/Redo에서는 `CharProperties` JSON을 다시 적용하지 않고, 적용 전/후
+    /// `char_shape_id`를 직접 복원한다. 조회 JSON은 UI 상태 표현용 값이 섞여
+    /// 있으므로 history 복원 payload로 재해석하지 않는다.
+    pub fn set_char_shape_id_native(
+        &mut self,
+        sec_idx: usize,
+        para_idx: usize,
+        start_offset: usize,
+        end_offset: usize,
+        char_shape_id: u32,
+    ) -> Result<String, HwpError> {
+        if sec_idx >= self.document.sections.len() {
+            return Err(HwpError::RenderError(format!("구역 {} 범위 초과", sec_idx)));
+        }
+        if para_idx >= self.document.sections[sec_idx].paragraphs.len() {
+            return Err(HwpError::RenderError(format!(
+                "문단 {} 범위 초과",
+                para_idx
+            )));
+        }
+        if char_shape_id as usize >= self.document.doc_info.char_shapes.len() {
+            return Err(HwpError::RenderError(format!(
+                "글자 모양 ID {} 범위 초과 (총 {}개)",
+                char_shape_id,
+                self.document.doc_info.char_shapes.len()
+            )));
+        }
+
+        let styles = resolve_styles(&self.document.doc_info, self.dpi);
+        let available_width = {
+            let section = &self.document.sections[sec_idx];
+            let page_def = &section.section_def.page_def;
+            let column_def = DocumentCore::find_initial_column_def(&section.paragraphs);
+            let layout = PageLayoutInfo::from_page_def(page_def, &column_def, self.dpi);
+            let col_width = layout
+                .column_areas
+                .first()
+                .map(|a| a.width)
+                .unwrap_or(layout.body_area.width);
+            let para_shape_id = section.paragraphs[para_idx].para_shape_id;
+            let para_style = styles.para_styles.get(para_shape_id as usize);
+            let margin_left = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+            let margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+            (col_width - margin_left - margin_right).max(1.0)
+        };
+
+        {
+            let para = &mut self.document.sections[sec_idx].paragraphs[para_idx];
+            para.apply_char_shape_range(start_offset, end_offset, char_shape_id);
+            reflow_line_segs(para, available_width, &styles, self.dpi);
         }
 
         self.document.sections[sec_idx].raw_stream = None;
@@ -998,8 +1104,8 @@ impl DocumentCore {
             cell_para.apply_char_shape_range(start_offset, end_offset, new_id);
         }
 
-        // 글꼴 크기 변경 시 셀 내 LineSeg 재계산
-        if mods.base_size.is_some() {
+        // 텍스트 폭/높이에 영향을 주는 글자 모양 변경 시 셀 내 LineSeg 재계산.
+        if char_shape_mods_affect_text_flow(&mods) {
             let dpi = self.dpi;
             let styles = resolve_styles(&self.document.doc_info, dpi);
             let section = &self.document.sections[sec_idx];
@@ -1045,6 +1151,56 @@ impl DocumentCore {
         Ok("{\"ok\":true}".to_string())
     }
 
+    /// 글자 서식 ID 직접 복원 (네이티브) — 셀 내 문단.
+    pub fn set_char_shape_id_in_cell_native(
+        &mut self,
+        sec_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        cell_idx: usize,
+        cell_para_idx: usize,
+        start_offset: usize,
+        end_offset: usize,
+        char_shape_id: u32,
+    ) -> Result<String, HwpError> {
+        if char_shape_id as usize >= self.document.doc_info.char_shapes.len() {
+            return Err(HwpError::RenderError(format!(
+                "글자 모양 ID {} 범위 초과 (총 {}개)",
+                char_shape_id,
+                self.document.doc_info.char_shapes.len()
+            )));
+        }
+
+        {
+            let cell_para = self.get_cell_paragraph_mut(
+                sec_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            )?;
+            cell_para.apply_char_shape_range(start_offset, end_offset, char_shape_id);
+        }
+
+        self.reflow_cell_paragraph(
+            sec_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+        );
+        self.mark_cell_control_dirty(sec_idx, parent_para_idx, control_idx);
+        self.document.sections[sec_idx].raw_stream = None;
+        self.rebuild_section(sec_idx);
+        self.event_log.push(DocumentEvent::CharFormatChanged {
+            section: sec_idx,
+            para: parent_para_idx,
+            start: start_offset,
+            end: end_offset,
+        });
+        Ok("{\"ok\":true}".to_string())
+    }
+
     /// 문단 서식 적용 (네이티브) — 본문 문단
     pub fn apply_para_format_native(
         &mut self,
@@ -1056,6 +1212,15 @@ impl DocumentCore {
             return Err(HwpError::RenderError(format!("구역 {} 범위 초과", sec_idx)));
         }
         if para_idx >= self.document.sections[sec_idx].paragraphs.len() {
+            if let Some(src) = self.virtual_endnote_para_source(sec_idx, para_idx) {
+                return self.apply_para_format_in_footnote_native(
+                    src.section_index,
+                    src.para_index,
+                    src.control_index,
+                    src.note_para_index,
+                    props_json,
+                );
+            }
             return Err(HwpError::RenderError(format!(
                 "문단 {} 범위 초과",
                 para_idx
@@ -1118,6 +1283,66 @@ impl DocumentCore {
                 &styles,
                 self.dpi,
             );
+        }
+
+        self.document.sections[sec_idx].raw_stream = None;
+        self.rebuild_section(sec_idx);
+        self.event_log.push(DocumentEvent::ParaFormatChanged {
+            section: sec_idx,
+            para: para_idx,
+        });
+        Ok("{\"ok\":true}".to_string())
+    }
+
+    /// 문단 서식 ID 직접 복원 (네이티브) — 본문 문단.
+    ///
+    /// Undo/Redo에서는 `ParaProperties` JSON을 다시 적용하지 않고, 적용 전/후
+    /// `para_shape_id`를 직접 복원한다. 조회 JSON은 UI용 px 단위가 섞여 있어
+    /// raw 값을 기대하는 apply parser에 재투입하면 단위가 깨질 수 있다.
+    pub fn set_para_shape_id_native(
+        &mut self,
+        sec_idx: usize,
+        para_idx: usize,
+        para_shape_id: u16,
+    ) -> Result<String, HwpError> {
+        if sec_idx >= self.document.sections.len() {
+            return Err(HwpError::RenderError(format!("구역 {} 범위 초과", sec_idx)));
+        }
+        if para_idx >= self.document.sections[sec_idx].paragraphs.len() {
+            return Err(HwpError::RenderError(format!(
+                "문단 {} 범위 초과",
+                para_idx
+            )));
+        }
+        if para_shape_id as usize >= self.document.doc_info.para_shapes.len() {
+            return Err(HwpError::RenderError(format!(
+                "문단 모양 ID {} 범위 초과 (총 {}개)",
+                para_shape_id,
+                self.document.doc_info.para_shapes.len()
+            )));
+        }
+
+        let styles = resolve_styles(&self.document.doc_info, self.dpi);
+        let available_width = {
+            let section = &self.document.sections[sec_idx];
+            let page_def = &section.section_def.page_def;
+            let column_def = DocumentCore::find_initial_column_def(&section.paragraphs);
+            let layout = PageLayoutInfo::from_page_def(page_def, &column_def, self.dpi);
+            let col_width = layout
+                .column_areas
+                .first()
+                .map(|a| a.width)
+                .unwrap_or(layout.body_area.width);
+            let para_style = styles.para_styles.get(para_shape_id as usize);
+            let margin_left = para_style.map(|s| s.margin_left).unwrap_or(0.0);
+            let margin_right = para_style.map(|s| s.margin_right).unwrap_or(0.0);
+            (col_width - margin_left - margin_right).max(1.0)
+        };
+
+        {
+            let para = &mut self.document.sections[sec_idx].paragraphs[para_idx];
+            para.para_shape_id = para_shape_id;
+            reflow_line_segs(para, available_width, &styles, self.dpi);
         }
 
         self.document.sections[sec_idx].raw_stream = None;
@@ -1238,6 +1463,52 @@ impl DocumentCore {
             }
         }
 
+        self.document.sections[sec_idx].raw_stream = None;
+        self.rebuild_section(sec_idx);
+        self.event_log.push(DocumentEvent::ParaFormatChanged {
+            section: sec_idx,
+            para: parent_para_idx,
+        });
+        Ok("{\"ok\":true}".to_string())
+    }
+
+    /// 문단 서식 ID 직접 복원 (네이티브) — 셀 내 문단.
+    pub fn set_cell_para_shape_id_native(
+        &mut self,
+        sec_idx: usize,
+        parent_para_idx: usize,
+        control_idx: usize,
+        cell_idx: usize,
+        cell_para_idx: usize,
+        para_shape_id: u16,
+    ) -> Result<String, HwpError> {
+        if para_shape_id as usize >= self.document.doc_info.para_shapes.len() {
+            return Err(HwpError::RenderError(format!(
+                "문단 모양 ID {} 범위 초과 (총 {}개)",
+                para_shape_id,
+                self.document.doc_info.para_shapes.len()
+            )));
+        }
+
+        {
+            let cell_para = self.get_cell_paragraph_mut(
+                sec_idx,
+                parent_para_idx,
+                control_idx,
+                cell_idx,
+                cell_para_idx,
+            )?;
+            cell_para.para_shape_id = para_shape_id;
+        }
+
+        self.reflow_cell_paragraph(
+            sec_idx,
+            parent_para_idx,
+            control_idx,
+            cell_idx,
+            cell_para_idx,
+        );
+        self.mark_cell_control_dirty(sec_idx, parent_para_idx, control_idx);
         self.document.sections[sec_idx].raw_stream = None;
         self.rebuild_section(sec_idx);
         self.event_log.push(DocumentEvent::ParaFormatChanged {
@@ -1665,5 +1936,35 @@ impl DocumentCore {
             }
         }
         Ok("{\"ok\":true,\"exists\":false}".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::char_shape_mods_affect_text_flow;
+    use crate::model::style::CharShapeMods;
+
+    #[test]
+    fn char_ratio_and_spacing_changes_require_text_reflow() {
+        let mods = CharShapeMods {
+            ratios: Some([99; 7]),
+            ..Default::default()
+        };
+        assert!(char_shape_mods_affect_text_flow(&mods));
+
+        let mods = CharShapeMods {
+            spacings: Some([-1; 7]),
+            ..Default::default()
+        };
+        assert!(char_shape_mods_affect_text_flow(&mods));
+    }
+
+    #[test]
+    fn paint_only_char_shape_changes_do_not_require_text_reflow() {
+        let mods = CharShapeMods {
+            underline: Some(true),
+            ..Default::default()
+        };
+        assert!(!char_shape_mods_affect_text_flow(&mods));
     }
 }

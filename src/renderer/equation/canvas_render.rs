@@ -84,16 +84,15 @@ fn render_box(
         }
         LayoutKind::MathSymbol(text) => {
             // [Issue #900] svg_render.rs MathSymbol arm 과 동기화 (commit 292dbbef).
-            // 적분 기호는 layout 에서 BIG_OP_SCALE 적용된 lb.height 를 font-size 로 사용,
-            // 그 외 MathSymbol 은 부모 전달 fs.
-            let fi = if super::layout::is_integral_symbol(text) {
-                lb.height
+            // Task #1317: 적분 기호(∫)는 폰트 text 가 아닌 stroke path 로 렌더(geom SSOT,
+            // svg_render.rs 와 동일). 그 외 MathSymbol 은 부모 전달 fs 로 text 렌더.
+            if super::layout::is_integral_symbol(text) {
+                draw_integral(ctx, x, y, fs, color);
             } else {
-                fs
-            };
-            set_font(ctx, fi, false, false);
-            ctx.set_fill_style_str(color);
-            let _ = ctx.fill_text(text, x, y + lb.baseline);
+                set_font(ctx, fs, false, false);
+                ctx.set_fill_style_str(color);
+                let _ = ctx.fill_text(text, x, y + lb.baseline);
+            }
         }
         LayoutKind::Function(name) => {
             // [Issue #900] svg_render.rs Function arm 과 동기화 — fs 사용.
@@ -163,17 +162,28 @@ fn render_box(
             // [Issue #900] svg_render.rs BigOp arm 과 동기화 (commit 292dbbef).
             // 적분 (∫, ∮ 등): 기호 좌측, 첨자 우상단/우하단 (nolimits)
             // 그 외 (∑, ∏ 등): 기호 중앙, 첨자 위/아래 (limits)
-            let op_fs = fs * BIG_OP_SCALE;
             let is_integral = super::layout::is_integral_symbol(symbol);
+            // Task #1313: 적분은 전용 스케일(INTEGRAL_SCALE), ∑/∏ 등은 BIG_OP_SCALE.
+            let op_fs = fs
+                * if is_integral {
+                    INTEGRAL_SCALE
+                } else {
+                    BIG_OP_SCALE
+                };
             set_font(ctx, op_fs, false, false);
             ctx.set_fill_style_str(color);
             if is_integral {
-                let op_x = x;
-                let op_y = y + op_fs * 0.8;
-                let _ = ctx.fill_text(symbol, op_x, op_y);
+                // Task #1317: 적분 기호는 stroke path 로 렌더(geom SSOT).
+                draw_integral(ctx, x, y, fs, color);
             } else {
                 let sup_h = sup.as_ref().map(|b| b.height + fs * 0.05).unwrap_or(0.0);
-                let op_x = x + (lb.width - estimate_op_width(symbol, op_fs)) / 2.0;
+                // Task #1233: 연산자는 max_w(= lb.width - trailing pad)에 중앙정렬 →
+                // pad 전체가 순수 trailing 간격이 되고 첨자(max_w 중앙정렬)와 정렬된다.
+                // #1304: 연산자 폭은 layout 의 estimate_text_width 와 동일 기준을 써야 첨자와
+                // 가로 중심이 맞는다 (기존 estimate_op_width 의 0.6 과소추정 → ∑ 우측 치우침).
+                let center_w = lb.width - fs * super::layout::BIG_OP_TRAIL_PAD;
+                let op_x =
+                    x + (center_w - super::layout::estimate_text_width(symbol, op_fs, false)) / 2.0;
                 let op_y = y + sup_h + op_fs * 0.8;
                 let _ = ctx.fill_text(symbol, op_x, op_y);
             }
@@ -239,8 +249,8 @@ fn render_box(
         }
         LayoutKind::Paren { left, right, body } => {
             // 텍스트 높이 파렌(`(`, `)`)은 폰트 글리프로 렌더, 그 외는 path. (Task #283)
-            let paren_w = fs * 0.333;
             let use_glyph = lb.height <= fs * 1.2;
+            let paren_w = if use_glyph { fs * 0.333 } else { fs * 0.27 };
             if !left.is_empty() {
                 if use_glyph && (left == "(" || left == ")") {
                     set_font(ctx, fs, false, false);
@@ -284,10 +294,6 @@ fn render_box(
     }
 }
 
-fn estimate_op_width(text: &str, fs: f64) -> f64 {
-    text.chars().count() as f64 * fs * 0.6
-}
-
 fn set_font(ctx: &CanvasRenderingContext2d, size: f64, italic: bool, bold: bool) {
     let style = if italic { "italic " } else { "" };
     let weight = if bold { "bold " } else { "" };
@@ -296,6 +302,32 @@ fn set_font(ctx: &CanvasRenderingContext2d, size: f64, italic: bool, bold: bool)
         "{}{}{:.1}px 'Latin Modern Math', 'STIX Two Text', 'STIX Two Math', 'Times New Roman', 'Times', serif",
         style, weight, size,
     ));
+}
+
+/// 적분 기호(∫)를 stroke path 로 렌더 (Task #1317).
+///
+/// svg_render.rs 의 `integral_path` 와 동일한 `integral_geom` 기하·곡선을 사용해
+/// SVG/Canvas 가 픽셀 단위로 정합한다. 폰트에 의존하지 않으므로 글리프 bbox 가
+/// 결정적이며 상·하한 attach point(동일 geom)와 어긋나지 않는다.
+fn draw_integral(ctx: &CanvasRenderingContext2d, x: f64, y: f64, fs: f64, color: &str) {
+    let g = integral_geom(fs);
+    let h = g.bottom_y - g.top_y;
+    let p0x = x + g.bottom_hook_x;
+    let p0y = y + g.bottom_y;
+    let p3x = x + g.top_hook_x;
+    let p3y = y + g.top_y;
+    let c1x = x + g.width * 1.02;
+    let c1y = y + g.bottom_y - h * 0.30;
+    let c2x = x - g.width * 0.10;
+    let c2y = y + g.top_y + h * 0.30;
+    ctx.set_stroke_style_str(color);
+    ctx.set_line_width(g.stroke_w);
+    ctx.set_line_cap("round");
+    ctx.begin_path();
+    ctx.move_to(p0x, p0y);
+    ctx.bezier_curve_to(c1x, c1y, c2x, c2y, p3x, p3y);
+    ctx.stroke();
+    ctx.set_line_cap("butt");
 }
 
 /// 늘림 괄호 렌더링
@@ -310,22 +342,44 @@ fn draw_stretch_bracket(
     fs: f64,
 ) {
     let mid_x = x + w / 2.0;
-    let stroke_w = fs * 0.04;
+    let stroke_w = if matches!(bracket, "(" | ")") {
+        (fs * 0.042).max(0.48)
+    } else {
+        fs * 0.04
+    };
     ctx.set_stroke_style_str(color);
     ctx.set_line_width(stroke_w);
 
     match bracket {
         "(" => {
             ctx.begin_path();
-            ctx.move_to(mid_x + w * 0.2, y);
-            let _ = ctx.quadratic_curve_to(x, y + h / 2.0, mid_x + w * 0.2, y + h);
+            ctx.set_line_cap("round");
+            ctx.move_to(x + w * 0.9, y);
+            let _ = ctx.bezier_curve_to(
+                x + w * 0.05,
+                y + h * 0.18,
+                x + w * 0.05,
+                y + h * 0.82,
+                x + w * 0.9,
+                y + h,
+            );
             ctx.stroke();
+            ctx.set_line_cap("butt");
         }
         ")" => {
             ctx.begin_path();
-            ctx.move_to(mid_x - w * 0.2, y);
-            let _ = ctx.quadratic_curve_to(x + w, y + h / 2.0, mid_x - w * 0.2, y + h);
+            ctx.set_line_cap("round");
+            ctx.move_to(x + w * 0.1, y);
+            let _ = ctx.bezier_curve_to(
+                x + w * 0.95,
+                y + h * 0.18,
+                x + w * 0.95,
+                y + h * 0.82,
+                x + w * 0.1,
+                y + h,
+            );
             ctx.stroke();
+            ctx.set_line_cap("butt");
         }
         "[" => {
             ctx.begin_path();

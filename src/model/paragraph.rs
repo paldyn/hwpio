@@ -35,10 +35,14 @@ pub struct Paragraph {
     /// 각 컨트롤에 대응하는 CTRL_DATA 레코드 (라운드트립 보존용)
     /// controls[i]에 대응하는 CTRL_DATA가 있으면 ctrl_data_records[i] = Some(data)
     pub ctrl_data_records: Vec<Option<Vec<u8>>>,
-    /// char_count의 최상위 비트 (bit 31) 보존 (라운드트립용)
+    /// char_count의 최상위 비트 (bit 31) 파싱값.
+    /// HWP5 저장기는 현재 list scope의 마지막 문단 여부로 bit 31을 재생성한다.
     pub char_count_msb: bool,
-    /// PARA_HEADER 레코드의 12바이트 이후 추가 바이트 (라운드트립 보존용)
-    /// numCharShapes, numRangeTags, numLineSegs, instanceId 등
+    /// PARA_HEADER tail 보존용 바이트.
+    ///
+    /// raw_header_extra[0..6]은 numCharShapes/numRangeTags/numLineSegs 자리지만,
+    /// HWP5 저장기는 실제 배열 길이로 count 필드를 재생성하고 이 구간을 쓰지 않는다.
+    /// raw_header_extra[6..]은 instanceId 및 변경추적 suffix로 보존한다.
     pub raw_header_extra: Vec<u8>,
     /// 원본에 PARA_TEXT 레코드가 존재했는지 (라운드트립 보존용)
     pub has_para_text: bool,
@@ -148,14 +152,38 @@ pub struct LineSeg {
     pub column_start: i32,
     /// 줄 너비 (HWPUNIT). 단 너비와 같으면 wrap 없음
     pub segment_width: i32,
-    /// 비트 플래그 (첫 줄 / 첫 단 등)
+    /// 비트 플래그 (HWP5 PARA_LINE_SEG tag).
+    ///
+    /// 공식 스펙 기준:
+    /// - bit 0: 페이지의 첫 줄
+    /// - bit 1: 컬럼의 첫 줄
+    /// - bit 16: 텍스트가 배열되지 않은 빈 세그먼트
+    /// - bit 17: 줄의 첫 세그먼트
+    /// - bit 18: 줄의 마지막 세그먼트
+    /// - bit 19: auto-hyphenation 수행
+    /// - bit 20: indentation 적용
+    /// - bit 21: 문단 머리 모양 적용
+    /// - bit 31: 구현 편의 property
     pub tag: u32,
 }
 
 impl LineSeg {
+    pub const TAG_FIRST_LINE_OF_PAGE: u32 = 1 << 0;
+    pub const TAG_FIRST_LINE_OF_COLUMN: u32 = 1 << 1;
+    pub const TAG_EMPTY_SEGMENT: u32 = 1 << 16;
+    pub const TAG_FIRST_SEGMENT: u32 = 1 << 17;
+    pub const TAG_LAST_SEGMENT: u32 = 1 << 18;
+    pub const TAG_AUTO_HYPHENATION: u32 = 1 << 19;
+    pub const TAG_INDENTATION: u32 = 1 << 20;
+    pub const TAG_PARAGRAPH_HEAD: u32 = 1 << 21;
+    pub const TAG_IMPLEMENTATION_PROPERTY: u32 = 1 << 31;
+
+    /// 한 줄이 하나의 세그먼트로만 구성될 때 사용하는 HWP5 tag 조합.
+    pub const TAG_SINGLE_SEGMENT_LINE: u32 = Self::TAG_FIRST_SEGMENT | Self::TAG_LAST_SEGMENT;
+
     /// 페이지의 첫 줄인지 여부
     pub fn is_first_line_of_page(&self) -> bool {
-        self.tag & 0x01 != 0
+        self.tag & Self::TAG_FIRST_LINE_OF_PAGE != 0
     }
 
     /// 본 줄이 wrap zone (그림/표 옆) 안에 있는지 (포맷 무관 표준).
@@ -174,7 +202,32 @@ impl LineSeg {
 
     /// 컬럼의 첫 줄인지 여부
     pub fn is_first_line_of_column(&self) -> bool {
-        self.tag & 0x02 != 0
+        self.tag & Self::TAG_FIRST_LINE_OF_COLUMN != 0
+    }
+
+    /// 텍스트가 배열되지 않은 빈 세그먼트인지 여부
+    pub fn is_empty_segment(&self) -> bool {
+        self.tag & Self::TAG_EMPTY_SEGMENT != 0
+    }
+
+    /// 줄의 첫 세그먼트인지 여부
+    pub fn is_first_segment(&self) -> bool {
+        self.tag & Self::TAG_FIRST_SEGMENT != 0
+    }
+
+    /// 줄의 마지막 세그먼트인지 여부
+    pub fn is_last_segment(&self) -> bool {
+        self.tag & Self::TAG_LAST_SEGMENT != 0
+    }
+
+    /// indentation 적용 여부
+    pub fn has_indentation(&self) -> bool {
+        self.tag & Self::TAG_INDENTATION != 0
+    }
+
+    /// 문단 머리 모양 적용 여부
+    pub fn has_paragraph_head(&self) -> bool {
+        self.tag & Self::TAG_PARAGRAPH_HEAD != 0
     }
 }
 
@@ -213,7 +266,7 @@ impl Paragraph {
                 text_height: 1000,
                 baseline_distance: 850,
                 line_spacing: 600,
-                tag: 0x00060000, // HWP 기본 플래그
+                tag: LineSeg::TAG_SINGLE_SEGMENT_LINE,
                 ..Default::default()
             }],
             ..Default::default()
@@ -574,7 +627,7 @@ impl Paragraph {
                 o.segment_width,
                 o.tag,
             ),
-            _ => (400, 400, 320, 0, 0, 0x00060000),
+            _ => (400, 400, 320, 0, 0, LineSeg::TAG_SINGLE_SEGMENT_LINE),
         };
         let new_line_segs = vec![LineSeg {
             text_start: 0,
@@ -661,20 +714,29 @@ impl Paragraph {
     /// 병합 후 other 문단의 내용은 현재 문단에 포함된다.
     /// 반환값: 병합 지점의 char offset (원래 텍스트의 길이).
     pub fn merge_from(&mut self, other: &Paragraph) -> usize {
-        if other.text.is_empty() {
+        // 텍스트 없이 컨트롤만 있는 문단(예: 그림 복사 클립보드)도 병합 대상 (#1323)
+        if other.text.is_empty() && other.controls.is_empty() {
             return self.text.chars().count();
         }
 
         let self_text_len = self.text.chars().count();
 
-        // 현재 문단 끝의 UTF-16 위치
+        // 현재 문단 끝의 UTF-16 위치.
+        // 마지막 문자 뒤(trailing) 컨트롤은 char_offsets에 갭이 인코딩되어 있지 않으므로
+        // 컨트롤당 8 code unit을 가산해야 other 텍스트가 컨트롤 갭 뒤로 이어진다 (#1323).
+        let trailing_ctrl_units: u32 = self
+            .control_text_positions()
+            .iter()
+            .filter(|&&p| p >= self_text_len)
+            .count() as u32
+            * 8;
         let utf16_end: u32 = if !self.char_offsets.is_empty() {
             let last = self.char_offsets.len() - 1;
             let text_chars: Vec<char> = self.text.chars().collect();
             self.char_offsets[last] + Self::char_utf16_len(text_chars[last])
         } else {
             0
-        };
+        } + trailing_ctrl_units;
 
         // 1. 텍스트 결합
         self.text.push_str(&other.text);
@@ -713,7 +775,7 @@ impl Paragraph {
                 o.segment_width,
                 o.tag,
             ),
-            _ => (400, 400, 320, 0, 0, 0x00060000),
+            _ => (400, 400, 320, 0, 0, LineSeg::TAG_SINGLE_SEGMENT_LINE),
         };
         self.line_segs = vec![LineSeg {
             text_start: 0,
@@ -736,6 +798,7 @@ impl Paragraph {
         }
 
         // 5-1. field_ranges 결합 (other의 char 인덱스에 self_text_len 추가)
+        //      ctrl_offset은 병합 전 self.controls.len() — 5-2의 controls 병합보다 먼저 캡처
         let ctrl_offset = self.controls.len();
         for fr in &other.field_ranges {
             self.field_ranges.push(FieldRange {
@@ -745,8 +808,31 @@ impl Paragraph {
             });
         }
 
-        // 6. char_count 갱신 (-1 because merge removes one paragraph end)
-        self.char_count = (self_text_len + other.text.chars().count()) as u32 + 1;
+        // 5-2. controls / ctrl_data_records / control_mask 병합 (#1323)
+        //      ctrl_data_records[i]는 controls[i] 대응이므로 self 쪽을 None 패딩 후 이어붙인다.
+        if !other.controls.is_empty() {
+            while self.ctrl_data_records.len() < self.controls.len() {
+                self.ctrl_data_records.push(None);
+            }
+            for i in 0..other.controls.len() {
+                self.ctrl_data_records
+                    .push(other.ctrl_data_records.get(i).cloned().flatten());
+            }
+            self.controls.extend(other.controls.iter().cloned());
+            self.control_mask |= other.control_mask;
+        }
+
+        // 6. char_count 갱신: 텍스트 + 컨트롤(각 8 code unit) + 문단끝(1)
+        //    split_at의 ctrl_code_units 계산과 정합. HWPX 직렬화가 char_count에서
+        //    컨트롤 수를 역산하므로 컨트롤 유닛 포함 필수.
+        self.char_count = (self_text_len + other.text.chars().count()) as u32
+            + self.controls.len() as u32 * 8
+            + 1;
+
+        // 7. has_para_text: 병합 후 텍스트/컨트롤이 있으면 PARA_TEXT 필요
+        if !self.text.is_empty() || !self.controls.is_empty() {
+            self.has_para_text = true;
+        }
 
         self_text_len
     }
