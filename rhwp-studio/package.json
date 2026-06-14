@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:desktop": "tsc && cross-env VITE_TARGET=desktop vite build --base=./",
     "preview": "vite preview",
     "test": "node --test tests/*.test.ts",
     "e2e": "node e2e/text-flow.test.mjs",
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.1.42",
+    "cross-env": "^7.0.3",
     "puppeteer-core": "^25.1.0",
     "typescript": "^6.0.3",
     "vite": "^8.0.15",
