@@ -44,8 +44,11 @@ jobs:
         uses: actions/checkout@v4
 
       # --- WASM 빌드 (copy-wasm 이 ../pkg/ 를 참조하므로 선행 필수) ---
+      # [Task #4 후속] rust-toolchain.toml 과 동일하게 1.93.1 핀. @stable(부동) 은
+      # RUSTUP_TOOLCHAIN 을 설정해 .toml 핀을 무시 → 신규 stable(1.96.0)이 tauri 의
+      # brotli 8.0.3 을 컴파일 못 함(StandardAlloc: Allocator 미충족). 1.93.1 은 정상.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.93.1
         with:
           targets: wasm32-unknown-unknown
 
